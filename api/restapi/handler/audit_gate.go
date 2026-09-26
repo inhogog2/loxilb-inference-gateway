@@ -239,6 +239,9 @@ var auditNamedMutations = map[string]struct{ event, resource string }{
 	"PUT /maintenance":         {"mgmt.maintenance", "maintenance"},
 	"POST /config/persist":     {"mgmt.snapshot.persist", "snapshot"},
 	"POST /config/restore":     {"mgmt.snapshot.restore", "snapshot"},
+	"POST /audit/policy":       {"mgmt.audit.policy", "audit_policy"},
+	"POST /audit/sink":         {"mgmt.audit.sink", "audit_sink"},
+	"POST /audit/rotate":       {"mgmt.audit.rotate_now", "audit_segment"},
 }
 
 // AuditGETAllowlist lists the side-effecting GET templates the gate covers.
