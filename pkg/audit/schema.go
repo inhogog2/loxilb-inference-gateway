@@ -206,6 +206,15 @@ type MgmtDetail struct {
 	AuthMode         string
 	Mechanism        string
 	X509Error        string
+	// Audit policy and sink changes. FloorRejected is a pointer so that
+	// an accepted change states false explicitly: "the profile floor did
+	// not refuse this" is a claim worth making, and an omitted claim is
+	// not the same as a negative one.
+	FloorRejected     *bool
+	Endpoint          string
+	TLSCAID           string
+	SealedSegmentUUID string
+	NewSegmentUUID    string
 }
 
 // DataDetail is the detail object of a data record. It has no body field,

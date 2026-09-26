@@ -234,6 +234,20 @@ type Writer struct {
 	holdMu sync.Mutex
 	holds  map[string]string
 
+	// segMaxBytes and segMaxAge mirror the segmenter's sealing limits for
+	// readers off the writer goroutine; the segmenter's own fields stay
+	// the ones it reads, and both are set together under SetPolicy.
+	segMaxBytes atomic.Int64
+	segMaxAge   atomic.Int64
+
+	// grandfathered maps a sealed segment to the moment the retention
+	// policy in force when it was sealed would have allowed its deletion.
+	// A reduced policy does not reach these segments before then; the
+	// zero time means the policy they were sealed under kept them
+	// indefinitely.
+	grandMu       sync.Mutex
+	grandfathered map[string]time.Time
+
 	retention       atomic.Pointer[Retention]
 	reserveBreached atomic.Bool
 	sealedBytes     atomic.Int64
@@ -282,6 +296,8 @@ func New(cfg Config) (*Writer, error) {
 	w.pool.New = func() any { return &Record{pooled: true} }
 	ret := cfg.Retention
 	w.retention.Store(&ret)
+	w.segMaxBytes.Store(cfg.MaxSegmentBytes)
+	w.segMaxAge.Store(int64(cfg.MaxSegmentAge))
 	empty := []*Producer{}
 	w.producers.Store(&empty)
 

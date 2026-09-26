@@ -214,6 +214,11 @@ type mgmtJSON struct {
 	AuthMode              string   `json:"auth_mode,omitempty"`
 	Mechanism             string   `json:"mechanism,omitempty"`
 	X509Error             string   `json:"x509_error,omitempty"`
+	FloorRejected         *bool    `json:"floor_rejected,omitempty"`
+	Endpoint              string   `json:"endpoint,omitempty"`
+	TLSCAID               string   `json:"tls_ca_id,omitempty"`
+	SealedSegmentUUID     string   `json:"sealed_segment_uuid,omitempty"`
+	NewSegmentUUID        string   `json:"new_segment_uuid,omitempty"`
 }
 
 func appendField(b []byte, key, val string) []byte {
