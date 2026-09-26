@@ -454,6 +454,10 @@ func TestAIDenyReasonPerStage(t *testing.T) {
 		{"token budget already spent", aiStageRateLimit, "token_quota_exceeded", "ratelimit", audit.ReasonQuota},
 		{"token budget would be exceeded", aiStageRateLimit, "token_quota_would_exceed", "ratelimit", audit.ReasonQuota},
 		{"reservation refused", aiStageReserve, "token_quota_exceeded", "reserve", audit.ReasonQuota},
+		// A capacity refusal is neither the caller's budget nor throttling;
+		// the decision names the ceiling that refused.
+		{"service or endpoint at capacity", aiStageCapacity, "admission_capacity", "capacity", audit.ReasonAdmission},
+		{"no healthy capacity", aiStageCapacity, "admission_no_capacity", "capacity", audit.ReasonAdmission},
 		{"no stage reported", aiStageNone, "", "keyless", audit.ReasonAdmission},
 	}
 	for _, tc := range cases {
