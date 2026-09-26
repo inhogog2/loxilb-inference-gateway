@@ -929,11 +929,25 @@ func (w *Writer) emitProducerGaps() {
 		if len(runs) == 0 {
 			continue
 		}
+		// Every gap carries numbers from two independent sources: the range
+		// and its width come from the drop ring, the overflow and the
+		// per-reason total from the producer's counters. A reader reconciles
+		// one against the other, so a record claiming to be exact while the
+		// ring had discarded entries does not add up. The counters are
+		// sampled once per drain, beside the overflow they are read with, so
+		// that every gap from one drain reports the same consistent set.
+		var totals [numDropReasons]uint64
+		for i := range totals {
+			totals[i] = p.dropped[i].Load()
+		}
 		for _, run := range runs {
 			ex := exact
+			ov := overflow
+			tot := totals[run.reason]
 			w.writeSystem(sysRecord("sys.producer.gap", "producer:"+p.id, &SysDetail{
 				ProducerID: p.id, Stream: p.stream, PseqFrom: run.from, PseqTo: run.to,
 				Reason: dropReasons[run.reason], Exact: &ex, CounterDelta: run.to - run.from + 1,
+				RingOverflows: &ov, DroppedTotal: &tot,
 			}))
 		}
 	}

@@ -287,6 +287,13 @@ type SysDetail struct {
 	Reason       string `json:"reason,omitempty"`
 	Exact        *bool  `json:"exact,omitempty"`
 	CounterDelta uint64 `json:"counter_delta,omitempty"`
+	// RingOverflows and DroppedTotal are the two counter-derived numbers a
+	// reader reconciles the ring-derived range against. Both are cumulative
+	// for the producer (DroppedTotal for the producer and this reason), and
+	// both are pointers so that a present zero is distinguishable from an
+	// absent field — a gap that omitted them could not be checked at all.
+	RingOverflows *uint64 `json:"ring_overflows,omitempty"`
+	DroppedTotal  *uint64 `json:"dropped_total,omitempty"`
 }
 
 // Heartbeat is the fixed-interval liveness record's payload. Every counter
