@@ -438,29 +438,67 @@ else
     chk T18-1f "no gap runs backwards" 0 \
       "$(records '.event_type=="sys.producer.gap"' | jq -r 'select(.detail.pseq_to < .detail.pseq_from)' | wc -l | tr -d ' ')"
 
-    # An exact range is not reachable here, and that is arithmetic rather
-    # than a gap in the proof. Nothing is dropped until the 8192-deep queue
-    # is full, and by the time a producer has been refused at all it has
-    # been refused far more times than its 256-entry drop ring can name —
-    # so every gap this bed can produce is a conservative one. The exact
-    # range is proven where it can be: the unit drives a four-deep queue,
-    # where the whole drop set fits the ring (pkg/audit,
-    # TestProducerDropAccounting, which asserts exact ranges covering the
-    # producer's own count). What the bed owns is the shape below.
-    chk T18-1e "a gap too large for the ring says so rather than guessing" 0 \
-      "$(records '.event_type=="sys.producer.gap" and .detail.exact==false' \
-         | jq -r 'select((.detail.pseq_to - .detail.pseq_from) + 1 < (.detail.counter_delta // 0))' | wc -l | tr -d ' ')"
+    # Everything below reconciles the range, which the emitter builds from
+    # the drop ring, against two numbers it does not derive from that range:
+    # ring_overflows, what the ring had to discard, and dropped_total, what
+    # the producer's own counter recorded. Both are encoded as pointers so
+    # that a present zero is distinguishable from an absent field — a gap
+    # that simply omitted them could not be checked at all.
+    chk T18-1g "every gap carries the counters its range is checked against" 0 \
+      "$(records '.event_type=="sys.producer.gap"' \
+         | jq -r 'select(.detail.ring_overflows == null or .detail.dropped_total == null)' | wc -l | tr -d ' ')"
 
-    # The ranges are what was lost; the counter is how much was lost. An
-    # exact range reports the two as one number; an overflowed one reports a
-    # range that covers at least the count, never less — a gap that
-    # understated the loss would be worse than no gap at all.
+    # The exactness claim itself. ring_overflows is cumulative per producer,
+    # so a range may call itself exact only when nothing was discarded since
+    # that producer's previous gap — for its first gap, only when nothing was
+    # discarded at all. Checking it in order is what makes the claim
+    # falsifiable: an emitter that always said exact contradicts a counter it
+    # does not control, rather than agreeing with a width it derived itself.
+    GAP_EXACT_JQ='group_by(.detail.producer_id)
+      | map( [ .[] | {e: .detail.exact, o: .detail.ring_overflows} ] as $rs
+             | [ range(0; $rs|length)
+                 | select($rs[.].e == true
+                          and $rs[.].o != (if . == 0 then 0 else $rs[.-1].o end)) ]
+             | length )
+      | add // 0'
+    chk T18-1e "no gap claims to be exact against its own overflow count" 0 \
+      "$(records '.event_type=="sys.producer.gap"' | jq -s "$GAP_EXACT_JQ")"
+
+    # The inexact branch has to actually occur, or T18-1e would be passing
+    # on an empty set again — this time from the other side. It is reliable
+    # here: the queue is 8192 deep, so a producer that is refused at all has
+    # been refused far more often than its 256-entry ring can name.
+    #
+    # The exact branch is NOT asserted, because on this bed it is
+    # opportunistic rather than guaranteed: it appears only when some
+    # producer's whole drop set happens to fit its ring, which depends on how
+    # the flood is shared out and varies run to run (one producer of four in
+    # one run, none in the next). Requiring it would be a flake. It is driven
+    # deterministically in the unit suite instead, over a four-deep queue
+    # (pkg/audit, TestProducerDropAccounting for the exact range and
+    # TestProducerGapRingOverflow for the overflowed one). The lying-exact
+    # mutation is still caught here, because the mutation itself is what
+    # produces the exact records that T18-1e then contradicts.
+    chk_ge T18-2e "gaps were reported as inexact on this run" 1 \
+      "$(count '.event_type=="sys.producer.gap" and .detail.exact==false')"
+    echo "        exactness split: $(count '.event_type=="sys.producer.gap" and .detail.exact==true') exact, $(count '.event_type=="sys.producer.gap" and .detail.exact==false') inexact"
+
+    # The ranges are what was lost; the counter is how much was lost.
     SUMMED=$(records '.event_type=="sys.producer.gap"' \
       | jq -s 'map(.detail.counter_delta // ((.detail.pseq_to - .detail.pseq_from) + 1)) | add // 0')
     chk_ge T18-2a "the gaps account for the records the counter lost" 1 "$SUMMED"
-    MISMATCH=$(records '.event_type=="sys.producer.gap" and .detail.exact==true' \
-      | jq -r 'select(.detail.counter_delta != ((.detail.pseq_to - .detail.pseq_from) + 1))' | wc -l | tr -d ' ')
-    chk T18-2b "every exact range covers exactly the count it reports" 0 "$MISMATCH"
+
+    # The whole loss, reconciled per producer from the two sides: every pseq
+    # the ranges name, plus every entry the ring admits it discarded, must
+    # come to exactly what the producer counted. A range that overstated the
+    # loss, understated it, or was dropped from the trail breaks the sum.
+    GAP_RECON_JQ='group_by(.detail.producer_id)
+      | map({ width: (map((.detail.pseq_to - .detail.pseq_from) + 1) | add),
+              ovf:   (map(.detail.ring_overflows) | max),
+              tot:   (group_by(.detail.reason) | map(map(.detail.dropped_total) | max) | add) })
+      | map(select(.width + .ovf != .tot)) | length'
+    chk T18-2b "the ranges and the ring overflow account for the counted total" 0 \
+      "$(records '.event_type=="sys.producer.gap"' | jq -s "$GAP_RECON_JQ")"
 
     # More than one producer must appear, or the per-producer claim was
     # never actually exercised.

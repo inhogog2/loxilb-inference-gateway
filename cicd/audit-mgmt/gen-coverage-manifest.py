@@ -73,6 +73,7 @@ RED_TWINS = {
     "1b-complete": "llbigw-2-twin-1b-complete-r1",
     "1b-deny": "llbigw-2-twin-1b-deny-r1",
     "1b-gap": "llbigw-2-twin-1b-gap-r1",
+    "2-exact": "llbigw-2-twin-2-exact-r1",
 }
 
 
@@ -321,11 +322,24 @@ MATRIX = [
             scenario="audit-data",
             twin="1b-gap",
             unit=["TestProducerDropAccounting"],
-            note="the EXACT range is unit-only by arithmetic, not by omission: nothing is dropped until "
-                 "the 8192-deep queue is full, and a producer refused at all has been refused far more "
-                 "times than its 256-entry ring can name, so every gap a bed can produce is "
-                 "conservative. TestProducerDropAccounting drives a four-deep queue, where the whole "
-                 "drop set fits the ring"),
+            note="this row is the per-producer claim: that a gap names whose records were lost, on "
+                 "which stream, over which range. Whether the range is honest about being exact is a "
+                 "separate claim and is scoped to the row below"),
+        req("2", ["ring_overflows", "dropped_total"],
+            "the exactness claim is falsifiable: a gap may call its range exact only when the "
+            "producer's drop ring discarded nothing since that producer's previous gap, and the "
+            "ranges plus the entries the ring admits it discarded reconcile to the producer's own "
+            "counted total",
+            assertions=["T18-1e", "T18-1g", "T18-2b", "T18-2e"],
+            scenario="audit-data",
+            twin="2-exact",
+            unit=["TestProducerDropAccounting", "TestProducerGapRingOverflow"],
+            note="before these two fields the trail carried nothing a reader could hold the claim "
+                 "against: exact was checked only against a width the emitter derived from the range "
+                 "it was asserting, so a gap that always claimed exactness went undetected. Both "
+                 "inexact branch is asserted on the bed, where a producer refused at all has been "
+                 "refused far more often than its ring can name; the exact branch is opportunistic "
+                 "there and varies run to run, so it is driven in the unit suite instead"),
     ]),
     entry("sys.intent.orphaned", "A", [
         req("1a", ["intent_event_id", "config_generation_at_boot"],

@@ -15,7 +15,7 @@ management plane.
 | T14 | one request leaves one key: an admitted request produces exactly one completion and exactly one settle joined by `request_id`; a refused one produces exactly one deny carrying a non-empty `request_id` and the tenant of the credential that was refused | three requests through the gate — a 403 on a model the key may not use, an admitted non-streaming request, an admitted SSE request — each with its own `X-Request-Id` |
 | T4 | the tokens in the record are the tokens that were charged | a non-streaming body cut mid-usage-object across two TCP writes, and an SSE stream with `include_usage`, each asking the backend for counts no other arm uses; the record is compared with the Prometheus charge counter's delta |
 | T2 | the drop counter is reachable | the writer is stalled, the data channel is saturated, and the counter is asserted to **rise** — an "no drops observed" check passes on an idle system and proves nothing |
-| T18 | what was lost before the writer is named exactly | every `sys.producer.gap` names a producer, a stream and whether its range is exact; a range too large for the ring is conservative rather than a guess, and an exact one covers exactly the count it reports; more than one producer appears; `loxilb_audit_records_unattributed_total` is zero |
+| T18 | what was lost before the writer is named exactly | every `sys.producer.gap` names a producer, a stream and whether its range is exact, and carries the two counters the range is checked against (`ring_overflows`, `dropped_total`); no gap claims to be exact against its own overflow count; the ranges plus the ring's admitted overflow reconcile to the producer's counted total; the inexact branch occurs; more than one producer appears; `loxilb_audit_records_unattributed_total` is zero |
 | T21 | a reorder is not a drop | concurrent traffic from several workers with the writer healthy produces no new gap record |
 
 ## The join key
@@ -81,12 +81,17 @@ asserts that.
   is not a container scenario and is not run here.
 - **T10** (the AI regression) is `cicd/vllm-pd-disagg` re-run with audit
   on, not a separate suite.
-- The **exact-range** arm of T18 (`exact=true`) is arithmetic this bed
-  cannot reach. Nothing is dropped until the 8192-deep queue is full, and
-  a producer that has been refused at all has been refused far more times
-  than its 256-entry drop ring can name, so every gap here is a
-  conservative one. The exact range is driven in the unit suite, over a
-  four-deep queue where the whole drop set fits the ring.
+- The **inexact** arm of T18 (`exact=false`) is reliable here and is
+  asserted: the queue is 8192 deep, so a producer refused at all has been
+  refused far more often than its 256-entry drop ring can name. The
+  **exact** arm is *opportunistic* on this bed — it appears only when some
+  producer's whole drop set happens to fit its ring, which depends on how
+  the flood is shared out and varies between runs (one producer of four in
+  one observed run, none in the next). It is therefore reported but not
+  asserted here, and is driven deterministically in the unit suite over a
+  four-deep queue instead. A lying `exact` is still caught on the bed,
+  because the mutation is itself what produces the exact records that
+  T18-1e contradicts.
 
 ## Known red, and why
 
@@ -162,28 +167,36 @@ requirement row claims it and its twin sets no `red_twin_run_id`; the
 mutation is recorded here because the drop totals are what the data
 stream's loss accounting is read from.
 
-### A twin that stayed green, and what it found
+### A twin that stayed green, and how it was closed
 
-A sixth mutation was run and is kept because it failed to go red:
+A sixth mutation was run and kept because it failed to go red:
 `exact := true` in `emitProducerGaps`, so every gap claims its range is
 exact whether or not the ring behind it overflowed. The scenario stayed at
-71/0. Two assertions were expected to catch it and neither can:
+71/0. Two assertions were expected to catch it and neither could:
 
-- **T18-1e** selects `.detail.exact==false` and then checks the range. With
-  `exact` never false the filter matches nothing, and the assertion passes
-  on an empty set.
-- **T18-2b** selects `.detail.exact==true` and checks `counter_delta`
-  against the range width — but `emitProducerGaps` computes
-  `CounterDelta: run.to - run.from + 1`, so the two agree by construction
-  whatever `exact` says.
+- **T18-1e** selected `.detail.exact==false` and then checked the range.
+  Under the mutation `exact` is never false, so the filter matched nothing
+  and the assertion passed on an empty set.
+- **T18-2b** selected `.detail.exact==true` and checked `counter_delta`
+  against the range width — but `emitProducerGaps` computed
+  `CounterDelta: run.to - run.from + 1`, so the two agreed by construction
+  whatever `exact` said.
 
-So the bed does not currently test the exactness claim in either
-direction, and the requirement is marked tested on `llbigw-2-twin-1b-gap-r1`
-(the per-producer claim), not on these two. Detecting a lying `exact` needs
-an assertion that compares the flag against the producer's own ring
-overflow count, which the trail does not currently publish. Recorded rather
-than fixed here; the unit suite (`TestProducerDropAccounting`) still drives
-the exact-range arithmetic on a four-deep queue.
+Between them the trail carried nothing a reader could hold the claim
+against: every number in the record was derived from the range the record
+was asserting. The gap detail now also carries `ring_overflows`, the
+cumulative count of entries the producer's drop ring had to discard, and
+`dropped_total`, the producer's own counter for that reason — two numbers
+the emitter does not derive from the range.
+
+Both assertions are re-pointed at them. **T18-1e** walks each producer's
+gaps in order and allows `exact=true` only where `ring_overflows` has not
+grown since that producer's previous gap (for the first, only where it is
+zero). **T18-2b** reconciles per producer: every pseq the ranges name, plus
+every entry the ring admits it discarded, must come to exactly what the
+producer counted. **T18-2e** requires the inexact branch to
+actually occur, so T18-1e cannot pass on an empty set from that side
+either. The mutation now goes red on T18-1e.
 
 ## Running
 

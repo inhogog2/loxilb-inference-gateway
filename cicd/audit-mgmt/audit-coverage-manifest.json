@@ -3,7 +3,7 @@
   "generated_by": "cicd/audit-mgmt/gen-coverage-manifest.py",
   "stage_claimed": "1b",
   "event_types": 65,
-  "matrix_digest": "e8f7ad58bff9411337061bb86ef63c8ae71513aabce55a61acfcfd3b8fc3683e",
+  "matrix_digest": "53df28f9a8b3e007deb9a9c11b2cf320747e3091f83d8624cf85754b1bc91084",
   "requirements_by_stage": {
     "1b": {
       "covered and tested": 4
@@ -12,7 +12,8 @@
       "uncovered": 9
     },
     "2": {
-      "uncovered": 22
+      "uncovered": 22,
+      "covered and tested": 1
     },
     "1a": {
       "covered and tested": 5,
@@ -1246,7 +1247,29 @@
             "TestProducerDropAccounting"
           ],
           "red_twin_run_id": "llbigw-2-twin-1b-gap-r1",
-          "note": "the EXACT range is unit-only by arithmetic, not by omission: nothing is dropped until the 8192-deep queue is full, and a producer refused at all has been refused far more times than its 256-entry ring can name, so every gap a bed can produce is conservative. TestProducerDropAccounting drives a four-deep queue, where the whole drop set fits the ring",
+          "note": "this row is the per-producer claim: that a gap names whose records were lost, on which stream, over which range. Whether the range is honest about being exact is a separate claim and is scoped to the row below",
+          "state": "covered and tested"
+        },
+        {
+          "stage": "2",
+          "fields": [
+            "ring_overflows",
+            "dropped_total"
+          ],
+          "behaviour": "the exactness claim is falsifiable: a gap may call its range exact only when the producer's drop ring discarded nothing since that producer's previous gap, and the ranges plus the entries the ring admits it discarded reconcile to the producer's own counted total",
+          "scenario": "audit-data",
+          "assertion_ids": [
+            "T18-1e",
+            "T18-1g",
+            "T18-2b",
+            "T18-2e"
+          ],
+          "unit_tests": [
+            "TestProducerDropAccounting",
+            "TestProducerGapRingOverflow"
+          ],
+          "red_twin_run_id": "llbigw-2-twin-2-exact-r1",
+          "note": "before these two fields the trail carried nothing a reader could hold the claim against: exact was checked only against a width the emitter derived from the range it was asserting, so a gap that always claimed exactness went undetected. Both inexact branch is asserted on the bed, where a producer refused at all has been refused far more often than its ring can name; the exact branch is opportunistic there and varies run to run, so it is driven in the unit suite instead",
           "state": "covered and tested"
         }
       ],
