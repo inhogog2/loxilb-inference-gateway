@@ -728,8 +728,10 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
+// Flush sends the implicit 200 too, when nothing was written first.
 func (r *statusRecorder) Flush() {
 	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		r.wrote = true
 		f.Flush()
 	}
 }

@@ -548,6 +548,26 @@ func TestAuditGateRecordsTheStatusAPanickingHandlerAlreadySent(t *testing.T) {
 	}
 }
 
+// A flush answers the client with the implicit 200 even when no status was
+// written, so a handler that flushes and then panics is recorded as 200.
+func TestAuditGateRecordsAFlushedAnswerAsSent(t *testing.T) {
+	f := newGateFixture(t)
+	f.h = AuditGateMiddleware(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		rw.(http.Flusher).Flush()
+		panic("fault after flushing")
+	}))
+	if got := f.doPanicking(http.MethodPost, "/netlox/v1/config/loadbalancer", `{"a":1}`); got == nil {
+		t.Fatal("the panic did not reach the server")
+	}
+	pairs := f.pairs()
+	if len(pairs) != 1 || pairs[0].result == nil {
+		t.Fatalf("want one complete pair, got %+v", pairs)
+	}
+	if o := pairs[0].result["outcome"].(map[string]any); o["status"] != float64(200) {
+		t.Fatalf("recorded %v, the client was sent 200 by the flush", o)
+	}
+}
+
 // runtime.Goexit ends the handler without a panic recover can see; the
 // result is recorded all the same.
 func TestAuditGateRecordsTheResultWhenTheHandlerExitsItsGoroutine(t *testing.T) {
