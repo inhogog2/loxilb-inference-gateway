@@ -69,7 +69,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if err := pres.validateConnectionLimit(); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
-	if err := pres.validateFcQueue(params.Attr.ServiceArguments); err != nil {
+	if err := pres.validateFcQueueFields(params.Attr.ServiceArguments); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
 

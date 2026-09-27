@@ -49,12 +49,18 @@ whose body has arrived is parked instead of refused: its connection stays
 open with reads paused, and it holds no capacity unit and no backend
 connection. Each release of an executing unit on the pool wakes exactly one
 waiter, oldest first; a newcomer never jumps a non-empty queue. A woken
-request that loses the race for the unit goes back to the head.
+request that loses the race for the unit goes back to the head, even when
+newcomers filled the queue to its depth meanwhile; one that fails an
+endpoint ceiling goes back without waking anyone, since the next waiter
+would meet the same ceiling. A turn is never lost: when a woken client has
+gone before it resumed, or its wake could not be delivered, the turn passes
+to the next waiter, and a once-a-second pass wakes the head of any pool that
+has a free unit and requests still waiting.
 
 | Field (`serviceArguments`) | Process default | Meaning |
 |---|---|---|
 | `fc_max_queue_depth` | `LLB_FC_MAX_QUEUE_DEPTH` | requests that may wait on the pool; `0` means over a ceiling is refused at once. Ceiling 65536. |
-| `fc_max_queue_wait_ms` | `LLB_FC_MAX_QUEUE_WAIT_MS` (5000 when a depth is set and the window is not) | the longest a request may wait before it is ended with `504 admission_queue_timeout`. Required, greater than `0`, whenever a depth is set. |
+| `fc_max_queue_wait_ms` | `LLB_FC_MAX_QUEUE_WAIT_MS` (5000 when a depth is set and the window is not; at most 3600000) | the longest a request may wait before it is ended with `504 admission_queue_timeout`. Required, greater than `0`, whenever a depth is set. Ceiling 3600000 (an hour). |
 
 Rules of the two fields:
 
@@ -67,6 +73,10 @@ Rules of the two fields:
   AI-gateway service is, so the replace `POST` is the way to change them.
 - Omitting a field on a replace keeps the stored value; an explicit `0`
   resets it to the process default; JSON `null` is rejected.
+- The rule that a depth needs a wait window is judged on the rule a request
+  leaves behind: a replace carrying only a new depth keeps the stored wait
+  and is accepted; one carrying only `fc_max_queue_wait_ms: 0` on a rule with
+  a stored depth is refused `400`, and the stored rule is unchanged.
 - `GET` reads back the posted values and, for AI-gateway services, the
   `fc_effective` object with what the data plane holds: `mode`,
   `max_outstanding`, `ep_max_inflight`, `prefill_max_inflight`,
@@ -110,7 +120,7 @@ connection). Size the depth from the memory you can spend, and read
 
 Every refusal carries `Retry-After` in seconds (`1` for a ceiling refusal;
 the mean queue wait, between `1` and `30`, when the queue was full or a wait
-timed out; `5` for a drain) and the three admission headers `X-Loxilb-Admission-Inflight`,
+timed out; `5` for a drain, on HTTP/1.1 and HTTP/2 alike) and the three admission headers `X-Loxilb-Admission-Inflight`,
 `X-Loxilb-Admission-Queued` and `X-Loxilb-Admission-Limit`, the live counts
 and the ceiling that refused. The body is JSON.
 

@@ -10,6 +10,7 @@
  * overridden by the strong symbol when the full binary is linked.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -188,6 +189,13 @@ typedef struct proxy_fc_svc_stat {
     uint64_t qwait_sum_ms;
     uint64_t qwait_count;
 } proxy_fc_svc_stat_t;
+/* Pinned to the layout in sockproxy_metrics.h. */
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 296, "proxy_fc_svc_stat_t size");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 136, "pool offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 200, "queued offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 216, "qwait_bucket offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 288, "qwait_count offset");
 
 __attribute__((weak))
 int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max) {

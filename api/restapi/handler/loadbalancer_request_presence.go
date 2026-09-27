@@ -175,25 +175,13 @@ func (p *loadbalancerRequestPresence) validateKVNumericArguments(
 // depth is the parked client connections, about a megabyte each.
 const fcQueueDepthMax = 65536
 
-// validateFcQueue checks the two capacity-queue fields of a whole rule: the
-// field checks below, then the pair rule on the values as posted. A PATCH
-// body carries only the keys it changes, so the PATCH path runs the field
-// checks on the body and the pair rule on the merged rule instead.
-func (p *loadbalancerRequestPresence) validateFcQueue(
-	src *models.LoadbalanceEntryServiceArguments,
-) error {
-	if err := p.validateFcQueueFields(src); err != nil {
-		return err
-	}
-	if src == nil {
-		return nil
-	}
-	return validateFcQueuePair(uint32(src.FcMaxQueueDepth), uint32(src.FcMaxQueueWaitMs))
-}
-
 // validateFcQueueFields checks each capacity-queue field on its own: JSON
 // null is never a sentinel (the binding decodes it to zero, so the raw
 // presence map refuses it), the depth has a ceiling and the wait an hour.
+// The rule that spans both fields (cmn.FcQueuePairError) is judged on the
+// values that will be stored, after a POST replace or a PATCH is merged with
+// the stored rule: the rule layer runs it for POST, the PATCH path on its
+// merged rule.
 func (p *loadbalancerRequestPresence) validateFcQueueFields(
 	src *models.LoadbalanceEntryServiceArguments,
 ) error {
@@ -210,16 +198,6 @@ func (p *loadbalancerRequestPresence) validateFcQueueFields(
 	}
 	if src.FcMaxQueueWaitMs < 0 || src.FcMaxQueueWaitMs > 3600000 {
 		return fmt.Errorf("fc_max_queue_wait_ms must be within 0..3600000")
-	}
-	return nil
-}
-
-// validateFcQueuePair holds the one rule that spans both fields: a depth
-// without a wait window would park a request forever, so the window is
-// required with it. Checked on the values that will be stored.
-func validateFcQueuePair(depth, waitMs uint32) error {
-	if depth > 0 && waitMs == 0 {
-		return fmt.Errorf("fc_max_queue_wait_ms must be greater than 0 when fc_max_queue_depth is set")
 	}
 	return nil
 }

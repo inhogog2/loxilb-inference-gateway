@@ -222,3 +222,33 @@ func TestAdmissionQwaitCumulative(t *testing.T) {
 		t.Errorf("reason order drifted from enum fc_reason: %v", admissionReasonLabels)
 	}
 }
+
+// A scrape that lands between a wait's bucket and its count still emits a
+// histogram whose count covers every bucket; a settled one keeps its own
+// count, which also covers waits past the last bound.
+func TestAdmissionQwaitHistogramCountCoversBuckets(t *testing.T) {
+	cases := []struct {
+		name      string
+		buckets   [8]uint64
+		count     uint64
+		wantCount uint64
+	}{
+		{"mid-update: a bucket ahead of the count", [8]uint64{1, 0, 2, 0, 0, 3, 0, 0}, 5, 6},
+		{"settled", [8]uint64{1, 0, 2, 0, 0, 3, 0, 0}, 6, 6},
+		{"waits past the last bound", [8]uint64{1, 0, 0, 0, 0, 0, 0, 1}, 4, 4},
+		{"empty", [8]uint64{}, 0, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			count, cum := admissionQwaitHistogram(c.buckets, c.count)
+			if count != c.wantCount {
+				t.Fatalf("count = %d, want %d", count, c.wantCount)
+			}
+			for le, n := range cum {
+				if n > count {
+					t.Errorf("bucket le=%v = %d exceeds the count %d", le, n, count)
+				}
+			}
+		})
+	}
+}

@@ -81,7 +81,11 @@ type Status struct {
 // construct with NewManager. A process normally uses the package-level
 // default manager via the package functions below.
 type Manager struct {
-	mu           sync.Mutex
+	mu sync.Mutex
+	// applyMu orders the data path's drain calls: each applies the state
+	// as it stands when its turn comes, so the last one to run is the
+	// current state however two transitions overlapped.
+	applyMu      sync.Mutex
 	state        State
 	opSeq        uint64
 	opID         string
@@ -143,12 +147,8 @@ func (m *Manager) Enter(drainTimeout time.Duration) Status {
 	}
 	st := m.statusLocked()
 	m.mu.Unlock()
-	// The data path is drained outside the lock: it walks its pools and
-	// ends waiting requests, and a status read must not wait for that.
 	if entered {
-		if fn := dataPathDrain(); fn != nil {
-			fn(true)
-		}
+		m.applyDrain()
 	}
 	return st
 }
@@ -171,11 +171,29 @@ func (m *Manager) Leave() Status {
 	st.OperationID = endedID
 	m.mu.Unlock()
 	if endedID != "" {
-		if fn := dataPathDrain(); fn != nil {
-			fn(false)
-		}
+		m.applyDrain()
 	}
 	return st
+}
+
+// applyDrain brings the data path to the manager's state. It runs outside
+// m.mu (the data path walks its pools and ends waiting requests, and a
+// status read must not wait for that) but under applyMu, and it reads the
+// state after taking its turn: an Enter and a Leave that overlap each apply
+// whatever the state is by then, so the data path can never be left
+// draining behind a manager that reports active, or open behind one that
+// reports maintenance.
+func (m *Manager) applyDrain() {
+	fn := dataPathDrain()
+	if fn == nil {
+		return
+	}
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+	m.mu.Lock()
+	on := m.state == StateMaintenance
+	m.mu.Unlock()
+	fn(on)
 }
 
 // Status returns the current state snapshot.

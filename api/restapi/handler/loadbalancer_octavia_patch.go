@@ -148,7 +148,7 @@ func ConfigPatchLoadbalancer(params operations.PatchConfigLoadbalancerExternalip
 		sa := pb.ServiceArguments
 		pres.applyPDThresholds(&merged.Serv, sa)
 		pres.applyFcQueue(&merged.Serv, sa)
-		if err := validateFcQueuePair(merged.Serv.FcMaxQueueDepth, merged.Serv.FcMaxQueueWaitMs); err != nil {
+		if err := cmn.FcQueuePairError(merged.Serv.FcMaxQueueDepth, merged.Serv.FcMaxQueueWaitMs); err != nil {
 			return patchErr(err.Error())
 		}
 

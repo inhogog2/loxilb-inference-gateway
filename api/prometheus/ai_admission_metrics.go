@@ -8,12 +8,14 @@ package prometheus
 
 /*
 #cgo CFLAGS: -I../../loxilb-ebpf/common
+#include <stddef.h>
 #include <stdint.h>
 
 // Twin declaration of proxy_fc_svc_stat_t. CANONICAL definition lives in
 // loxilb-ebpf/common/sockproxy_metrics.h; a weak stub for CGO-only builds
 // (go test, no sockproxy object) lives in proxy_metrics_stub.c. All THREE
-// must move in lockstep, same commit -- tail-append only, never reorder.
+// must move in lockstep, same commit; the offsets are pinned by the asserts
+// after the struct, in all three.
 //
 // Role index 0 = normal, 1 = prefill, 2 = decode; reason index follows the
 // gate's enum fc_reason. Cap on pools reported per call; lockstep with
@@ -43,6 +45,13 @@ typedef struct proxy_fc_svc_stat {
     uint64_t qwait_sum_ms;
     uint64_t qwait_count;
 } proxy_fc_svc_stat_t;
+// Pinned to the layout in sockproxy_metrics.h.
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 296, "proxy_fc_svc_stat_t size");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 136, "pool offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 200, "queued offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 216, "qwait_bucket offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 288, "qwait_count offset");
 
 extern int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max);
 extern uint64_t proxy_get_fc_anomaly(int kind);
@@ -228,8 +237,9 @@ func (admissionCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- prometheus.MustNewConstMetric(admissionLimitDesc, prometheus.GaugeValue, s.queueDepth, s.service, s.pool, admissionRoleQueue)
 		ch <- prometheus.MustNewConstMetric(admissionQueuedDesc, prometheus.GaugeValue, s.queued, s.service, s.pool)
-		ch <- prometheus.MustNewConstHistogram(admissionQueueWaitDesc, s.qwaitCount, float64(s.qwaitSumMs)/1000,
-			admissionQwaitCumulative(s.qwaitBuckets), s.service, s.pool)
+		qwCount, qwBuckets := admissionQwaitHistogram(s.qwaitBuckets, s.qwaitCount)
+		ch <- prometheus.MustNewConstHistogram(admissionQueueWaitDesc, qwCount, float64(s.qwaitSumMs)/1000,
+			qwBuckets, s.service, s.pool)
 		for d, reason := range admissionReasonLabels {
 			ch <- prometheus.MustNewConstMetric(admissionDecisionsDesc, prometheus.CounterValue, s.decisions[d], s.service, s.pool, reason)
 		}
@@ -256,6 +266,19 @@ func admissionQwaitCumulative(buckets [8]uint64) map[float64]uint64 {
 		out[admissionQwaitBoundsSeconds[i]] = acc
 	}
 	return out
+}
+
+// admissionQwaitHistogram is the histogram a scrape emits: the cumulative
+// buckets and a count no smaller than the last of them. The C side adds a
+// wait to its bucket before its count and the snapshot reads them without a
+// lock, so a scrape can land between the two; a count below a bucket would
+// be a histogram that is not monotonic. Pure Go.
+func admissionQwaitHistogram(buckets [8]uint64, count uint64) (uint64, map[float64]uint64) {
+	cum := admissionQwaitCumulative(buckets)
+	if top := cum[admissionQwaitBoundsSeconds[len(admissionQwaitBoundsSeconds)-1]]; count < top {
+		count = top
+	}
+	return count, cum
 }
 
 // admissionServiceLabel renders the service identity the audit trail and the

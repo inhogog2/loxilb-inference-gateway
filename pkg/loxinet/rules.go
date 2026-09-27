@@ -4172,6 +4172,12 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if jwtProfErr != nil {
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: jwtProfErr}
 	}
+	// The capacity queue's two fields resolve the same way, and their pair
+	// rule is judged on what will be stored.
+	nextFcMaxQueueDepth, nextFcMaxQueueWaitMs, fcQueueErr := fcQueueResolve(eRule, &serv)
+	if fcQueueErr != nil {
+		return RuleArgsErr, fcQueueErr
+	}
 	// Checked against the resolved api_key_auth, which a replace may have
 	// preserved, and against the listener's L7 attachment as it stands. The
 	// attachment is read from the index rather than the policy registry because
@@ -4216,10 +4222,6 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.pdCacheThreshold, serv.PDCacheThreshold, serv.PDCacheThresholdPresent)
 		nextPDBalanceAbsThreshold := pdThresholdOnReplace(
 			eRule.pdBalanceAbsThreshold, serv.PDBalanceAbsThreshold, serv.PDBalanceAbsThresholdPresent)
-		nextFcMaxQueueDepth := u32OnReplace(
-			eRule.fcMaxQueueDepth, serv.FcMaxQueueDepth, serv.FcMaxQueueDepthPresent)
-		nextFcMaxQueueWaitMs := u32OnReplace(
-			eRule.fcMaxQueueWaitMs, serv.FcMaxQueueWaitMs, serv.FcMaxQueueWaitMsPresent)
 
 		if !reflect.DeepEqual(eRule.secIP, nSecIP) {
 			return RuleUnknownServiceErr, errors.New("secIP modify error")

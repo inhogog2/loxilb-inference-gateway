@@ -76,7 +76,6 @@ func TestFcQueueCreateRefusedBeforeRuleHook(t *testing.T) {
 	}{
 		{"null depth", `,"fc_max_queue_depth":null,"fc_max_queue_wait_ms":1000`},
 		{"null wait", `,"fc_max_queue_depth":4,"fc_max_queue_wait_ms":null`},
-		{"a depth without a wait window", `,"fc_max_queue_depth":4`},
 		{"a depth above the ceiling", `,"fc_max_queue_depth":65537,"fc_max_queue_wait_ms":1000`},
 		{"a wait above an hour", `,"fc_max_queue_depth":4,"fc_max_queue_wait_ms":3600001`},
 		{"a negative depth", `,"fc_max_queue_depth":-1,"fc_max_queue_wait_ms":1000`},
@@ -97,6 +96,41 @@ func TestFcQueueCreateRefusedBeforeRuleHook(t *testing.T) {
 		})
 	}
 }
+
+// POST is create-or-replace, so the handler cannot judge the pair on the
+// body: a replace carrying only a depth keeps the stored wait. It passes each
+// field on with its presence bit, and the rule layer, which sees the stored
+// rule, judges the merged pair; its refusal is a 400.
+func TestFcQueuePostLeavesThePairToTheRuleLayer(t *testing.T) {
+	prev := ApiHooks
+	defer func() { ApiHooks = prev }()
+
+	stub := &stubLbAddHook{}
+	ApiHooks = stub
+	raw := sprintfBody(connectionLimitCreateBody, `,"fc_max_queue_depth":20`)
+	if res := ConfigPostLoadbalancer(connectionLimitCreateParams(t, raw), nil); stub.captured == nil {
+		t.Fatalf("a lone depth never reached the rule layer: %T", res)
+	}
+	serv := stub.captured.Serv
+	if serv.FcMaxQueueDepth != 20 || !serv.FcMaxQueueDepthPresent || serv.FcMaxQueueWaitMsPresent {
+		t.Fatalf("reached the rule layer as depth=%d present=%v wait present=%v, want 20/true/false",
+			serv.FcMaxQueueDepth, serv.FcMaxQueueDepthPresent, serv.FcMaxQueueWaitMsPresent)
+	}
+
+	ApiHooks = &refusingLbAddHook{err: cmn.FcQueuePairError(4, 0)}
+	res := ConfigPostLoadbalancer(connectionLimitCreateParams(t, raw), nil)
+	er, ok := res.(*ErrorResponse)
+	if !ok || er.Payload == nil || er.Payload.Code != 400 {
+		t.Fatalf("the rule layer's pair refusal answered %#v, want a 400", res)
+	}
+}
+
+type refusingLbAddHook struct {
+	cmn.NetHookInterface
+	err error
+}
+
+func (s *refusingLbAddHook) NetLbRuleAdd(*cmn.LbRuleMod) (int, error) { return -1, s.err }
 
 func TestFcQueueReadBack(t *testing.T) {
 	lb := cmn.LbRuleMod{}
