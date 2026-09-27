@@ -162,6 +162,11 @@ type aiCompleteRecord struct {
 	IsStream   bool
 	ErrorCode  string
 	WorkerID   int
+	// ClientIP, OriginIP and TrustedHops are where the request came from,
+	// with the meanings aiAttribute documents.
+	ClientIP    string
+	OriginIP    string
+	TrustedHops int
 }
 
 // emitAIComplete writes the data.ai.complete record for a request whose
@@ -176,7 +181,8 @@ func emitAIComplete(c aiCompleteRecord) bool {
 	r.Stream = audit.StreamData
 	r.EventType = eventAIComplete
 	r.RequestID = c.RequestID
-	r.Actor = aiDataActor(c.TenantID, c.UserID, c.KeyID)
+	r.Actor = aiAttribute(aiDataActor(c.TenantID, c.UserID, c.KeyID),
+		c.ClientIP, c.OriginIP, c.TrustedHops)
 	r.Outcome = audit.Outcome{
 		Status: c.StatusCode,
 		OK:     c.StatusCode > 0 && c.StatusCode < 400,
@@ -251,6 +257,12 @@ type aiDenyRecord struct {
 	HTTPStatus int
 	ErrorCode  string
 	WorkerID   int
+	// ClientIP, OriginIP and TrustedHops carry the same attribution a
+	// completion does: a refusal is the record most likely to be read as
+	// "who did this".
+	ClientIP    string
+	OriginIP    string
+	TrustedHops int
 }
 
 // emitAIDeny writes the sec.ai.deny record for a request the admission
@@ -270,7 +282,8 @@ func emitAIDeny(d aiDenyRecord) bool {
 	r.Class = audit.ClassSecurity
 	r.EventType = eventAIDeny
 	r.RequestID = d.RequestID
-	r.Actor = aiDataActor(d.TenantID, d.UserID, d.KeyID)
+	r.Actor = aiAttribute(aiDataActor(d.TenantID, d.UserID, d.KeyID),
+		d.ClientIP, d.OriginIP, d.TrustedHops)
 	r.Outcome = audit.Outcome{
 		Status: d.HTTPStatus,
 		OK:     false,
@@ -293,6 +306,25 @@ func aiDataActor(tenantID, userID, keyID string) audit.Actor {
 	if keyID != "" {
 		a.Auth = audit.AuthAPIKey
 	}
+	return a
+}
+
+// aiAttribute records where a request came from on a data-path actor.
+//
+// clientIP is the socket peer, which nothing a client sends can change.
+// originIP is the address the datapath ATTRIBUTED the request to, and is
+// empty when no attribution ran -- which is not the same statement as "the
+// origin is the peer", so it is left empty rather than defaulted to the
+// peer. trustedHops is how many hops of ours the walk stepped past, and is
+// dropped where no origin was derived: a hop count on a record that
+// decided nothing would read as a measurement.
+func aiAttribute(a audit.Actor, clientIP, originIP string, trustedHops int) audit.Actor {
+	a.Remote = clientIP
+	if originIP == "" {
+		return a
+	}
+	a.Origin = originIP
+	a.TrustedHops = trustedHops
 	return a
 }
 

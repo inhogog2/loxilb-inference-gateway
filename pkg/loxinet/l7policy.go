@@ -114,7 +114,12 @@ func copyL7Policy(p *cmn.L7PolicyArg) *cmn.L7PolicyArg {
 	if p == nil {
 		return nil
 	}
-	out := &cmn.L7PolicyArg{Id: p.Id, Name: p.Name, LbId: p.LbId}
+	out := &cmn.L7PolicyArg{
+		Id:             p.Id,
+		Name:           p.Name,
+		LbId:           p.LbId,
+		TrustedProxies: append([]string(nil), p.TrustedProxies...),
+	}
 	for ri := range p.Rules {
 		r := &p.Rules[ri]
 		rule := cmn.L7RuleArg{Position: r.Position, SessionPersistence: r.SessionPersistence}
@@ -245,6 +250,21 @@ func (na *NetAPIStruct) NetL7PolicyAdd(p *cmn.L7PolicyArg) (int, error) {
 	}
 
 	if _, err := na.NetL7PolicyApply(lb.Serv.ServIP, lb.Serv.ServPort, lb.Serv.Proto, p.Rules); err != nil {
+		return RuleErrBase, err
+	}
+
+	// The ranges follow the policy because the data plane ignores them without
+	// one. If they are refused, the policy attached a moment ago is taken back
+	// out: it would otherwise be enforcing route and header rules while this
+	// call reports failure and the registry holds nothing, and it would be
+	// doing so at the edge attribution the caller was trying to change. The
+	// detach clears any ranges with it, so nothing of this attempt is left.
+	if _, err := na.NetL7TrustedProxiesApply(lb.Serv.ServIP, lb.Serv.ServPort, lb.Serv.Proto, p.TrustedProxies); err != nil {
+		if _, derr := na.NetL7PolicyRemove(lb.Serv.ServIP, lb.Serv.ServPort, lb.Serv.Proto); derr != nil {
+			tk.LogIt(tk.LogError, "l7policy %s: trustedProxies refused and the routes attached for it could not be "+
+				"withdrawn from %s:%d/%s (%v): the listener is enforcing a policy the control plane does not hold\n",
+				p.Id, lb.Serv.ServIP, lb.Serv.ServPort, lb.Serv.Proto, derr)
+		}
 		return RuleErrBase, err
 	}
 

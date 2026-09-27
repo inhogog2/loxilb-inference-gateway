@@ -1598,14 +1598,19 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 //	latencyMs:     request latency in milliseconds; 0 when unknown
 //	promptTokens, completTokens: usage as the datapath read it; never charged here
 //	streamStart, streamEnd: stream lifecycle flags, tracked by the stream exports
-//	clientIP, originIP, trustedHops: where the request came from, with the
-//	               header's meanings; accepted here, recorded once the envelope carries them
 //	errorCode:     how the response ended when it ended badly ("" otherwise)
 //	requestID:     correlation key shared with the settle and deny records
 //	userID, keyID: identity resolved at admission
 //	svcIdent:      "VIP:port" of the rule ("" when unknown)
 //	isStream:      1 when the response was an SSE stream
 //	producerID:    emitting thread's worker identity; negative off a worker
+//	clientIP:      the socket peer of the connection the request arrived on;
+//	               nothing a client sends can change it
+//	originIP:      the address the request is attributed to, "" when no
+//	               attribution ran -- NOT a statement that the origin is the
+//	               peer
+//	trustedHops:   how many of our own hops the attribution walk stepped
+//	               past; read only as a pair with originIP
 //
 //export llb_ai_record_request
 func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int, latencyMs C.int64_t, promptTokens C.int, completTokens C.int, streamStart C.int, streamEnd C.int, errorCode *C.char, requestID *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, isStream C.int, producerID C.int, clientIP *C.char, originIP *C.char, trustedHops C.int) {
@@ -1632,6 +1637,10 @@ func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int
 		IsStream:   isStream != 0,
 		ErrorCode:  C.GoString(errorCode),
 		WorkerID:   int(producerID),
+
+		ClientIP:    C.GoString(clientIP),
+		OriginIP:    C.GoString(originIP),
+		TrustedHops: int(trustedHops),
 	})
 }
 
@@ -1641,7 +1650,10 @@ func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int
 // an arm added to the decision cannot refuse a request unrecorded. There
 // is no metric here: the deny counters are already raised on the export
 // that produced the decision; counting it twice would double every denial
-// rate. The attribution triple is accepted as llb_ai_record_request documents.
+// rate. The attribution triple carries the meanings llb_ai_record_request
+// documents; note the gate runs BEFORE the header splice, so on a refused
+// request originIP is normally "" -- nothing derived -- while clientIP is
+// always known.
 //
 //export llb_ai_record_deny
 func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, modelName *C.char, tenantID *C.char, keyID *C.char, userID *C.char, stage C.int, httpStatus C.int, errorCode *C.char, clientIP *C.char, originIP *C.char, trustedHops C.int) {
@@ -1658,6 +1670,10 @@ func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, m
 		HTTPStatus: int(httpStatus),
 		ErrorCode:  C.GoString(errorCode),
 		WorkerID:   int(producerID),
+
+		ClientIP:    C.GoString(clientIP),
+		OriginIP:    C.GoString(originIP),
+		TrustedHops: int(trustedHops),
 	})
 }
 
