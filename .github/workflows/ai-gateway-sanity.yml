@@ -207,6 +207,16 @@ jobs:
           ./validation.sh
           ./rmconfig.sh
           cd -
+      # The capacity admission gate: ceilings over HTTP/1.1, HTTP/2 and TLS,
+      # the gauges and decision counters it exports, its refusals on the
+      # audit trail, and the same load admitted in observe mode.
+      - name: Capacity admission gate (HTTP/1, HTTP/2, TLS, audit, observe)
+        run: |
+          cd cicd/ai-admission/
+          ./config.sh
+          ./validation.sh
+          ./rmconfig.sh
+          cd -
       - name: Authentication plane separation (PostgreSQL key store, plaintext + TLS)
         run: |
           cd cicd/ai-authsep/

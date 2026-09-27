@@ -152,3 +152,44 @@ int proxy_get_qos_stats(proxy_qos_svc_stat_t *out, int max) {
     (void)max;
     return 0;
 }
+
+/*
+ * Weak stubs for proxy_get_fc_stats / proxy_get_fc_anomaly (AI admission gate
+ * per-pool state).
+ *
+ * Same contract as the two above: ai_admission_metrics.go declares the
+ * externs, the strong symbols in sockproxy_http.o satisfy them in the real
+ * binary, and these zero stubs keep `go test ./api/prometheus/` linkable.
+ * The struct below is the third copy of the lockstep triple
+ * (sockproxy_metrics.h is canonical; ai_admission_metrics.go carries the
+ * second) and must be updated in the same commit as the other two.
+ */
+#define PROXY_FC_ROLES 3
+#define PROXY_FC_REASONS 5
+#define PROXY_FC_POOL_LEN 64
+
+typedef struct proxy_fc_svc_stat {
+    uint32_t xip;
+    uint16_t xport;
+    uint8_t  protocol;
+    uint8_t  mode;
+    uint32_t max_outstanding;
+    uint32_t ep_cap[PROXY_FC_ROLES];
+    uint32_t inflight;
+    uint32_t ep_inflight[PROXY_FC_ROLES];
+    uint64_t decisions[PROXY_FC_REASONS];
+    char     pool[PROXY_FC_POOL_LEN];
+} proxy_fc_svc_stat_t;
+
+__attribute__((weak))
+int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max) {
+    (void)out;
+    (void)max;
+    return 0;
+}
+
+__attribute__((weak))
+uint64_t proxy_get_fc_anomaly(int kind) {
+    (void)kind;
+    return 0;
+}

@@ -1186,12 +1186,12 @@ func RunSockproxyMetrics(ctx context.Context) {
 			pdTrtCtxEarlyExitTotal.Add(float64(delta))
 		}
 
-		// 3h. Tier-1 byte shaper: republish the per-service, per-direction
-		// store the qosShaperCollector emits from on scrape. Not a delta
-		// path - the shaper counters are exported raw (see
-		// qos_shaper_metrics.go).
+		// 3h. Tier-1 byte shaper and the AI admission gate: republish the
+		// per-service stores their collectors emit from on scrape. Not delta
+		// paths - both are exported raw (see qos_shaper_metrics.go and
+		// ai_admission_metrics.go).
 		refreshQosShaperStore()
-
+		refreshAdmissionStore()
 		// 4. Save state for next cycle
 		prevSockproxyMetrics = current
 
