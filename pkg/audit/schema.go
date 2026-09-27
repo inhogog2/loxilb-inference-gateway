@@ -134,6 +134,18 @@ type Actor struct {
 	Tenant string
 	// Remote is the direct peer address.
 	Remote string
+	// Origin is the address the request is ATTRIBUTED to: the peer at the
+	// edge, or the right-most hop of the forwarding chain that is not one
+	// of our own upstreams, on a listener that names the ranges they
+	// occupy. Empty means no attribution ran, which a reader must NOT read
+	// as "the origin is the peer" -- nothing was decided.
+	Origin string
+	// TrustedHops is how many hops of ours the attribution walk stepped
+	// past. It is meaningful only as a pair with Origin, and is the only
+	// thing that tells an origin that resolved back to the peer apart from
+	// a client that connected directly, since both report Origin == Remote.
+	// It is not written where Origin is empty.
+	TrustedHops int
 	// Delegated is the originator a delegating caller claimed through the
 	// originator header, recorded verbatim and never promoted to User.
 	Delegated string

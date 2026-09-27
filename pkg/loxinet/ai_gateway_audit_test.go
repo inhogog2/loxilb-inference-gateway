@@ -598,3 +598,80 @@ func TestEmittersAreSafeWithNoTrail(t *testing.T) {
 		t.Error("producer lookup invented a producer with no writer")
 	}
 }
+
+// TestEmitAICompleteAttributesTheRequest asserts the peer and the derived
+// origin reach the record, and that they are distinguishable: a chain
+// walked past our own upstreams names a different address from the socket
+// peer, and the hop count says how far the walk went.
+func TestEmitAICompleteAttributesTheRequest(t *testing.T) {
+	_, drain := startTrail(t)
+
+	if !emitAIComplete(aiCompleteRecord{
+		RequestID: "req-1", TenantID: "acme", ModelName: "llama-3",
+		StatusCode: 200, WorkerID: 0,
+		ClientIP: "10.0.0.9", OriginIP: "203.0.113.7", TrustedHops: 2,
+	}) {
+		t.Fatal("emit refused")
+	}
+
+	a := only(t, drain(), eventAIComplete).actor()
+	if got := a.str("remote"); got != "10.0.0.9" {
+		t.Errorf("remote = %q, want the socket peer 10.0.0.9", got)
+	}
+	if got := a.str("origin_ip"); got != "203.0.113.7" {
+		t.Errorf("origin_ip = %q, want the attributed address 203.0.113.7", got)
+	}
+	if got := a.num("trusted_hops"); got != 2 {
+		t.Errorf("trusted_hops = %v, want 2", got)
+	}
+}
+
+// TestEmitAIDenyAttributesTheRefusal covers the record most likely to be
+// read as "who did this". The gate runs before the header splice, so a
+// refusal normally knows its peer and has derived no origin -- and that
+// must NOT be reported as "the origin is the peer".
+func TestEmitAIDenyAttributesTheRefusal(t *testing.T) {
+	_, drain := startTrail(t)
+
+	if !emitAIDeny(aiDenyRecord{
+		RequestID: "req-2", TenantID: "acme", ModelName: "llama-3",
+		Stage: aiStageAuth, HTTPStatus: 401, ErrorCode: "invalid_key", WorkerID: 0,
+		ClientIP: "10.0.0.9", OriginIP: "", TrustedHops: 0,
+	}) {
+		t.Fatal("emit refused")
+	}
+
+	a := only(t, drain(), eventAIDeny).actor()
+	if got := a.str("remote"); got != "10.0.0.9" {
+		t.Errorf("remote = %q, want the socket peer 10.0.0.9", got)
+	}
+	if _, found := a["origin_ip"]; found {
+		t.Error("origin_ip present on a refusal that derived none; an absent origin is not the peer")
+	}
+	if _, found := a["trusted_hops"]; found {
+		t.Error("trusted_hops present with no origin derived; there is nothing to count")
+	}
+}
+
+// TestAIAttributeDropsHopsWithoutAnOrigin states the rule at the one place
+// both emitters go through, so a caller that passes a stale hop count
+// alongside no origin cannot publish it as a measurement.
+func TestAIAttributeDropsHopsWithoutAnOrigin(t *testing.T) {
+	a := aiAttribute(aiDataActor("acme", "u-1", "k-1"), "10.0.0.9", "", 3)
+	if a.Remote != "10.0.0.9" {
+		t.Errorf("Remote = %q, want the peer even with no attribution", a.Remote)
+	}
+	if a.Origin != "" {
+		t.Errorf("Origin = %q, want empty: nothing was derived", a.Origin)
+	}
+	if a.TrustedHops != 0 {
+		t.Errorf("TrustedHops = %d, want 0: a count with no origin is not a measurement", a.TrustedHops)
+	}
+
+	// The peer is not promoted into the origin when an origin IS derived
+	// and happens to equal it -- the hop count is what separates them.
+	a = aiAttribute(aiDataActor("acme", "", ""), "203.0.113.7", "203.0.113.7", 0)
+	if a.Origin != "203.0.113.7" || a.TrustedHops != 0 {
+		t.Errorf("actor = %+v, want a derived origin equal to the peer with no hop stepped past", a)
+	}
+}
