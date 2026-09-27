@@ -126,9 +126,24 @@ tree and bed was green (165 assertions, 0 failed).
 | `llbigw-2-twin-T20-r1` | recovery scan skipped | `scanOrphans` returns at entry | T20-1a, T20-1b, T20-2a, T20-2b, T20-2c |
 | `llbigw-2-twin-T19-r1` | fallback counters removed | `noteWriteFailure` no longer counts | T19-1a, T19-1b, T19-3b, T19-5 |
 | `llbigw-2-twin-T15-r1` | a secret enters a recorded field | the login body reader returns the password with the claimed name | T15-s1e and T15-2.1, T15-2.2, T15-2.8, T15-2.9 (every login password canary found in a segment) |
+| `llbigw-2-twin-2-sinkrange-r1` | the sink stops checking the range of its two numeric knobs | the four range refusals in `AuditPostSink` and `syslog.New` are neutralised, as the endpoint was before they were added | T-GW-2-6a, T-GW-2-6b, T-GW-2-6c |
+| `llbigw-2-twin-2-polfields-r1` | a policy change stops naming what it changed | `audit.ChangedFields` returns nothing | T-GW-2-2b and, because `SetPolicy` then treats the change as a no-op and never applies it, T-GW-2-2c and T-GW-2-3b |
+| `llbigw-2-twin-2-rotate-r1` | sealing becomes a label rather than a boundary | `RotateNow` reports the active segment as both sealed and opened without rotating | T-GW-2-8c, T-GW-2-8e |
 
 T11, T22 and T25 have no twin in the plan's table; their assertions are
 scored but the manifest does not claim them as tested.
+
+The three `T-GW-2` twins were run on 2026-09-27 against a reference run of
+**193 assertions, 0 failed** — the 165-assertion baseline unchanged plus the
+28 new ones. Two things about that section are worth knowing before it is
+moved or extended. It **must run last**: it is the only part of the scenario
+that seals a segment, and `trail_raw` concatenates `*.jsonl` before
+`*.jsonl.gz`, so a sealed-and-compressed segment lands after the active one
+and every helper that takes the newest record by position stops being right
+(placing it mid-scenario reddened `TM-7`, `TM-10` and four `T15-s1*`
+assertions that have nothing to do with these endpoints). And the sink's
+trust anchor is generated **on the host** and copied in, because the image's
+`openssl` is built against a config prefix that does not exist inside it.
 
 ## Running
 

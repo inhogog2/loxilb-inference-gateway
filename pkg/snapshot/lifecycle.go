@@ -94,6 +94,7 @@ const (
 	AreaAIKeys       = "ai_keys"
 	AreaAIRateLimit  = "ai_ratelimit"
 	AreaSNI          = "sni"
+	AreaAudit        = "audit"
 	AreaCluster      = "cluster"
 	AreaDPU          = "dpu"
 	AreaGPU          = "gpu"
@@ -128,6 +129,21 @@ var RouteLifecycles = []RouteLifecycle{
 	{Method: "post", Path: "/auth/users", Class: ClassExternalStore, Area: AreaAuthUsers, DesiredState: true},
 	{Method: "put", Path: "/auth/users/{id}", Class: ClassExternalStore, Area: AreaAuthUsers, DesiredState: true},
 	{Method: "delete", Path: "/auth/users/{id}", Class: ClassExternalStore, Area: AreaAuthUsers, DesiredState: true},
+
+	// --- Audit trail. The sealing/retention policy and the remote sink
+	// are the parts that may change while the gateway runs, and they live
+	// only in memory: the audit root directory, the mandatory-audit mode
+	// and the instance identity are startup-only, so a restart brings the
+	// policy back to its startup values and leaves no sink configured.
+	// Runtime-only desired state, therefore, and named in
+	// excluded_domains: an operator who pointed the trail at a receiver
+	// must point it there again after a restart.
+	{Method: "post", Path: "/audit/policy", Class: ClassRuntimeRebuilt, Area: AreaAudit, DesiredState: true},
+	{Method: "post", Path: "/audit/sink", Class: ClassRuntimeRebuilt, Area: AreaAudit, DesiredState: true},
+	// Sealing the active segment now is an action on the trail rather than
+	// desired state: a restart seals the open segment anyway, so there is
+	// nothing for a snapshot to replay.
+	{Method: "post", Path: "/audit/rotate", Class: ClassRuntimeRebuilt, Area: AreaAudit},
 
 	// --- DPU diagnostics. The POST body is an operational action --
 	// unload a plugin, or pin the DOCA circuit breaker open/closed for a

@@ -234,6 +234,20 @@ type Writer struct {
 	holdMu sync.Mutex
 	holds  map[string]string
 
+	// segMaxBytes and segMaxAge mirror the segmenter's sealing limits for
+	// readers off the writer goroutine; the segmenter's own fields stay
+	// the ones it reads, and both are set together under SetPolicy.
+	segMaxBytes atomic.Int64
+	segMaxAge   atomic.Int64
+
+	// grandfathered maps a sealed segment to the moment the retention
+	// policy in force when it was sealed would have allowed its deletion.
+	// A reduced policy does not reach these segments before then; the
+	// zero time means the policy they were sealed under kept them
+	// indefinitely.
+	grandMu       sync.Mutex
+	grandfathered map[string]time.Time
+
 	retention       atomic.Pointer[Retention]
 	reserveBreached atomic.Bool
 	sealedBytes     atomic.Int64
@@ -282,6 +296,8 @@ func New(cfg Config) (*Writer, error) {
 	w.pool.New = func() any { return &Record{pooled: true} }
 	ret := cfg.Retention
 	w.retention.Store(&ret)
+	w.segMaxBytes.Store(cfg.MaxSegmentBytes)
+	w.segMaxAge.Store(int64(cfg.MaxSegmentAge))
 	empty := []*Producer{}
 	w.producers.Store(&empty)
 
@@ -929,11 +945,25 @@ func (w *Writer) emitProducerGaps() {
 		if len(runs) == 0 {
 			continue
 		}
+		// Every gap carries numbers from two independent sources: the range
+		// and its width come from the drop ring, the overflow and the
+		// per-reason total from the producer's counters. A reader reconciles
+		// one against the other, so a record claiming to be exact while the
+		// ring had discarded entries does not add up. The counters are
+		// sampled once per drain, beside the overflow they are read with, so
+		// that every gap from one drain reports the same consistent set.
+		var totals [numDropReasons]uint64
+		for i := range totals {
+			totals[i] = p.dropped[i].Load()
+		}
 		for _, run := range runs {
 			ex := exact
+			ov := overflow
+			tot := totals[run.reason]
 			w.writeSystem(sysRecord("sys.producer.gap", "producer:"+p.id, &SysDetail{
 				ProducerID: p.id, Stream: p.stream, PseqFrom: run.from, PseqTo: run.to,
 				Reason: dropReasons[run.reason], Exact: &ex, CounterDelta: run.to - run.from + 1,
+				RingOverflows: &ov, DroppedTotal: &tot,
 			}))
 		}
 	}

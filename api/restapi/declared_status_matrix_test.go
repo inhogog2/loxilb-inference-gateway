@@ -62,6 +62,8 @@ var declared204Operations = map[string]bool{
 	"POST /config/ipsec/tunnels":                             true,
 	"POST /config/ipsec/tunnels/{name}/action":               true,
 	"POST /config/l7policy":                                  true,
+	"POST /audit/policy":                                     true,
+	"POST /audit/sink":                                       true,
 	"PUT /config/ipsec/tunnels/{name}":                       true,
 	"PUT /config/securityrate/reset":                         true,
 	// reads with a vestigial 204 alongside the 200 they actually emit

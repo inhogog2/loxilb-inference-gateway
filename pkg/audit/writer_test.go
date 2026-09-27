@@ -350,16 +350,35 @@ func TestProducerDropAccounting(t *testing.T) {
 	if len(gaps) == 0 {
 		t.Fatal("no sys.producer.gap record")
 	}
-	var covered uint64
+	var covered, droppedTotal uint64
 	for _, g := range gaps {
 		d := g.detail()
 		if d["producer_id"] != "w1" || d["reason"] != DropQueueFull || d["exact"] != true {
 			t.Fatalf("gap record %v", d)
 		}
+		// The ring held every drop, so the claim of exactness must be
+		// backed by an overflow count that is present and zero.
+		ov, ok := d["ring_overflows"]
+		if !ok || ov.(float64) != 0 {
+			t.Fatalf("exact gap without a zero ring_overflows: %v", d)
+		}
+		tot, ok := d["dropped_total"]
+		if !ok {
+			t.Fatalf("gap without dropped_total: %v", d)
+		}
+		if v := uint64(tot.(float64)); v > droppedTotal {
+			droppedTotal = v
+		}
 		covered += uint64(d["pseq_to"].(float64)-d["pseq_from"].(float64)) + 1
 	}
 	if covered != uint64(n-accepted) {
 		t.Fatalf("gap records cover %d drops, producer counted %d", covered, n-accepted)
+	}
+	// The reconciliation the bed's assertions rest on: the width summed
+	// from the ring equals the total counted by the producer. The two
+	// numbers come from different places, so agreement is evidence.
+	if droppedTotal != covered {
+		t.Fatalf("dropped_total %d, ring-derived width %d", droppedTotal, covered)
 	}
 	// Every accepted data record carries its producer identity.
 	dataRecs := ofType(ls, "data.ai.complete")
@@ -980,4 +999,79 @@ func TestStatsDropsCountProducerDrops(t *testing.T) {
 			reported, DropQueueFull, dropped)
 	}
 	closeWriter(t, w)
+}
+
+// TestProducerGapRingOverflow drives more drops than the drop ring can name.
+// This is the case the shared bed cannot reach — there the queue is 8,192
+// deep and a producer that is refused at all is refused far more often than
+// the ring can hold, but the ring's own overflow counter was never written
+// into the trail, so a gap record claiming exactness could not be
+// contradicted by anything a reader could see. The two counter-derived
+// fields are what make the claim falsifiable.
+func TestProducerGapRingOverflow(t *testing.T) {
+	old := stallNanos.Swap(int64(200 * time.Millisecond))
+	defer stallNanos.Store(old)
+
+	cfg := testConfig(t)
+	cfg.QueueSize = 4
+	w := startWriter(t, cfg)
+	w.faults.arm(FaultWriterStall)
+	w.Append(mgmtIntent("/wake"))
+	time.Sleep(5 * time.Millisecond)
+
+	p := w.Producer("w1", StreamData)
+	// Comfortably more than dropRingSize so the ring is forced to discard.
+	const n = dropRingSize * 3
+	accepted := 0
+	for i := 0; i < n; i++ {
+		if p.Emit(dataRecord()) {
+			accepted++
+		}
+	}
+	w.faults.arm("")
+	dropped := uint64(n - accepted)
+	ps := p.stats()
+	if ps.DropRingOverflows == 0 {
+		t.Fatalf("expected the drop ring to overflow, %d drops with a %d-deep ring", dropped, dropRingSize)
+	}
+
+	waitFor(t, "queue drained", func() bool { return w.Stats().QueueDepth["data"] == 0 })
+	w.heartbeatNow(t)
+	closeWriter(t, w)
+
+	gaps := ofType(readDir(t, cfg.Dir), "sys.producer.gap")
+	if len(gaps) == 0 {
+		t.Fatal("no sys.producer.gap record")
+	}
+	var covered, droppedTotal, overflows uint64
+	for _, g := range gaps {
+		d := g.detail()
+		// The ring lost entries, so no gap from this drain may claim to
+		// name the loss exactly. This is the assertion a lying emitter
+		// fails and the bed could not make.
+		if d["exact"] != false {
+			t.Fatalf("gap claims exactness after a ring overflow: %v", d)
+		}
+		ov, ok := d["ring_overflows"]
+		if !ok || ov.(float64) == 0 {
+			t.Fatalf("gap after an overflow reports ring_overflows %v: %v", ov, d)
+		}
+		overflows = uint64(ov.(float64))
+		tot, ok := d["dropped_total"]
+		if !ok {
+			t.Fatalf("gap without dropped_total: %v", d)
+		}
+		if v := uint64(tot.(float64)); v > droppedTotal {
+			droppedTotal = v
+		}
+		covered += uint64(d["pseq_to"].(float64)-d["pseq_from"].(float64)) + 1
+	}
+	// The ranges understate the loss by exactly what the ring discarded,
+	// and the record says so rather than guessing.
+	if covered >= droppedTotal {
+		t.Fatalf("ring-derived width %d did not understate the counted total %d", covered, droppedTotal)
+	}
+	if covered+overflows != droppedTotal {
+		t.Fatalf("width %d + overflows %d != dropped_total %d", covered, overflows, droppedTotal)
+	}
 }

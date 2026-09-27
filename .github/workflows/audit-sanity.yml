@@ -94,14 +94,17 @@ jobs:
       - name: Coverage manifest agrees with the tree and the scenario
         run: python3 -B cicd/audit-mgmt/gen-coverage-manifest.py --check
 
-      - name: Writer, encoder, recovery and retention suites
+      - name: Writer, encoder, recovery, retention and sink suites
         # -race because the writer is one goroutine fed by many; the second
         # pass compiles the fault points in and proves the failure paths
         # (restart record, retroactive write-failure record, kept plain
         # segment) fire from the environment knob as well as from the hook.
+        # The pattern is ./pkg/audit/... and not ./pkg/audit, which matches
+        # that one package alone and so ran none of the sink's suite --
+        # including the test that the receiver's certificate is verified.
         run: |
-          sudo -E env "PATH=$PATH" go vet ./pkg/audit ./pkg/logrotate
-          sudo -E env "PATH=$PATH" go test -count=1 -race ./pkg/audit ./pkg/logrotate
+          sudo -E env "PATH=$PATH" go vet ./pkg/audit/... ./pkg/logrotate
+          sudo -E env "PATH=$PATH" go test -count=1 -race ./pkg/audit/... ./pkg/logrotate
           sudo -E env "PATH=$PATH" go test -count=1 -tags audit_faults ./pkg/audit
 
       - name: Disposable PostgreSQL for the store-backed suites
