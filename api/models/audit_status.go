@@ -23,7 +23,7 @@ type AuditStatus struct {
 	Accepted map[string]int64 `json:"accepted,omitempty"`
 
 	// A writer was configured at start. When false the audit directory was unusable, every audited management call is refused, and the remaining fields describe nothing.
-	Available bool `json:"available,omitempty"`
+	Available bool `json:"available"`
 
 	// Identity of this writer process, stamped on every record it wrote.
 	BootID string `json:"boot_id,omitempty"`
