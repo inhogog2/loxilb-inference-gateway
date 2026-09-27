@@ -305,6 +305,9 @@ const (
 	aiStageConflict
 	aiStageRateLimit
 	aiStageReserve
+	// aiStageCapacity is the service/endpoint capacity gate, which refuses
+	// after policy admitted the request and reports through its own frame.
+	aiStageCapacity
 )
 
 // aiDenyStage names the gate stage that refused the request.
@@ -318,6 +321,8 @@ func aiDenyStage(stage int) string {
 		return "ratelimit"
 	case aiStageReserve:
 		return "reserve"
+	case aiStageCapacity:
+		return "capacity"
 	}
 	return "keyless"
 }
@@ -356,6 +361,11 @@ func aiDenyReason(stage int, errorCode string) audit.Reason {
 		return audit.ReasonRateLimit
 	case aiStageReserve:
 		return audit.ReasonQuota
+	case aiStageCapacity:
+		// Backend saturation, not the caller's budget and not throttling:
+		// an admission decision, and the decision field names which
+		// ceiling refused (admission_capacity, admission_no_capacity).
+		return audit.ReasonAdmission
 	}
 	return audit.ReasonAdmission
 }

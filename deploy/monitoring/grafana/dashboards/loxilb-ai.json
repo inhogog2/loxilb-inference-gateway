@@ -2362,6 +2362,244 @@
         },
         "overrides": []
       }
+    },
+    {
+      "id": 55,
+      "type": "row",
+      "collapsed": true,
+      "title": "AI admission gate (capacity) \u2014 only when the gate is on (LLB_FC_MODE=observe|enforce)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 91
+      },
+      "panels": [
+        {
+          "id": 56,
+          "type": "stat",
+          "title": "Gate mode by pool",
+          "description": "Capacity gate mode per model pool: 0 off (the dispatch path is unchanged), 1 observe (decisions counted, everything admitted), 2 enforce (over a ceiling is refused with 429/503). Present for every AI-gateway pool, so 0 here means an ungated AI service and an absent panel means no AI service at all.",
+          "gridPos": {
+            "h": 6,
+            "w": 8,
+            "x": 0,
+            "y": 92
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max by (service, pool) (loxilb_ai_admission_mode{instance=~\"$instance\"})",
+              "legendFormat": "{{service}} {{pool}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No AI service",
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "off",
+                      "color": "text"
+                    },
+                    "1": {
+                      "text": "observe",
+                      "color": "blue"
+                    },
+                    "2": {
+                      "text": "enforce",
+                      "color": "green"
+                    }
+                  }
+                }
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "id": 57,
+          "type": "timeseries",
+          "title": "Capacity in flight vs ceiling",
+          "description": "Units the gate holds per pool and role against the ceiling in force. role=service is one unit per executing inference request; normal/prefill/decode sum the endpoint units of that role over the pool. A ceiling of 0 (unlimited) is hidden. In flight pinned at the ceiling with a rising capacity_shed rate is saturation; in flight stuck above zero with no traffic is a release defect (see the anomalies panel).",
+          "gridPos": {
+            "h": 6,
+            "w": 16,
+            "x": 8,
+            "y": 92
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (service, pool, role) (loxilb_ai_admission_inflight{instance=~\"$instance\"})",
+              "legendFormat": "{{service}} {{pool}} {{role}} in flight"
+            },
+            {
+              "refId": "B",
+              "expr": "max by (service, pool, role) (loxilb_ai_admission_limit{instance=~\"$instance\"} > 0)",
+              "legendFormat": "{{service}} {{pool}} {{role}} ceiling"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "Gate off or no AI service"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".* ceiling"
+                },
+                "properties": [
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "fill": "dash",
+                      "dash": [
+                        10,
+                        10
+                      ]
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 0
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 58,
+          "type": "timeseries",
+          "title": "Gate decisions/s by reason",
+          "description": "What the gate decided, per pool: admitted, capacity_shed (429 admission_capacity), no_healthy_capacity (503 admission_no_capacity), observe_would_shed (admitted in observe mode where enforce would have refused; the number to read before turning enforce on), bypass_non_inference (not an inference request: no unit taken). Zero rates with the gate on and traffic flowing means the pool is not gated.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 98
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (service, pool, reason) (rate(loxilb_ai_admission_decisions_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "legendFormat": "{{service}} {{pool}} {{reason}}"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "noValue": "Gate off or no AI service"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 59,
+          "type": "timeseries",
+          "title": "Gate accounting anomalies",
+          "description": "Process-wide accounting faults in the capacity gate: underflow (a release found its counter already at zero) and unknown_permit (an executing permit with no pool behind it). Both are defects in the gate's bookkeeping, never load; any increase is worth a bug report. Emitted at zero from start.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 98
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (kind) (increase(loxilb_ai_admission_anomalies_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "legendFormat": "{{kind}}"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No data",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        }
+      ]
     }
   ]
 }

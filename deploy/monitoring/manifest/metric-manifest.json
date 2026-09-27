@@ -1,18 +1,18 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-09-26T23:41:07+00:00",
-  "source_revision": "ddda289ec5c00fd1fd3bd3f2e31409dc7d72ae4c"
+  "generated_at": "2026-09-27T03:48:06+00:00",
+  "source_revision": "0a4ed5538613577f4c26cd2f066251b5bae253a0"
  },
  "contract": {
-  "total": 271,
+  "total": 276,
   "owners": {
-   "loxilb": 248,
+   "loxilb": 253,
    "loxilb-ai-controller": 19,
    "loxilb-kv-agent": 4
   },
   "classes": {
-   "default": 215,
+   "default": 220,
    "dpu-doca": 24,
    "aictrl-bridge": 8,
    "kv-agent-health": 1,
@@ -21,11 +21,11 @@
   }
  },
  "coverage": {
-  "default_families": 215,
-  "default_referenced": 157,
+  "default_families": 220,
+  "default_referenced": 162,
   "default_waived": 21,
   "default_unreferenced": 37,
-  "writer_classified": 215,
+  "writer_classified": 220,
   "writer_unclassified": 0,
   "writer_unverified": 64
  },
@@ -901,6 +901,238 @@
     }
    ],
    "verification_evidence": "api/prometheus/ai_metrics_test.go TestAdjustActiveStreams asserts the paired add/subtract, but drives the helper directly; scenario M02 owns the runtime proof, where the gauge must return to 0 after the last stream closes."
+  },
+  {
+   "name": "loxilb_ai_admission_anomalies_total",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "counter",
+   "definition_mechanism": "desc",
+   "labels": [
+    "kind"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [
+    "loxilb-ai.json"
+   ],
+   "waiver": "",
+   "source": "api/prometheus/ai_admission_metrics.go:145",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "none: the two process-wide anomaly counters are emitted from start, at zero, so absence and quiet are distinguishable.",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "admissionCollector",
+     "file": "api/prometheus/ai_admission_metrics.go",
+     "def_line": 167,
+     "writes": "admissionAnomaliesDesc",
+     "note": "read from the process-wide fc_anomaly_total counters through proxy_get_fc_anomaly on the same 10s cycle; emitted whether or not any AI service exists"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/prometheus/ai_admission_metrics.go",
+     "def_line": 192,
+     "call_line": 193,
+     "calls": "admissionCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/prometheus/ai_admission_metrics_test.go TestAdmissionCollectorEmptyStore asserts both kinds are emitted at zero with no pool configured; the C counters (fc_anomaly_total) are driven by loxilb-ebpf/common/test_fc_gate.c's double-release and unknown-permit cases."
+  },
+  {
+   "name": "loxilb_ai_admission_decisions_total",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "counter",
+   "definition_mechanism": "desc",
+   "labels": [
+    "service",
+    "pool",
+    "reason"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [
+    "loxilb-ai.json"
+   ],
+   "waiver": "",
+   "source": "api/prometheus/ai_admission_metrics.go:140",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "admissionCollector",
+     "file": "api/prometheus/ai_admission_metrics.go",
+     "def_line": 167,
+     "writes": "admissionDecisionsDesc",
+     "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/prometheus/ai_admission_metrics.go",
+     "def_line": 192,
+     "call_line": 193,
+     "calls": "admissionCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/prometheus/ai_admission_metrics_test.go TestAdmissionCollectorEmitsLabelledSeries compares the exposition of one pool against the store row by row (per-label oracle: every role and every reason), TestAdmissionCollectorEmptyStore asserts only the anomaly counters remain with no pool, TestSortAndDedupeAdmissionSamples pins first-wins on a duplicate sanitized label. The C side (proxy_get_fc_stats walking every ai_gw_mode pool under the proxy read lock) reads the gate state that loxilb-ebpf/common/test_fc_gate.c drives; runtime proof belongs to cicd/ai-admission."
+  },
+  {
+   "name": "loxilb_ai_admission_inflight",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "gauge",
+   "definition_mechanism": "desc",
+   "labels": [
+    "service",
+    "pool",
+    "role"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [
+    "loxilb-ai.json"
+   ],
+   "waiver": "",
+   "source": "api/prometheus/ai_admission_metrics.go:130",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "admissionCollector",
+     "file": "api/prometheus/ai_admission_metrics.go",
+     "def_line": 167,
+     "writes": "admissionInflightDesc",
+     "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/prometheus/ai_admission_metrics.go",
+     "def_line": 192,
+     "call_line": 193,
+     "calls": "admissionCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/prometheus/ai_admission_metrics_test.go TestAdmissionCollectorEmitsLabelledSeries compares the exposition of one pool against the store row by row (per-label oracle: every role and every reason), TestAdmissionCollectorEmptyStore asserts only the anomaly counters remain with no pool, TestSortAndDedupeAdmissionSamples pins first-wins on a duplicate sanitized label. The C side (proxy_get_fc_stats walking every ai_gw_mode pool under the proxy read lock) reads the gate state that loxilb-ebpf/common/test_fc_gate.c drives; runtime proof belongs to cicd/ai-admission."
+  },
+  {
+   "name": "loxilb_ai_admission_limit",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "gauge",
+   "definition_mechanism": "desc",
+   "labels": [
+    "service",
+    "pool",
+    "role"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [
+    "loxilb-ai.json"
+   ],
+   "waiver": "",
+   "source": "api/prometheus/ai_admission_metrics.go:135",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "admissionCollector",
+     "file": "api/prometheus/ai_admission_metrics.go",
+     "def_line": 167,
+     "writes": "admissionLimitDesc",
+     "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/prometheus/ai_admission_metrics.go",
+     "def_line": 192,
+     "call_line": 193,
+     "calls": "admissionCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/prometheus/ai_admission_metrics_test.go TestAdmissionCollectorEmitsLabelledSeries compares the exposition of one pool against the store row by row (per-label oracle: every role and every reason), TestAdmissionCollectorEmptyStore asserts only the anomaly counters remain with no pool, TestSortAndDedupeAdmissionSamples pins first-wins on a duplicate sanitized label. The C side (proxy_get_fc_stats walking every ai_gw_mode pool under the proxy read lock) reads the gate state that loxilb-ebpf/common/test_fc_gate.c drives; runtime proof belongs to cicd/ai-admission."
+  },
+  {
+   "name": "loxilb_ai_admission_mode",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "gauge",
+   "definition_mechanism": "desc",
+   "labels": [
+    "service",
+    "pool"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [
+    "loxilb-ai.json"
+   ],
+   "waiver": "",
+   "source": "api/prometheus/ai_admission_metrics.go:125",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "admissionCollector",
+     "file": "api/prometheus/ai_admission_metrics.go",
+     "def_line": 167,
+     "writes": "admissionModeDesc",
+     "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/prometheus/ai_admission_metrics.go",
+     "def_line": 192,
+     "call_line": 193,
+     "calls": "admissionCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/prometheus/ai_admission_metrics_test.go TestAdmissionCollectorEmitsLabelledSeries compares the exposition of one pool against the store row by row (per-label oracle: every role and every reason), TestAdmissionCollectorEmptyStore asserts only the anomaly counters remain with no pool, TestSortAndDedupeAdmissionSamples pins first-wins on a duplicate sanitized label. The C side (proxy_get_fc_stats walking every ai_gw_mode pool under the proxy read lock) reads the gate state that loxilb-ebpf/common/test_fc_gate.c drives; runtime proof belongs to cicd/ai-admission."
   },
   {
    "name": "loxilb_ai_engine_info",
