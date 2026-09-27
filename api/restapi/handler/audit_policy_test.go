@@ -25,6 +25,7 @@ import (
 	"github.com/loxilb-io/loxilb/api/models"
 	auditops "github.com/loxilb-io/loxilb/api/restapi/operations/audit"
 	"github.com/loxilb-io/loxilb/pkg/audit"
+	"github.com/loxilb-io/loxilb/pkg/audit/syslog"
 )
 
 // policyRecords returns the mgmt.audit.policy records the run produced.
@@ -168,7 +169,7 @@ func TestAuditSinkChangeRecordsTheEndpointAndItsTrustAnchor(t *testing.T) {
 		if auditSink.sink != nil {
 			_ = auditSink.sink.Close()
 		}
-		auditSink.sink, auditSink.cfg = nil, auditSink.cfg
+		auditSink.sink, auditSink.cfg = nil, syslog.Config{}
 		auditSink.mu.Unlock()
 	})
 
