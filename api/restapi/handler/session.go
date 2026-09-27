@@ -17,6 +17,7 @@ package handler
 
 import (
 	"net"
+	"net/http"
 
 	"github.com/loxilb-io/loxilb/api/models"
 	"github.com/loxilb-io/loxilb/api/restapi/operations"
@@ -29,6 +30,15 @@ import (
 
 func ConfigPostSession(params operations.PostConfigSessionParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: Session %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
+
+	// Both tunnels are optional in the schema, so a body without them
+	// passes validation; a session is built from both.
+	if params.Attr.AccessNetworkTunnel == nil {
+		return errorResponseWithCode(http.StatusBadRequest, "accessNetworkTunnel is required")
+	}
+	if params.Attr.CoreNetworkTunnel == nil {
+		return errorResponseWithCode(http.StatusBadRequest, "coreNetworkTunnel is required")
+	}
 
 	var sessionMod cmn.SessionMod
 	// Default Setting
@@ -69,6 +79,12 @@ func ConfigDeleteSession(params operations.DeleteConfigSessionIdentIdentParams, 
 
 func ConfigPostSessionUlCl(params operations.PostConfigSessionulclParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: Session UlCl %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
+
+	// ulclArgument is optional in the schema, so a body without it passes
+	// validation; the classifier is built from it.
+	if params.Attr.UlclArgument == nil {
+		return errorResponseWithCode(http.StatusBadRequest, "ulclArgument is required")
+	}
 
 	var sessionulclMod cmn.SessionUlClMod
 	// Default Setting
