@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-09-27T11:49:02+00:00",
-  "source_revision": "aa6c72eb2154b25d2b554a14707f22fc6d6fbe9b"
+  "generated_at": "2026-09-27T15:03:01+00:00",
+  "source_revision": "b6490ff215f394fd56552257742cb5774d4f3c11"
  },
  "contract": {
   "total": 278,
@@ -919,7 +919,7 @@
     "loxilb-ai.json"
    ],
    "waiver": "",
-   "source": "api/prometheus/ai_admission_metrics.go:191",
+   "source": "api/prometheus/ai_admission_metrics.go:200",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -930,7 +930,7 @@
      "kind": "method",
      "receiver": "admissionCollector",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 215,
+     "def_line": 224,
      "writes": "admissionAnomaliesDesc",
      "note": "read from the process-wide fc_anomaly_total counters through proxy_get_fc_anomaly on the same 10s cycle; emitted whether or not any AI service exists"
     },
@@ -938,8 +938,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 244,
-     "call_line": 245,
+     "def_line": 254,
+     "call_line": 255,
      "calls": "admissionCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -966,7 +966,7 @@
     "loxilb-ai.json"
    ],
    "waiver": "",
-   "source": "api/prometheus/ai_admission_metrics.go:186",
+   "source": "api/prometheus/ai_admission_metrics.go:195",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -977,7 +977,7 @@
      "kind": "method",
      "receiver": "admissionCollector",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 215,
+     "def_line": 224,
      "writes": "admissionDecisionsDesc",
      "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
     },
@@ -985,8 +985,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 244,
-     "call_line": 245,
+     "def_line": 254,
+     "call_line": 255,
      "calls": "admissionCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1013,7 +1013,7 @@
     "loxilb-ai.json"
    ],
    "waiver": "",
-   "source": "api/prometheus/ai_admission_metrics.go:166",
+   "source": "api/prometheus/ai_admission_metrics.go:175",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -1024,7 +1024,7 @@
      "kind": "method",
      "receiver": "admissionCollector",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 215,
+     "def_line": 224,
      "writes": "admissionInflightDesc",
      "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
     },
@@ -1032,8 +1032,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 244,
-     "call_line": 245,
+     "def_line": 254,
+     "call_line": 255,
      "calls": "admissionCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1060,7 +1060,7 @@
     "loxilb-ai.json"
    ],
    "waiver": "",
-   "source": "api/prometheus/ai_admission_metrics.go:171",
+   "source": "api/prometheus/ai_admission_metrics.go:180",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -1071,7 +1071,7 @@
      "kind": "method",
      "receiver": "admissionCollector",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 215,
+     "def_line": 224,
      "writes": "admissionLimitDesc",
      "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
     },
@@ -1079,8 +1079,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 244,
-     "call_line": 245,
+     "def_line": 254,
+     "call_line": 255,
      "calls": "admissionCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1106,7 +1106,7 @@
     "loxilb-ai.json"
    ],
    "waiver": "",
-   "source": "api/prometheus/ai_admission_metrics.go:161",
+   "source": "api/prometheus/ai_admission_metrics.go:170",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -1117,7 +1117,7 @@
      "kind": "method",
      "receiver": "admissionCollector",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 215,
+     "def_line": 224,
      "writes": "admissionModeDesc",
      "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
     },
@@ -1125,8 +1125,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 244,
-     "call_line": 245,
+     "def_line": 254,
+     "call_line": 255,
      "calls": "admissionCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1152,7 +1152,7 @@
     "loxilb-ai.json"
    ],
    "waiver": "",
-   "source": "api/prometheus/ai_admission_metrics.go:181",
+   "source": "api/prometheus/ai_admission_metrics.go:190",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -1163,7 +1163,7 @@
      "kind": "method",
      "receiver": "admissionCollector",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 215,
+     "def_line": 224,
      "writes": "admissionQueueWaitDesc",
      "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; the C side keeps one count per bucket (fc_qwait_bounds_ms) and Collect converts them to the cumulative form at its MustNewConstHistogram call, which is where the extractor resolves the histogram type"
     },
@@ -1171,8 +1171,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 244,
-     "call_line": 245,
+     "def_line": 254,
+     "call_line": 255,
      "calls": "admissionCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1198,7 +1198,7 @@
     "loxilb-ai.json"
    ],
    "waiver": "",
-   "source": "api/prometheus/ai_admission_metrics.go:176",
+   "source": "api/prometheus/ai_admission_metrics.go:185",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -1209,7 +1209,7 @@
      "kind": "method",
      "receiver": "admissionCollector",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 215,
+     "def_line": 224,
      "writes": "admissionQueuedDesc",
      "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
     },
@@ -1217,8 +1217,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/prometheus/ai_admission_metrics.go",
-     "def_line": 244,
-     "call_line": 245,
+     "def_line": 254,
+     "call_line": 255,
      "calls": "admissionCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1269,7 +1269,7 @@
      "kind": "method",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5078,
+     "call_line": 5080,
      "calls": "LlamacppAdmissionProbe",
      "receiver": "RuleH"
     },
@@ -1871,7 +1871,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 4661,
+     "call_line": 4663,
      "calls": "kvDataplaneContractInstallAsync"
     },
     {
@@ -1984,7 +1984,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 4661,
+     "call_line": 4663,
      "calls": "kvDataplaneContractInstallAsync"
     },
     {
@@ -2108,7 +2108,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 4661,
+     "call_line": 4663,
      "calls": "kvDataplaneContractInstallAsync"
     },
     {
@@ -2230,7 +2230,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 4661,
+     "call_line": 4663,
      "calls": "kvDataplaneContractInstallAsync"
     },
     {
@@ -2325,7 +2325,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5035,
+     "call_line": 5037,
      "calls": "KvSubscriberStartRank"
     },
     {
@@ -2416,7 +2416,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5035,
+     "call_line": 5037,
      "calls": "KvSubscriberStartRank"
     },
     {
@@ -2478,7 +2478,7 @@
      "kind": "method",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5078,
+     "call_line": 5080,
      "calls": "LlamacppAdmissionProbe",
      "receiver": "RuleH"
     },
@@ -4025,7 +4025,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5100,
+     "call_line": 5102,
      "calls": "Run",
      "note": "the scraper goroutine is started ONLY for a rule with pdDisaggMode, at a hard-coded 10s interval, against each endpoint's own xIP:xPort -- the same port the P/D data connect uses"
     },
@@ -6596,7 +6596,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5035,
+     "call_line": 5037,
      "calls": "KvSubscriberStartRank"
     },
     {
@@ -6676,7 +6676,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5035,
+     "call_line": 5037,
      "calls": "KvSubscriberStartRank"
     },
     {
@@ -6759,7 +6759,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5035,
+     "call_line": 5037,
      "calls": "KvSubscriberStartRank"
     },
     {
@@ -6838,7 +6838,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5035,
+     "call_line": 5037,
      "calls": "KvSubscriberStartRank"
     },
     {
@@ -6927,7 +6927,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5035,
+     "call_line": 5037,
      "calls": "KvSubscriberStartRank"
     },
     {
@@ -7006,7 +7006,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5035,
+     "call_line": 5037,
      "calls": "KvSubscriberStartRank"
     },
     {
@@ -7088,7 +7088,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5035,
+     "call_line": 5037,
      "calls": "KvSubscriberStartRank"
     },
     {
@@ -9025,7 +9025,7 @@
      "kind": "method",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5035,
+     "call_line": 5037,
      "calls": "KvSubscriberStartRank",
      "receiver": "RuleH"
     },
@@ -9182,7 +9182,7 @@
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
      "def_line": 3758,
-     "call_line": 5035,
+     "call_line": 5037,
      "calls": "KvSubscriberStartRank"
     },
     {
