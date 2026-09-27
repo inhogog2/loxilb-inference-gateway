@@ -349,3 +349,72 @@ func TestEncodeReservationFieldsAreAddOnly(t *testing.T) {
 		t.Errorf("not valid JSON: %s", got)
 	}
 }
+
+// TestEncodeOriginFieldsAreAddOnly states the three-field attribution
+// contract on the wire. The hop count rides the origin: it is written
+// whenever an origin was derived, INCLUDING at zero, because zero is the
+// answer that separates a client that connected directly from a chain
+// walked back to the peer -- and it is not written at all where no origin
+// was derived, so it can never be read as a measurement on a record that
+// decided nothing.
+func TestEncodeOriginFieldsAreAddOnly(t *testing.T) {
+	e := newEncoder()
+
+	// Absent when unset: the golden line above, unchanged.
+	got, err := e.encode(goldenData(), goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"origin_ip", "trusted_hops"} {
+		if strings.Contains(string(got), `"`+key+`"`) {
+			t.Errorf("record with no attribution carries %q", key)
+		}
+	}
+
+	// Derived, and walked past two of our hops.
+	r := goldenData()
+	r.Actor.Remote = "10.0.0.9"
+	r.Actor.Origin = "203.0.113.7"
+	r.Actor.TrustedHops = 2
+	got, err = e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"remote":"10.0.0.9"`, `"origin_ip":"203.0.113.7"`, `"trusted_hops":2`} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("missing %s: %s", want, got)
+		}
+	}
+	if !json.Valid(got) {
+		t.Errorf("not valid JSON: %s", got)
+	}
+
+	// Derived and equal to the peer, with no hop stepped past: a client
+	// that connected directly. The zero must be PRESENT, because it is
+	// what tells this apart from a chain that resolved back to the peer.
+	r = goldenData()
+	r.Actor.Remote = "203.0.113.7"
+	r.Actor.Origin = "203.0.113.7"
+	r.Actor.TrustedHops = 0
+	got, err = e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), `"trusted_hops":0`) {
+		t.Errorf("a derived origin with no trusted hop must still say so: %s", got)
+	}
+
+	// No origin derived, but a hop count left set. The count must not
+	// reach the wire: nothing was decided, so there is nothing to count.
+	r = goldenData()
+	r.Actor.Remote = "10.0.0.9"
+	r.Actor.Origin = ""
+	r.Actor.TrustedHops = 3
+	got, err = e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), `"trusted_hops"`) {
+		t.Errorf("hop count written with no origin derived: %s", got)
+	}
+}

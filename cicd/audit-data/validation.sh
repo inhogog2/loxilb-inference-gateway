@@ -339,6 +339,102 @@ chk T4-3h "naming the rate-limit stage"  ratelimit "$(printf '%s' "$Q2" | jq -r 
 
 # ════════════════════════════════════════════════════════════════════════════
 echo ""
+echo "T-GW-3: the record says where the request came from"
+echo "════════════════════════════════════════════════════════════════════════"
+# Three fields, and the contract is the RELATIONSHIP between them, not their
+# presence: actor.remote is the socket peer, actor.origin_ip is the address the
+# request was attributed to, and actor.trusted_hops is how many of our own hops
+# the walk stepped past to reach it.
+#
+# :2022 carries an L7 policy naming 10.10.10.0/24 -- the client's own subnet --
+# as its upstreams. :2020 carries no L7 policy at all, so nothing attributes
+# anything there. The walk reads the INBOUND chain only, right to left, and
+# falls back to the peer when every hop in it is one of ours; the peer is never
+# part of the chain it walks, which is why a single untrusted hop is reached
+# with nothing stepped past.
+#
+# Rows 3 and 4 are the pair that makes the hop count load-bearing: both report
+# an origin EQUAL to the peer, and only the count says whether a chain was
+# walked back to it or the client simply connected directly. A reader that
+# ignored the count could not tell them apart.
+XFF_CLIENT=203.0.113.7
+PEER=10.10.10.1
+OUR_HOP=10.10.10.50
+
+# ── a chain from a believed upstream, with one hop of ours to step past ─────
+new_rid; RID_ORG=$LAST_RID
+infer "$TRUST_PORT" "$RID_ORG" "$(body_for "$MODEL")" -H "X-Api-Key: $K_ALL" \
+  -H "X-Forwarded-For: $XFF_CLIENT, $OUR_HOP"
+chk T-GW-3-1a "a request through a believed upstream is served" 200 "$RESP_CODE"
+wait_for "$RID_ORG" data.ai.complete || bad T-GW-3-1b "a completion record" "none arrived within 20s"
+CORG=$(for_rid "$RID_ORG" data.ai.complete | head -n1)
+chk T-GW-3-1c "the record names the socket peer"            "$PEER"       "$(printf '%s' "$CORG" | jq -r '.actor.remote // empty')"
+chk T-GW-3-1d "and attributes the request past our own hop" "$XFF_CLIENT" "$(printf '%s' "$CORG" | jq -r '.actor.origin_ip // empty')"
+chk T-GW-3-1e "counting the hop it stepped past"            1             "$(printf '%s' "$CORG" | jq -r '.actor.trusted_hops')"
+
+# ── the same chain at the edge: nothing attributes it, and that is not the peer
+new_rid; RID_EDGE=$LAST_RID
+infer "$EDGE_PORT" "$RID_EDGE" "$(body_for "$MODEL")" -H "X-Api-Key: $K_ALL" \
+  -H "X-Forwarded-For: $XFF_CLIENT, $OUR_HOP"
+chk T-GW-3-2a "the same chain is served at the edge" 200 "$RESP_CODE"
+wait_for "$RID_EDGE" data.ai.complete || bad T-GW-3-2b "a completion record" "none arrived within 20s"
+CEDG=$(for_rid "$RID_EDGE" data.ai.complete | head -n1)
+chk T-GW-3-2c "the edge record still names the peer" "$PEER" "$(printf '%s' "$CEDG" | jq -r '.actor.remote // empty')"
+# The whole point of the field being absent rather than defaulted: a listener
+# told nothing decided nothing, and a reader must not be able to mistake that
+# for a decision that named the peer.
+chk T-GW-3-2d "no origin is reported where none was derived" absent \
+  "$(printf '%s' "$CEDG" | jq -r 'if .actor | has("origin_ip") then "present" else "absent" end')"
+chk T-GW-3-2e "and no hop count rides a record that decided nothing" absent \
+  "$(printf '%s' "$CEDG" | jq -r 'if .actor | has("trusted_hops") then "present" else "absent" end')"
+chk T-GW-3-2f "a client cannot put its own chain in the record" 0 \
+  "$(for_rid "$RID_EDGE" data.ai.complete | grep -c -- "$XFF_CLIENT")"
+
+# ── a chain entirely of our own addresses: it resolves back to the peer ─────
+new_rid; RID_ALLOURS=$LAST_RID
+infer "$TRUST_PORT" "$RID_ALLOURS" "$(body_for "$MODEL")" -H "X-Api-Key: $K_ALL" \
+  -H "X-Forwarded-For: $OUR_HOP"
+chk T-GW-3-3a "a chain of only our own hops is served" 200 "$RESP_CODE"
+wait_for "$RID_ALLOURS" data.ai.complete || bad T-GW-3-3b "a completion record" "none arrived within 20s"
+CALL=$(for_rid "$RID_ALLOURS" data.ai.complete | head -n1)
+chk T-GW-3-3c "the walk exhausts the chain and lands on the peer" "$PEER" \
+  "$(printf '%s' "$CALL" | jq -r '.actor.origin_ip // empty')"
+chk T-GW-3-3d "the origin equals the peer here"                   "$PEER" \
+  "$(printf '%s' "$CALL" | jq -r '.actor.remote // empty')"
+chk T-GW-3-3e "and the count is what says a chain was walked"     1 \
+  "$(printf '%s' "$CALL" | jq -r '.actor.trusted_hops')"
+
+# ── no chain at all: the same origin, and the count is what differs ─────────
+new_rid; RID_DIRECT=$LAST_RID
+infer "$TRUST_PORT" "$RID_DIRECT" "$(body_for "$MODEL")" -H "X-Api-Key: $K_ALL"
+chk T-GW-3-4a "a request with no chain is served" 200 "$RESP_CODE"
+wait_for "$RID_DIRECT" data.ai.complete || bad T-GW-3-4b "a completion record" "none arrived within 20s"
+CDIR=$(for_rid "$RID_DIRECT" data.ai.complete | head -n1)
+chk T-GW-3-4c "a direct client is attributed to itself" "$PEER" \
+  "$(printf '%s' "$CDIR" | jq -r '.actor.origin_ip // empty')"
+chk T-GW-3-4d "with nothing stepped past"               0 \
+  "$(printf '%s' "$CDIR" | jq -r '.actor.trusted_hops')"
+# Stated as its own row because it is the assertion the pair exists for: these
+# two records are indistinguishable on origin_ip and remote alone.
+chk T-GW-3-4e "the walked chain and the direct client differ only in the count" "1 0" \
+  "$(printf '%s' "$CALL" | jq -r '.actor.trusted_hops') $(printf '%s' "$CDIR" | jq -r '.actor.trusted_hops')"
+
+# ── a refusal carries the peer, the record most read as "who did this" ──────
+new_rid; RID_ORGDENY=$LAST_RID
+infer "$TRUST_PORT" "$RID_ORGDENY" "$(body_for other-model)" -H "X-Api-Key: $K_MODEL" \
+  -H "X-Forwarded-For: $XFF_CLIENT, $OUR_HOP"
+chk T-GW-3-5a "a refused request through a believed upstream" 403 "$RESP_CODE"
+wait_for "$RID_ORGDENY" sec.ai.deny || bad T-GW-3-5b "a deny record" "none arrived within 20s"
+DORG=$(for_rid "$RID_ORGDENY" sec.ai.deny | head -n1)
+chk T-GW-3-5c "the refusal names the peer it came from" "$PEER" \
+  "$(printf '%s' "$DORG" | jq -r '.actor.remote // empty')"
+# The gate decides before the header splice, so the refusal has no derived
+# origin. Asserted as absent rather than left unstated: this is the one record
+# where a defaulted origin would be most likely to be believed.
+chk T-GW-3-5d "and reports no origin, the gate running before the splice" absent \
+  "$(printf '%s' "$DORG" | jq -r 'if .actor | has("origin_ip") then "present" else "absent" end')"
+# ════════════════════════════════════════════════════════════════════════════
+echo ""
 echo "T2 / T18 / T21: what is lost before the writer is named exactly"
 echo "════════════════════════════════════════════════════════════════════════"
 
