@@ -490,7 +490,8 @@ func init() {
         },
         "available": {
           "description": "A writer was configured at start. When false the audit directory was unusable, every audited management call is refused, and the remaining fields describe nothing.",
-          "type": "boolean"
+          "type": "boolean",
+          "x-omitempty": false
         },
         "boot_id": {
           "description": "Identity of this writer process, stamped on every record it wrote.",
@@ -33792,7 +33793,8 @@ func init() {
         },
         "available": {
           "description": "A writer was configured at start. When false the audit directory was unusable, every audited management call is refused, and the remaining fields describe nothing.",
-          "type": "boolean"
+          "type": "boolean",
+          "x-omitempty": false
         },
         "boot_id": {
           "description": "Identity of this writer process, stamped on every record it wrote.",

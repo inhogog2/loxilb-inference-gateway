@@ -18,6 +18,8 @@ an event type is covered.
 | T11 | actor conformance | with `--userservice` every successful result names a principal with `auth=session`; without it every record says `auth=none` and names nobody |
 | T20 | a crash between a durable intent and its result is reported at the next boot, never guessed | the store is paused, a user create blocks after its intent, the process is SIGKILLed; boot 2 writes exactly one `sys.intent.orphaned` naming that `event_id`, the counter reads 1, no result exists |
 | T3 | the gate fails closed with the authoritative state unchanged | the audit directory sits on a 1 MiB tmpfs that is filled to the last byte; a generated route, a raw route and a named route answer 503 `audit_unavailable` and the rule table, the key and the account list are unchanged; freed, the same calls leave a pair sharing one `event_id`, intent before result by `seq` |
+| T-GW-2 | the audit policy, the remote sink and sealing on demand are management changes like any other | a policy replace and an unsatisfiable one; a sink refused for a missing, out-of-range or unreadable argument and one accepted; `POST /audit/rotate` seals the segment the status named and the next record lands in the new one |
+| T-GW-5 | `loxicmd` drives the three audit paths against a live gateway, and its refusals stay local | `get audit-status` on a running writer and on a boot whose audit directory is unusable; `get audit-sink` unconfigured and configured; a set, a replace that proves the endpoint replaces rather than patches, and `--disable`; five locally refused invocations that leave the audited `mgmt.audit.sink` count untouched, against one the gateway refuses that does not; `-o json` compared key for key with the gateway's own body |
 | T19 | the writer is not the only witness to its own failure | `loxilb_audit_write_failures_total` rises, `loxilb_audit_last_write_timestamp_seconds` stands still across a heartbeat interval, the operational log carries the fallback line; after recovery one `sys.writer.write_failed` names the interval and count, and every line of the segment still parses |
 
 ## Layout
@@ -25,12 +27,12 @@ an event type is covered.
 | file | role |
 |---|---|
 | `config.sh` | PostgreSQL (both roles from `scripts/aigw-db-bootstrap.sql`), the topology, the gateway with `--userservice`, the OAuth routes on a placeholder provider, the API-key store and `--audit-dir … --audit-required`; the administrator; `.state` with the flag sets |
-| `validation.sh` | the matrix above, across four boots of the gateway process |
+| `validation.sh` | the matrix above, across six boots of the gateway process |
 | `rmconfig.sh` | teardown (unpauses the store first, in case T20 was interrupted) |
 | `gen-coverage-manifest.py` | the event matrix: one entry per event type, stage-scoped requirements naming the assertions above; `--check` is the drift gate CI runs |
 | `audit-coverage-manifest.json` | generated; its SHA-256 over the entries is the `matrix_digest` |
 
-## The four boots
+## The six boots
 
 The gateway process is restarted inside its container (the `tiers.sh`
 pattern) because the flag set and the audit directory have to change, and
@@ -44,8 +46,13 @@ boot's segment is sealed at recovery and compressed, never removed.
 3. audit at `/var/log/loxilb/audit-wedge`, a 1 MiB tmpfs — the key for the
    raw arm is created, the filesystem is filled, T3 / T22 wedged / T19,
    the filesystem is freed, the positive arms and the retroactive record.
-4. no `--userservice` — T11 arm 2. The canary sweep runs last, over both
-   directories, so it covers the compressed segments of boots 1 and 2.
+4. no `--userservice` — T11 arm 2, the canary sweep over both directories
+   (so it covers the compressed segments of boots 1 and 2), then T-GW-2.
+5. `--audit-dir` pointed below a regular file — no writer at all. Only the
+   `available:false` arm of T-GW-5 runs here.
+6. audit at `/var/log/loxilb/audit` again, still no `--userservice` — the
+   rest of T-GW-5, against a healthy writer and a sink that has never been
+   configured.
 
 ## Design decisions worth knowing
 
@@ -77,6 +84,20 @@ boot's segment is sealed at recovery and compressed, never removed.
   keys and the OAuth state are received rather than sent and join only the
   absence sweep. The operational log runs at debug on this bed, which the
   product does not ship; a canary there is printed as a note, not scored.
+- **The writer-less boot is made with a path, not a permission.**
+  `--audit-dir` defaults to the healthy directory, so leaving the flag out
+  does not produce a gateway without a trail. Boot 5 points it below a
+  regular file instead, where the create fails with `ENOTDIR`, and it
+  deliberately omits `--audit-required`: with that flag the process refuses
+  to boot, and what T-GW-5 needs is a *booted* gateway answering about an
+  audit trail it does not have.
+- **T-GW-5 selects its records by value, never by position.** It runs after
+  the seal in T-GW-2, so the trail is no longer in positional order. Every
+  one of its trail assertions picks its record out by a receiver address
+  only that arm configured (`127.0.0.1:7514`, `127.0.0.1:7515`) or by the
+  removal being the one successful sink record naming no endpoint — none of
+  which any ordering can disturb. It also configures a sink, which is why it
+  cannot run before T-GW-2's "no sink is configured yet".
 - **Restarts pass `-p --loglevel debug` explicitly.** `spawn_docker_host`
   adds them to the first boot; a restart that forgot them would lose
   `/metrics` (503 "Prometheus option is disabled") and read as a product
@@ -132,6 +153,22 @@ tree and bed was green (165 assertions, 0 failed).
 
 T11, T22 and T25 have no twin in the plan's table; their assertions are
 scored but the manifest does not claim them as tested.
+The mutations they need, with the rows each one must redden and nothing else:
+
+| run id | twin (this section) | mutation | assertions that went red, and nothing else |
+|---|---|---|---|
+| `llbigw-2-twin-2-cli-nocheck-r1` | the CLI stops refusing anything itself | the five `return invalid(...)` guards removed from loxicmd's `auditSinkRequest` | the whole local-refusal block: `T-GW-5-5a`–`T-GW-5-5k`. The exit-code rows go first (the gateway's answer, not a local 2), the "names its flag" rows follow because there is no local refusal left to name one, and `5k` — the point of the block — sees the audited `mgmt.audit.sink` count move |
+| `llbigw-2-twin-2-sink-patch-r1` | the sink endpoint patches rather than replaces | `AuditPostSink` builds its config from `auditSink.cfg` and lets only non-zero incoming fields overwrite it | `T-GW-5-8c`, `T-GW-5-8d` — the omitted server name and frame cap survive the replace |
+| `llbigw-2-twin-2-sink-noendpoint-r1` | the sink record stops naming the receiver | `d.Endpoint` no longer set in the sink path's `AuditDetail` | `T-GW-5-7k`, `T-GW-5-7l`, `T-GW-5-8f`, `T-GW-5-8g`, `T-GW-5-9f`, and `T-GW-2-7d`, which selects its record the same way and breaks for the same reason |
+
+Run 2026-09-27 against a reference of **259 OK / 0 FAILED** — the
+193-assertion baseline unchanged plus 66 `T-GW-5` rows. All three images are
+full `Dockerfile.u24` builds of the mutated tree (an overlay could not be
+used: what changes is loxicmd, which an overlay does not replace), so each
+twin differs from the reference by its mutation alone. `9f` counts **exactly
+one** successful sink record naming no receiver rather than at least one,
+which is what lets `sink-noendpoint` reach it; at "at least one" it stayed
+green and proved nothing.
 
 The three `T-GW-2` twins were run on 2026-09-27 against a reference run of
 **193 assertions, 0 failed** — the 165-assertion baseline unchanged plus the
@@ -153,7 +190,8 @@ LOXILB_DOCKER_IMAGE=<tag> ./config.sh && ./validation.sh; ./rmconfig.sh
 python3 gen-coverage-manifest.py --check
 ```
 
-`jq` must be on the host: the requests go through `docker exec`, the
-extraction does not. One gateway at a time on a shared host; teardown
-removes `pg-audit`, which runs with `--rm`. The whole run takes about six
-minutes, most of it the four boots and the 35 s staleness window.
+`jq` and `openssl` must be on the host: the requests go through `docker
+exec`, the extraction does not, and the sink's trust anchor cannot be
+generated inside the image. One gateway at a time on a shared host; teardown
+removes `pg-audit`, which runs with `--rm`. The whole run takes about eight
+minutes, most of it the six boots and the 35 s staleness window.

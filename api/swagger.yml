@@ -13557,6 +13557,7 @@ definitions:
     properties:
       available:
         type: boolean
+        x-omitempty: false   # the answer a writer-less gateway gives is false, not an absent field
         description: A writer was configured at start. When false the audit directory was unusable, every audited management call is refused, and the remaining fields describe nothing.
       running:
         type: boolean

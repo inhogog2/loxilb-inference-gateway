@@ -39,11 +39,16 @@ source .state
 echo SCENARIO-audit-mgmt
 code=0
 
-require_host_tools jq || { echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
+require_host_tools jq openssl || { echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
 
 API=http://127.0.0.1:11111/netlox/v1
 GW_BIN=/root/loxilb-io/loxilb/loxilb
 WEDGE_DIR=/var/log/loxilb/audit-wedge
+# A regular file, so that an audit directory created beneath it fails with
+# ENOTDIR: the writer-less gateway T-GW-5 needs, made without touching the
+# healthy directory that --audit-dir defaults to.
+NOAUDIT_BLOCK=/var/log/loxilb/audit-not-a-dir
+SINK_CA=/tmp/audit-sink-ca.pem
 WORK=$(mktemp -d)
 REQLOG=$WORK/requests.log      # the harness's own record of what it sent
 ERRBODIES=$WORK/error-bodies.log
@@ -138,6 +143,33 @@ wait_result() {
 newest_intent() { local f=$1; shift; records ".phase==\"intent\" and ($f)" "$@" | tail -n1 | jq -r '.event_id'; }
 
 astatus() { docker exec llb1 curl -s -m 5 "${AUTH[@]}" "$API/audit/status"; }
+asink()   { docker exec llb1 curl -s -m 5 "${AUTH[@]}" "$API/audit/sink"; }
+# cli <label> <loxicmd args...> → CLI_RC, and the streams in CLI_OUT/CLI_ERR.
+# The status is the point of half the CLI cases, so the command is run with no
+# wrapper that could swallow one, and it is asserted before the output is read.
+CLI_RC=0; CLI_OUT=""; CLI_ERR=""
+cli() {
+  local label=$1; shift
+  CLI_OUT=$WORK/cli-$label.out
+  CLI_ERR=$WORK/cli-$label.err
+  $dexec llb1 loxicmd "$@" > "$CLI_OUT" 2> "$CLI_ERR"
+  CLI_RC=$?
+  return 0
+}
+# make_sink_ca <path in llb1> → 0 when a trust anchor the sink can read is in
+# place. Only a certificate is needed — it is what the receiver is verified
+# against, never a credential of ours — and it is made per run so nothing is
+# committed. It is generated on the HOST and copied in: the image's openssl is
+# built against a config prefix that does not exist in it, so it cannot write
+# one itself.
+make_sink_ca() {
+  local host_ca
+  host_ca=$WORK/$(basename "$1")
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout "${host_ca%.pem}.key" -out "$host_ca" \
+      -days 1 -subj '/CN=audit-sink-receiver-ca' >/dev/null 2>&1
+  docker cp "$host_ca" "llb1:$1" >/dev/null 2>&1
+  docker exec llb1 grep -q 'BEGIN CERTIFICATE' "$1" 2>/dev/null
+}
 metric_val() { # metric_val <family> [<label substring>] → the sample value
   local fam=$1 lab=${2:-}
   docker exec llb1 curl -s -m 5 "${AUTH[@]}" "$API/metrics" 2>/dev/null |
@@ -636,17 +668,7 @@ chk     T15-6 "no query string survived into any recorded path" 0 "$(jq -R -r 'f
 echo ""
 echo "T-GW-2: /audit/policy, /audit/sink and /audit/rotate"
 
-# A trust anchor the sink can actually read. Only a certificate is needed --
-# it is what the receiver is verified against, never a credential of ours --
-# and it is made per run so nothing is committed. It is generated on the host
-# and copied in: the image's openssl is built against a config prefix that
-# does not exist in it, so it cannot write one itself.
-SINK_CA=/tmp/audit-sink-ca.pem
-HOST_CA=$(mktemp -d)/ca.pem
-openssl req -x509 -newkey rsa:2048 -nodes -keyout "${HOST_CA%.pem}.key" -out "$HOST_CA" \
-    -days 1 -subj '/CN=audit-sink-receiver-ca' >/dev/null 2>&1
-docker cp "$HOST_CA" "llb1:$SINK_CA" >/dev/null 2>&1
-if docker exec llb1 grep -q 'BEGIN CERTIFICATE' "$SINK_CA" 2>/dev/null; then
+if make_sink_ca "$SINK_CA"; then
     ok T-GW-2-0 "a trust anchor the sink can read is in place"
 else
     bad T-GW-2-0 "trust anchor for the sink" "could not place $SINK_CA in llb1"
@@ -736,10 +758,242 @@ chk     T-GW-2-8f "a further policy change is accepted after the seal" 204 "$RES
 chk_ge  T-GW-2-8g "a record written after the seal lands in the new segment" 1 \
         "$(count ".event_type==\"mgmt.audit.policy\" and .segment_uuid==\"$OPENED\"")"
 
+# ── T-GW-5: the three CLI paths against a live gateway ──────────────────────
+#
+# Placement. This section is last, after T-GW-2, for reasons of its own:
+#   * it restarts the gateway twice — once with the audit directory made
+#     unusable, so that no writer exists, and once back to a healthy one —
+#     which nothing earlier could be asked to survive;
+#   * T-GW-2 asserts a sink that has never been configured, and this
+#     section configures one, so it cannot run before it;
+#   * the seal above rearranged the trail's positional order, and nothing
+#     here depends on it: every trail assertion selects its record by a
+#     value only that arm could have written — a receiver address of its
+#     own — never by taking the newest record.
+#
+# The CLI is the subject; REST and the trail are the oracles. A claim the
+# CLI prints is only scored against the same fact read another way.
+echo ""
+echo "T-GW-5: loxicmd get audit-status, get audit-sink and set audit-sink"
+
+# The three commands are part of the loxicmd release this image pins, so
+# their absence is a stale pin rather than a product defect — and it would
+# otherwise redden every row below for that one cause.
+#
+# The probe reads the help TEXT, not the exit status: `loxicmd get <name>
+# --help` answers 0 and prints the group's help for any name at all, so a
+# status check passes just as happily on a CLI that has never heard of these
+# commands (`get totally-bogus --help` also exits 0). Each command's help
+# names the route it drives, and only that command's does.
+has_cmd() { # has_cmd <group> <command> <route named in its help>
+  $dexec llb1 loxicmd "$1" "$2" --help 2>&1 | grep -q -- "$3"
+}
+if has_cmd get audit-status 'GET /audit/status' &&
+   has_cmd get audit-sink   'GET /audit/sink'   &&
+   has_cmd set audit-sink   'POST /audit/sink'; then
+  ok T-GW-5-0 "the image's loxicmd carries the three audit commands"
+  T_GW_5=1
+else
+  bad T-GW-5-0 "the image's loxicmd carries the three audit commands" \
+      "one of get audit-status / get audit-sink / set audit-sink is absent; the image's LOXICMD_TAG predates them"
+  T_GW_5=0
+fi
+
+t_gw_5() {
+  # The anchor T-GW-2 placed is still in the container, but this section does
+  # not lean on that: it places its own, which costs nothing and lets the
+  # section be read, moved or run on its own. It is placed before the reboots
+  # because it is a file in the container, which a gateway restart does not
+  # touch.
+  if make_sink_ca "$SINK_CA"; then
+    ok T-GW-5-0a "a trust anchor the sink can read is in place"
+  else
+    bad T-GW-5-0a "trust anchor for the sink" "could not place $SINK_CA in llb1"
+  fi
+
+  # ---- the writer-less gateway ---------------------------------------------
+  # --audit-dir defaults to the healthy directory, so "no writer" is made by
+  # pointing it below a regular file: the create fails with ENOTDIR. The
+  # --audit-required flag is deliberately absent — with it the process would
+  # refuse to boot, and what is under test is the answer a booted gateway
+  # gives about an audit trail it does not have.
+  echo ""
+  echo "Boot 5: the audit directory is unusable — the writer is absent"
+  echo "════════════════════════════════════════════════════════════════════════"
+  gw_stop || { bad T-GW-5-1 "boot 5" "the gateway would not stop"; return; }
+  docker exec llb1 sh -c "rm -rf $NOAUDIT_BLOCK && : > $NOAUDIT_BLOCK"
+  gw_start $AIKEY_ARGS --audit-dir "$NOAUDIT_BLOCK/segments" || { bad T-GW-5-1 "boot 5" "the gateway did not come back without a writer"; return; }
+
+  chk_ge  T-GW-5-1a "the operational log says the trail is unavailable" 1 \
+          "$(gw_log_grep 'audit trail unavailable' | wc -l | tr -d ' ')"
+  # The wire oracle for the row below it: the CLI can only render an answer
+  # the gateway actually sends.
+  chk     T-GW-5-1b "the gateway's own answer carries the availability field" true \
+          "$(astatus | jq -r 'has("available")')"
+  chk     T-GW-5-1c "and it says the writer is absent" false "$(astatus | jq -r '.available // false')"
+  cli unavail get audit-status
+  chk     T-GW-5-1d "get audit-status exits 0 against a writer-less gateway" 0 "$CLI_RC"
+  chk     T-GW-5-1e "it renders the unavailable answer" \
+          "Audit: NOT AVAILABLE - no writer was configured at start." "$(head -n1 "$CLI_OUT")"
+  chk     T-GW-5-1f "and prints no counter, which would be a zero read as a measurement" 0 \
+          "$(grep -c 'Sequence high\|Accepted' "$CLI_OUT")"
+
+  # ---- the writer is back --------------------------------------------------
+  echo ""
+  echo "Boot 6: a healthy writer again — the CLI drives the audit commands"
+  echo "════════════════════════════════════════════════════════════════════════"
+  gw_stop || { bad T-GW-5-2 "boot 6" "the gateway would not stop"; return; }
+  docker exec llb1 rm -f "$NOAUDIT_BLOCK"
+  gw_start $AIKEY_ARGS --audit-dir "$AUDIT_DIR" --audit-required || { bad T-GW-5-2 "boot 6" "the gateway did not come back with a writer"; return; }
+  B6=$(astatus | jq -r '.boot_id')
+  echo "  boot_id $B6"
+
+  # ---- get audit-status on a running writer --------------------------------
+  echo ""
+  echo "T-GW-5: get audit-status reports the writer, and only the writer"
+  cli status get audit-status
+  chk     T-GW-5-2a "get audit-status exits 0" 0 "$CLI_RC"
+  chk     T-GW-5-2b "the first line reports a running writer" "Audit: available, running" "$(head -n1 "$CLI_OUT")"
+  chk     T-GW-5-2c "the boot id it prints is the one the gateway reports" "$B6" \
+          "$(sed -n 's/^  Boot id: //p' "$CLI_OUT")"
+  chk     T-GW-5-2d "no record content reached the CLI's output" 0 "$(grep -c 'event_type' "$CLI_OUT")"
+
+  # -o json is the gateway's body verbatim, not a re-encoding of the CLI's
+  # own struct. The proof is the key ORDER: the body's order is the
+  # gateway's, and any re-encode here would impose this CLI's instead. Two
+  # reads are needed to compare, so the one counter that can cross zero
+  # between them (the 30 s heartbeat) is left out of the comparison.
+  cli status-json get audit-status -o json
+  chk     T-GW-5-3a "get audit-status -o json exits 0" 0 "$CLI_RC"
+  chk_nonempty T-GW-5-3b "the json parses" "$(jq -r '.boot_id // empty' "$CLI_OUT")"
+  chk     T-GW-5-3c "it names the same boot as the gateway" "$B6" "$(jq -r '.boot_id // empty' "$CLI_OUT")"
+  chk     T-GW-5-3d "the keys are the gateway's, in the gateway's order (printed verbatim)" \
+          "$(astatus | jq -r 'keys_unsorted | map(select(. != "heartbeats")) | join(",")')" \
+          "$(jq -r 'keys_unsorted | map(select(. != "heartbeats")) | join(",")' "$CLI_OUT")"
+
+  # ---- get audit-sink with nothing configured ------------------------------
+  echo ""
+  echo "T-GW-5: get audit-sink before and after a sink exists"
+  chk     T-GW-5-4a "the boot starts with no sink (the oracle)" false "$(asink | jq -r '.enabled // false')"
+  cli sink-off get audit-sink
+  chk     T-GW-5-4b "get audit-sink exits 0" 0 "$CLI_RC"
+  chk     T-GW-5-4c "an unconfigured sink is reported as such" \
+          "Audit sink: not configured - the trail is local only." "$(head -n1 "$CLI_OUT")"
+  cli sink-off-json get audit-sink -o json
+  chk     T-GW-5-4d "-o json is the gateway's body verbatim" "$(asink)" "$(cat "$CLI_OUT")"
+
+  # ---- the refusals the CLI owns -------------------------------------------
+  # Each one names its flag and, the point of the section, never reaches the
+  # gateway: POST /audit/sink is audited, so the count of its records is the
+  # independent witness that no request was made.
+  echo ""
+  echo "T-GW-5: a locally refused set names its flag and sends nothing"
+  SINK_N0=$(count '.event_type=="mgmt.audit.sink"')
+  cli no-ca set audit-sink --address 127.0.0.1:7514
+  chk     T-GW-5-5a "no --ca-bundle: exit 2" 2 "$CLI_RC"
+  chk_has T-GW-5-5b "and the refusal names the flag" "--ca-bundle is required" "$(cat "$CLI_ERR")"
+  cli no-addr set audit-sink --ca-bundle "$SINK_CA"
+  chk     T-GW-5-5c "no --address: exit 2" 2 "$CLI_RC"
+  chk_has T-GW-5-5d "and the refusal names the flag" "--address is required" "$(cat "$CLI_ERR")"
+  cli half-keypair set audit-sink --address 127.0.0.1:7514 --ca-bundle "$SINK_CA" --client-cert "$SINK_CA"
+  chk     T-GW-5-5e "half a client keypair: exit 2" 2 "$CLI_RC"
+  chk_has T-GW-5-5f "and the refusal names both flags" "--client-cert and --client-key" "$(cat "$CLI_ERR")"
+  cli bad-facility set audit-sink --address 127.0.0.1:7514 --ca-bundle "$SINK_CA" --facility 24
+  chk     T-GW-5-5g "a facility outside the table: exit 2" 2 "$CLI_RC"
+  chk_has T-GW-5-5h "and the refusal names the range" "--facility must be between" "$(cat "$CLI_ERR")"
+  cli neg-frame set audit-sink --address 127.0.0.1:7514 --ca-bundle "$SINK_CA" --max-frame-bytes=-1
+  chk     T-GW-5-5i "a negative frame cap: exit 2" 2 "$CLI_RC"
+  chk_has T-GW-5-5j "and the refusal names the flag" "--max-frame-bytes cannot be negative" "$(cat "$CLI_ERR")"
+  chk     T-GW-5-5k "not one of the five reached the gateway (mgmt.audit.sink unchanged)" \
+          "$SINK_N0" "$(count '.event_type=="mgmt.audit.sink"')"
+  chk     T-GW-5-5l "and none of them installed a sink" false "$(asink | jq -r '.enabled // false')"
+
+  # The contrast: what only the gateway can see stays the gateway's refusal.
+  # It is a different exit code (contract mismatch, not bad arguments) and it
+  # does reach the gateway, which records it.
+  cli unreadable-ca set audit-sink --address 127.0.0.1:7514 --ca-bundle /tmp/no-such-bundle.pem
+  chk     T-GW-5-6a "a bundle only the gateway can judge: exit 6, not 2" 6 "$CLI_RC"
+  chk_has T-GW-5-6b "the refusal is carried through as the gateway's" "server returned 400" "$(cat "$CLI_ERR")"
+  chk_has T-GW-5-6c "and classified as a contract mismatch" "(bad-request, HTTP 400)" "$(cat "$CLI_ERR")"
+  chk_gt  T-GW-5-6d "that one did reach the gateway (a record was written)" \
+          "$SINK_N0" "$(count '.event_type=="mgmt.audit.sink"')"
+  chk     T-GW-5-6e "the refused sink was not installed" false "$(asink | jq -r '.enabled // false')"
+
+  # ---- set audit-sink: configure, replace, disable -------------------------
+  echo ""
+  echo "T-GW-5: set audit-sink configures, replaces and removes the sink"
+  cli sink-set set audit-sink --address 127.0.0.1:7514 --ca-bundle "$SINK_CA" \
+      --server-name siem.audit.local --facility 13 --max-frame-bytes 8192
+  chk     T-GW-5-7a "set audit-sink exits 0" 0 "$CLI_RC"
+  chk     T-GW-5-7b "it reports the receiver and the anchor it is verified against" \
+          "Audit sink replaced: 127.0.0.1:7514, verified against $SINK_CA." "$(head -n1 "$CLI_OUT")"
+  S=$(asink)
+  chk     T-GW-5-7c "the gateway holds the receiver (the oracle)" 127.0.0.1:7514 "$(printf '%s' "$S" | jq -r '.address')"
+  chk     T-GW-5-7d "the anchor"        "$SINK_CA"       "$(printf '%s' "$S" | jq -r '.ca_bundle_path')"
+  chk     T-GW-5-7e "the expected server name" siem.audit.local "$(printf '%s' "$S" | jq -r '.server_name')"
+  chk     T-GW-5-7f "the facility"      13               "$(printf '%s' "$S" | jq -r '.facility')"
+  chk     T-GW-5-7g "the frame cap"     8192             "$(printf '%s' "$S" | jq -r '.max_frame_bytes')"
+  cli sink-on get audit-sink
+  chk_has T-GW-5-7h "get audit-sink now reports it enabled" "Audit sink: enabled," "$(head -n1 "$CLI_OUT")"
+  chk_has T-GW-5-7i "and names the receiver" "Receiver: 127.0.0.1:7514" "$(cat "$CLI_OUT")"
+  chk     T-GW-5-7j "no certificate material is served to the CLI" 0 "$(grep -c 'BEGIN CERTIFICATE' "$CLI_OUT")"
+  # The change is itself audited. The record is selected by the receiver only
+  # this arm configured, so no ordering of the segments can pick another.
+  chk_ge  T-GW-5-7k "the set appears in the trail as a mgmt.audit.sink result" 1 \
+          "$(count '.event_type=="mgmt.audit.sink" and .phase=="result" and .outcome.ok==true and .detail.endpoint=="127.0.0.1:7514"')"
+  chk     T-GW-5-7l "the record names the anchor, never its contents" "$SINK_CA" \
+          "$(records '.event_type=="mgmt.audit.sink" and .phase=="result" and .detail.endpoint=="127.0.0.1:7514"' | tail -n1 | jq -r '.detail.tls_ca_id')"
+
+  # The endpoint REPLACES. This set leaves out --server-name and
+  # --max-frame-bytes, so a correct CLI sends them as their defaults and the
+  # gateway forgets what it held — which is the documented contract, and the
+  # thing an operator loses a setting to if it is not true.
+  cli sink-replace set audit-sink --address 127.0.0.1:7515 --ca-bundle "$SINK_CA"
+  chk     T-GW-5-8a "a replacing set exits 0" 0 "$CLI_RC"
+  S=$(asink)
+  chk     T-GW-5-8b "the receiver moved" 127.0.0.1:7515 "$(printf '%s' "$S" | jq -r '.address')"
+  chk     T-GW-5-8c "the server name the previous set held was replaced, not kept" "" \
+          "$(printf '%s' "$S" | jq -r '.server_name // ""')"
+  chk     T-GW-5-8d "the frame cap likewise" 0 "$(printf '%s' "$S" | jq -r '.max_frame_bytes // 0')"
+  chk     T-GW-5-8e "the facility the CLI sends explicitly survives" 13 "$(printf '%s' "$S" | jq -r '.facility')"
+  chk_ge  T-GW-5-8f "the replace appears in the trail as its own mgmt.audit.sink result" 1 \
+          "$(count '.event_type=="mgmt.audit.sink" and .phase=="result" and .outcome.ok==true and .detail.endpoint=="127.0.0.1:7515"')"
+  chk_has T-GW-5-8g "and its changed_fields name what actually moved" address \
+          "$(records '.event_type=="mgmt.audit.sink" and .phase=="result" and .detail.endpoint=="127.0.0.1:7515"' | tail -n1 | jq -c '.detail.changed_fields')"
+
+  SEQ_BEFORE=$(astatus | jq -r '.seq_high // 0')
+  cli sink-disable set audit-sink --disable
+  chk     T-GW-5-9a "--disable exits 0" 0 "$CLI_RC"
+  chk     T-GW-5-9b "it says the trail continues locally" \
+          "Audit sink removed. The trail is local only." "$(head -n1 "$CLI_OUT")"
+  chk     T-GW-5-9c "the gateway holds no sink (the oracle)" false "$(asink | jq -r '.enabled // false')"
+  chk     T-GW-5-9d "and no receiver" "" "$(asink | jq -r '.address // ""')"
+  cli sink-off-again get audit-sink
+  chk     T-GW-5-9e "get audit-sink reports it unconfigured again" \
+          "Audit sink: not configured - the trail is local only." "$(head -n1 "$CLI_OUT")"
+  # The removal is the one successful sink record naming no receiver, which is
+  # how it is told apart from the two sets without using order. Exactly one,
+  # not at least one: "at least one" would go on passing on a gateway that had
+  # stopped naming the receiver on all three, which is the thing this row and
+  # the two above it exist to catch.
+  chk     T-GW-5-9f "the removal is the only successful sink record naming no receiver" 1 \
+          "$(count '.event_type=="mgmt.audit.sink" and .phase=="result" and .outcome.ok==true and .detail.endpoint==null')"
+  chk_has T-GW-5-9g "and its changed_fields say the sink was turned off" enabled \
+          "$(records '.event_type=="mgmt.audit.sink" and .phase=="result" and .outcome.ok==true and .detail.endpoint==null' | tail -n1 | jq -c '.detail.changed_fields')"
+  # "The trail continues locally" is a claim, so it is measured: the writer
+  # is still the one that was running, and it is still advancing.
+  cli status-after get audit-status
+  chk     T-GW-5-9h "the writer is still available and running after the removal" \
+          "Audit: available, running" "$(head -n1 "$CLI_OUT")"
+  chk     T-GW-5-9i "still the same boot, not a restart" "$B6" "$(sed -n 's/^  Boot id: //p' "$CLI_OUT")"
+  chk_gt  T-GW-5-9j "and the trail advanced across the removal" "$SEQ_BEFORE" "$(astatus | jq -r '.seq_high // 0')"
+}
+[[ "$T_GW_5" == 1 ]] && t_gw_5
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "Trail summary:"
-echo "  records: $(trail "$AUDIT_DIR" "$WEDGE_DIR" | wc -l | tr -d ' ') across boots $B1 $B2 $B3 $B4"
+echo "  records: $(trail "$AUDIT_DIR" "$WEDGE_DIR" | wc -l | tr -d ' ') across boots $B1 $B2 $B3 $B4 $B6"
 trail "$AUDIT_DIR" "$WEDGE_DIR" | jq -r '.event_type' | sort | uniq -c | sort -rn | sed 's/^/  /'
 echo ""
 if [[ $code == 0 ]]; then
