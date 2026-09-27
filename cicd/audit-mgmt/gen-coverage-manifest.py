@@ -74,6 +74,16 @@ RED_TWINS = {
     "1b-deny": "llbigw-2-twin-1b-deny-r1",
     "1b-gap": "llbigw-2-twin-1b-gap-r1",
     "2-exact": "llbigw-2-twin-2-exact-r1",
+    # Stage 2, run against cicd/audit-mgmt. One mutation each, so a row claims
+    # the twin that actually exercises its own assertions.
+    # sinkrange: the sink accepts the two numeric knobs without checking their
+    #   range, as it did before they were bounded.
+    # polfields: a policy change no longer names the fields it changed.
+    # rotate: sealing reports the active segment as both sealed and opened,
+    #   making the seal a label rather than a boundary.
+    "2-sinkrange": "llbigw-2-twin-2-sinkrange-r1",
+    "2-polfields": "llbigw-2-twin-2-polfields-r1",
+    "2-rotate": "llbigw-2-twin-2-rotate-r1",
 }
 
 
@@ -195,32 +205,49 @@ MATRIX = [
             "the runtime-changeable policy is replaced through the gate like any other mutation: the "
             "result names the fields that changed and states whether the deployment profile's floor "
             "refused them, and a refused change leaves the policy untouched",
+            assertions=["T-GW-2-1a", "T-GW-2-1b", "T-GW-2-2a", "T-GW-2-2b", "T-GW-2-2c",
+                        "T-GW-2-3a", "T-GW-2-3b"],
             unit=["TestAuditPolicyChangeIsAuditedWithWhatChanged",
                   "TestAuditPolicyBelowTheFloorIsRefusedAndRecorded",
                   "TestSetPolicyRefusesBelowTheFloorForEveryCaller",
                   "TestLoweringRetentionDoesNotDeleteWhatIsAlreadySealed"],
+            twin="2-polfields",
             note="a floor refusal answers 400 rather than 403 on purpose: the gate re-types every 403 "
                  "into sec.mgmt.authz_denied, which would file a refused policy change as an "
-                 "authorization failure and lose the record that names the refused field. No bed "
-                 "scenario drives this endpoint yet, so the row is covered by the unit suite and has "
-                 "no red twin"),
+                 "authorization failure and lose the record that names the refused field. The bed "
+                 "drives an accepted change and an unsatisfiable one; the FLOOR refusal itself stays "
+                 "unit-owned, because the floor comes from a deployment profile and this bed runs "
+                 "with the zero floor, which refuses nothing. The endpoint REPLACES the policy rather "
+                 "than patching it, so the scenario reads it and writes the whole thing back"),
     ]),
     entry("mgmt.audit.sink", "M", [
         req("2", ["changed_fields", "endpoint", "tls_ca_id"],
             "a sink change is recorded with where the trail is being sent and what vouches for the "
             "receiver, both named and never their contents; a configuration whose receiver could not "
             "be verified is refused when it is configured, not when it first connects",
+            assertions=["T-GW-2-4a", "T-GW-2-4b", "T-GW-2-5a", "T-GW-2-5b", "T-GW-2-6a",
+                        "T-GW-2-6b", "T-GW-2-6c", "T-GW-2-7a", "T-GW-2-7b", "T-GW-2-7c",
+                        "T-GW-2-7d", "T-GW-2-7e", "T-GW-2-7f"],
             unit=["TestAuditSinkChangeRecordsTheEndpointAndItsTrustAnchor",
-                  "TestAuditSinkWithoutATrustAnchorIsRefused"],
-            note="no bed scenario drives this endpoint yet; the transport itself is covered in "
-                 "pkg/audit/syslog, including a receiver signed by an untrusted authority being refused"),
+                  "TestAuditSinkWithoutATrustAnchorIsRefused",
+                  "TestAuditSinkNumbersOutsideTheirRangeAreRefused"],
+            twin="2-sinkrange",
+            note="the transport itself is covered in pkg/audit/syslog, including a receiver signed by "
+                 "an untrusted authority being refused. On the bed the anchor is generated per run "
+                 "inside the container, and both the record and the read-back are checked for "
+                 "certificate material: the anchor is named, never served"),
     ]),
     entry("mgmt.audit.rotate_now", "M", [
         req("2", ["sealed_segment_uuid", "new_segment_uuid"],
             "the operator seals the active segment and the record names both the segment sealed and "
             "the one now active",
+            assertions=["T-GW-2-8a", "T-GW-2-8b", "T-GW-2-8c", "T-GW-2-8d", "T-GW-2-8e",
+                        "T-GW-2-8f", "T-GW-2-8g"],
             unit=["TestRotateNowSealsAndOpens"],
-            note="no bed scenario drives this endpoint yet"),
+            twin="2-rotate",
+            note="the bed checks the seal is a boundary and not a label: the sealed uuid is the one "
+                 "the status named, the new one differs, the status moves to it, and the next record "
+                 "written lands in the new segment"),
     ]),
     entry("mgmt.opa.policy", "M", [later("2", ["policy_version", "digest"], "pin in stage 2")]),
     entry("mgmt.audit.replay", "M", [later("2", ["sink", "seq_from", "seq_to"], "re-submission of a range to a sink")]),

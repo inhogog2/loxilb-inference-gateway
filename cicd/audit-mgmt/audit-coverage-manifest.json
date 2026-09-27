@@ -3,7 +3,7 @@
   "generated_by": "cicd/audit-mgmt/gen-coverage-manifest.py",
   "stage_claimed": "1b",
   "event_types": 65,
-  "matrix_digest": "a089e6d25fd9f27e65d687e8b25ee709d6c78b081f7692b8602f63674cd15ee1",
+  "matrix_digest": "66a0187f296af20c8740f79763ef492879905e22525e7f0963969f153be5b3e3",
   "requirements_by_stage": {
     "1b": {
       "covered and tested": 4
@@ -12,9 +12,8 @@
       "uncovered": 9
     },
     "2": {
-      "covered but untested": 3,
-      "uncovered": 19,
-      "covered and tested": 1
+      "covered and tested": 4,
+      "uncovered": 19
     },
     "1a": {
       "covered and tested": 5,
@@ -170,17 +169,25 @@
             "floor_rejected"
           ],
           "behaviour": "the runtime-changeable policy is replaced through the gate like any other mutation: the result names the fields that changed and states whether the deployment profile's floor refused them, and a refused change leaves the policy untouched",
-          "scenario": "unit",
-          "assertion_ids": [],
+          "scenario": "audit-mgmt",
+          "assertion_ids": [
+            "T-GW-2-1a",
+            "T-GW-2-1b",
+            "T-GW-2-2a",
+            "T-GW-2-2b",
+            "T-GW-2-2c",
+            "T-GW-2-3a",
+            "T-GW-2-3b"
+          ],
           "unit_tests": [
             "TestAuditPolicyChangeIsAuditedWithWhatChanged",
             "TestAuditPolicyBelowTheFloorIsRefusedAndRecorded",
             "TestSetPolicyRefusesBelowTheFloorForEveryCaller",
             "TestLoweringRetentionDoesNotDeleteWhatIsAlreadySealed"
           ],
-          "red_twin_run_id": null,
-          "note": "a floor refusal answers 400 rather than 403 on purpose: the gate re-types every 403 into sec.mgmt.authz_denied, which would file a refused policy change as an authorization failure and lose the record that names the refused field. No bed scenario drives this endpoint yet, so the row is covered by the unit suite and has no red twin",
-          "state": "covered but untested"
+          "red_twin_run_id": "llbigw-2-twin-2-polfields-r1",
+          "note": "a floor refusal answers 400 rather than 403 on purpose: the gate re-types every 403 into sec.mgmt.authz_denied, which would file a refused policy change as an authorization failure and lose the record that names the refused field. The bed drives an accepted change and an unsatisfiable one; the FLOOR refusal itself stays unit-owned, because the floor comes from a deployment profile and this bed runs with the zero floor, which refuses nothing. The endpoint REPLACES the policy rather than patching it, so the scenario reads it and writes the whole thing back",
+          "state": "covered and tested"
         }
       ],
       "state": "uncovered"
@@ -219,14 +226,22 @@
             "new_segment_uuid"
           ],
           "behaviour": "the operator seals the active segment and the record names both the segment sealed and the one now active",
-          "scenario": "unit",
-          "assertion_ids": [],
+          "scenario": "audit-mgmt",
+          "assertion_ids": [
+            "T-GW-2-8a",
+            "T-GW-2-8b",
+            "T-GW-2-8c",
+            "T-GW-2-8d",
+            "T-GW-2-8e",
+            "T-GW-2-8f",
+            "T-GW-2-8g"
+          ],
           "unit_tests": [
             "TestRotateNowSealsAndOpens"
           ],
-          "red_twin_run_id": null,
-          "note": "no bed scenario drives this endpoint yet",
-          "state": "covered but untested"
+          "red_twin_run_id": "llbigw-2-twin-2-rotate-r1",
+          "note": "the bed checks the seal is a boundary and not a label: the sealed uuid is the one the status named, the new one differs, the status moves to it, and the next record written lands in the new segment",
+          "state": "covered and tested"
         }
       ],
       "state": "uncovered"
@@ -244,15 +259,30 @@
             "tls_ca_id"
           ],
           "behaviour": "a sink change is recorded with where the trail is being sent and what vouches for the receiver, both named and never their contents; a configuration whose receiver could not be verified is refused when it is configured, not when it first connects",
-          "scenario": "unit",
-          "assertion_ids": [],
+          "scenario": "audit-mgmt",
+          "assertion_ids": [
+            "T-GW-2-4a",
+            "T-GW-2-4b",
+            "T-GW-2-5a",
+            "T-GW-2-5b",
+            "T-GW-2-6a",
+            "T-GW-2-6b",
+            "T-GW-2-6c",
+            "T-GW-2-7a",
+            "T-GW-2-7b",
+            "T-GW-2-7c",
+            "T-GW-2-7d",
+            "T-GW-2-7e",
+            "T-GW-2-7f"
+          ],
           "unit_tests": [
             "TestAuditSinkChangeRecordsTheEndpointAndItsTrustAnchor",
-            "TestAuditSinkWithoutATrustAnchorIsRefused"
+            "TestAuditSinkWithoutATrustAnchorIsRefused",
+            "TestAuditSinkNumbersOutsideTheirRangeAreRefused"
           ],
-          "red_twin_run_id": null,
-          "note": "no bed scenario drives this endpoint yet; the transport itself is covered in pkg/audit/syslog, including a receiver signed by an untrusted authority being refused",
-          "state": "covered but untested"
+          "red_twin_run_id": "llbigw-2-twin-2-sinkrange-r1",
+          "note": "the transport itself is covered in pkg/audit/syslog, including a receiver signed by an untrusted authority being refused. On the bed the anchor is generated per run inside the container, and both the record and the read-back are checked for certificate material: the anchor is named, never served",
+          "state": "covered and tested"
         }
       ],
       "state": "uncovered"
