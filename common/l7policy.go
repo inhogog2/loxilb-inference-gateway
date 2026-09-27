@@ -76,6 +76,16 @@ const (
 	L7HdrMaxFilters = 8
 	L7HdrNameMax    = 63  // L7_HDR_NAME_MAX-1 (NUL)
 	L7HdrValueMax   = 255 // L7_HDR_VALUE_MAX-1 (NUL)
+
+	// L7MaxTrustedProxies MUST match the C L7_MAX_TRUSTED_RANGES
+	// (sockproxy_l7trust.h). Over-count is an error here and at the attach,
+	// never a truncation: a listener trusting fewer upstreams than was asked
+	// for attributes requests to the wrong address with nothing to say so.
+	//
+	// What a range may say is NOT checked here. The attach parses each one
+	// with the data plane's own parser, so the grammar of a range has a single
+	// definition and a refusal there becomes this resource's 400.
+	L7MaxTrustedProxies = 16
 )
 
 // l7ValidHdrOps gates the insertHeaders op enum (anything else => error,
@@ -113,6 +123,14 @@ func ValidateL7Policy(p *L7PolicyArg) error {
 	}
 	if len(p.Rules) == 0 {
 		return fmt.Errorf("l7policy: at least one rule is required")
+	}
+	if n := len(p.TrustedProxies); n > L7MaxTrustedProxies {
+		return fmt.Errorf("l7policy: %d trustedProxies exceeds the %d a listener holds", n, L7MaxTrustedProxies)
+	}
+	for i, r := range p.TrustedProxies {
+		if strings.TrimSpace(r) == "" {
+			return fmt.Errorf("l7policy: trustedProxies[%d] is empty", i)
+		}
 	}
 	for ri := range p.Rules {
 		rule := &p.Rules[ri]

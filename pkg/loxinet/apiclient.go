@@ -534,6 +534,29 @@ func (na *NetAPIStruct) NetL7PolicyRemove(vip string, port uint16, proto string)
 	return 0, nil
 }
 
+// NetL7TrustedProxiesApply - record which peers on the vip:port:proto sockproxy
+// rule are our own upstreams, so a forwarding chain arriving from one of them
+// may be believed. An empty list clears them and returns the listener to edge
+// behaviour. The ranges are parsed by the data plane's own parser, so a range
+// it will not read reaches the caller as an error here rather than as a
+// listener quietly trusting something else.
+func (na *NetAPIStruct) NetL7TrustedProxiesApply(vip string, port uint16, proto string, cidrs []string) (int, error) {
+	if na.BgpPeerMode {
+		return RuleErrBase, errors.New("running in bgp only mode")
+	}
+	ip := net.ParseIP(vip)
+	if ip == nil {
+		return RuleErrBase, fmt.Errorf("l7policy: invalid VIP %q", vip)
+	}
+	if mh.dpEbpf == nil {
+		return RuleErrBase, errors.New("l7policy: ebpf datapath not initialized")
+	}
+	if ret := DpProxyAttachL7TrustedRanges(ip, port, l7ProtoToNum(proto), cidrs); ret != 0 {
+		return RuleErrBase, fmt.Errorf("l7policy: trustedProxies rejected for %s:%d (a range is not an address range, or no such service)", vip, port)
+	}
+	return 0, nil
+}
+
 // NetSockMapResetAccel - close the connections of one rule that the kernel is
 // accelerating, and report how many were closed. See the interface comment in
 // common/common.go for why a configuration change alone cannot do this.

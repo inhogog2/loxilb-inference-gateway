@@ -3798,6 +3798,13 @@ func init() {
             "$ref": "#/definitions/L7Rule"
           },
           "type": "array"
+        },
+        "trustedProxies": {
+          "description": "Address ranges this listener's own upstreams occupy, each \"A.B.C.D\" or \"A.B.C.D/N\" IPv4. A request whose socket peer falls in one of them is attributed to the right-most address in its inbound forwarding chain that does not, and its chain is extended rather than replaced. Omitted or empty trusts nothing, which is edge behaviour: the peer is the origin. At most 16 ranges; more is refused rather than truncated, as is a range the dataplane parser will not read, and either refusal fails the whole request. An IPv6 peer never falls inside a range and so is never treated as an upstream. These ranges are dropped when the policy is deleted, since the dataplane acts on them only while a policy is attached.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -37593,6 +37600,13 @@ func init() {
           "type": "array",
           "items": {
             "$ref": "#/definitions/L7Rule"
+          }
+        },
+        "trustedProxies": {
+          "description": "Address ranges this listener's own upstreams occupy, each \"A.B.C.D\" or \"A.B.C.D/N\" IPv4. A request whose socket peer falls in one of them is attributed to the right-most address in its inbound forwarding chain that does not, and its chain is extended rather than replaced. Omitted or empty trusts nothing, which is edge behaviour: the peer is the origin. At most 16 ranges; more is refused rather than truncated, as is a range the dataplane parser will not read, and either refusal fails the whole request. An IPv6 peer never falls inside a range and so is never treated as an upstream. These ranges are dropped when the policy is deleted, since the dataplane acts on them only while a policy is attached.",
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         }
       }
