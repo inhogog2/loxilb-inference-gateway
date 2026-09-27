@@ -707,15 +707,25 @@ func autoPersistEligible(r *http.Request) bool {
 }
 
 // statusRecorder captures the response status so the middleware only kicks
-// on 2xx (a rejected mutation changed nothing worth persisting).
+// on 2xx (a rejected mutation changed nothing worth persisting). wrote
+// tells a status the handler sent from the default it was constructed
+// with, which is what a handler that panics before answering leaves.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+	wrote  bool
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
+	r.wrote = true
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Write sends the implicit 200 when no status was written first.
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	r.wrote = true
+	return r.ResponseWriter.Write(b)
 }
 
 func (r *statusRecorder) Flush() {

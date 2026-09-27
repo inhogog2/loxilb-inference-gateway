@@ -25,6 +25,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -34,6 +35,7 @@ import (
 	"github.com/loxilb-io/loxilb/api/models"
 	"github.com/loxilb-io/loxilb/pkg/audit"
 	"github.com/loxilb-io/loxilb/pkg/snapshot"
+	tk "github.com/loxilb-io/loxilib"
 )
 
 // The management audit gate is the two-phase middleware that makes a
@@ -581,12 +583,41 @@ func AuditGateMiddleware(next http.Handler) http.Handler {
 		}
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
-
-		if !wr.Append(auditResultRecord(wr, r, trail, route, eventID, rec.status, fields)) {
-			auditResultDrops.Add(1)
-		}
+		auditServe(rec, r, next, func(status int) {
+			if !wr.Append(auditResultRecord(wr, r, trail, route, eventID, status, fields)) {
+				auditResultDrops.Add(1)
+			}
+		})
 	})
+}
+
+// auditServe runs the handler and then records its result, however the
+// handler ends. One that panics was still admitted -- its intent is
+// already durable -- so its result is recorded before the panic goes on
+// to the server, which aborts the connection exactly as it would have
+// without the gate. The status is the one the handler had already sent,
+// else 500, the status of a server that failed to answer. runtime.Goexit,
+// which recover does not report, is recorded the same way and not turned
+// into a panic.
+func auditServe(rec *statusRecorder, r *http.Request, next http.Handler, record func(status int)) {
+	returned := false
+	defer func() {
+		if returned {
+			return
+		}
+		p := recover()
+		status := http.StatusInternalServerError
+		if rec.wrote {
+			status = rec.status
+		}
+		record(status)
+		if p != nil {
+			panic(p)
+		}
+	}()
+	next.ServeHTTP(rec, r)
+	returned = true
+	record(rec.status)
 }
 
 // auditListRead is the listing-read contract: the handler runs whatever
@@ -597,15 +628,16 @@ func auditListRead(w http.ResponseWriter, r *http.Request, next http.Handler, ro
 	trail := newAuditTrail(r)
 	r = r.WithContext(context.WithValue(r.Context(), auditTrailKey{}, trail))
 	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-	next.ServeHTTP(rec, r)
-	wr := AuditWriter()
-	if wr == nil {
-		auditResultDrops.Add(1)
-		return
-	}
-	if !wr.Append(auditResultRecord(wr, r, trail, route, audit.NewEventID(), rec.status, nil)) {
-		auditResultDrops.Add(1)
-	}
+	auditServe(rec, r, next, func(status int) {
+		wr := AuditWriter()
+		if wr == nil {
+			auditResultDrops.Add(1)
+			return
+		}
+		if !wr.Append(auditResultRecord(wr, r, trail, route, audit.NewEventID(), status, nil)) {
+			auditResultDrops.Add(1)
+		}
+	})
 }
 
 // auditResultRecord builds the result phase: the outcome the handler
@@ -633,11 +665,26 @@ func auditResultRecord(wr *audit.Writer, r *http.Request, trail *auditTrail, rou
 	}
 	trail.mu.Lock()
 	for _, fn := range trail.enrich {
-		fn(d)
+		auditEnrich(fn, d)
 	}
 	trail.mu.Unlock()
 	result.Mgmt = d
 	return result
+}
+
+// auditEnrich applies one detail callback a handler registered through
+// AuditDetail. It runs under the trail's lock, after the mutation and on
+// the path that writes the result, so a callback that panics must neither
+// leave the lock held -- the next reader of the trail would block for
+// good -- nor cost the record: it is logged and the record goes out with
+// the detail it already has.
+func auditEnrich(fn func(*audit.MgmtDetail), d *audit.MgmtDetail) {
+	defer func() {
+		if p := recover(); p != nil {
+			tk.LogIt(tk.LogError, "audit: a result detail callback panicked: %v\n%s", p, debug.Stack())
+		}
+	}()
+	fn(d)
 }
 
 // Restore phases a record can name. The intent carries the begin; the
