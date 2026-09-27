@@ -2133,7 +2133,7 @@
     "activation_precondition": "an eBPF datapath that reports a positive LLB_CT_MAP_ENTRIES: the gauge is registered lazily on the first positive value, so on a build with no datapath capacity the family is absent -- deliberately, because a fake 0 would make every utilization ratio divide by zero.",
     "writer_sources": [
      { "symbol": "SetConntrackMaxEntries", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 2284, "writes": "conntrackMaxGauge", "note": "registers the gauge inside a sync.Once and then sets it; values <= 0 return before either step" },
-     { "symbol": "DpEbpfInit", "kind": "func", "file": "pkg/loxinet/dpebpf_linux.go", "def_line": 628, "call_line": 708, "calls": "SetConntrackMaxEntries", "note": "Linux build only; pkg/loxinet/dpebpf_windows.go has its own DpEbpfInit that never calls this" },
+     { "symbol": "DpEbpfInit", "kind": "func", "file": "pkg/loxinet/dpebpf_linux.go", "def_line": 649, "call_line": 729, "calls": "SetConntrackMaxEntries", "note": "Linux build only; pkg/loxinet/dpebpf_windows.go has its own DpEbpfInit that never calls this" },
      { "symbol": "loxiNetInit", "kind": "func", "file": "pkg/loxinet/loxinet.go", "def_line": 358, "call_line": 561, "calls": "DpEbpfInit" },
      { "symbol": "Main", "kind": "func", "file": "pkg/loxinet/loxinet.go", "def_line": 1332, "call_line": 1333, "calls": "loxiNetInit", "entry_point": "main" }
     ],

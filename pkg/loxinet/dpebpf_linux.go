@@ -193,6 +193,27 @@ int proxy_attach_l7_policy(struct proxy_ent *key, const l7_route_t *routes,
                            int n_routes);
 int proxy_detach_l7_policy(struct proxy_ent *key);
 
+// ---------------------------------------------------------------------------
+// Trusted upstream ranges for a listener.
+//
+// This header is INCLUDED rather than mirrored, which is the opposite of the
+// l7_route_t treatment above. It is header-only and pulls in nothing but
+// <stdint.h>/<string.h>/<arpa/inet.h>, so there is no uthash to avoid and
+// therefore no reason to keep a hand-written copy of a layout in step. It also
+// brings l7_trust_parse_cidr with it, so the text form of a range is parsed and
+// masked by exactly one piece of code: a range that reaches the data plane is
+// the same range the data plane's own tests were written against, and two
+// spellings of one range cannot land as two different values.
+#include "../../loxilb-ebpf/common/sockproxy_l7trust.h"
+
+// Record which peers on this listener are our own upstreams. A separate entry
+// point from proxy_attach_l7_policy, and order-independent with it: attaching a
+// policy leaves recorded ranges alone, and n_ranges == 0 clears them. Defined
+// in loxilb-ebpf/common/sockproxy_l7policy.c.
+int proxy_attach_l7_trusted_ranges(struct proxy_ent *key,
+                                   const l7_trusted_range_t *ranges,
+                                   int n_ranges);
+
 int bpf_map_get_next_key(int fd, const void *key, void *next_key);
 int bpf_map_lookup_elem(int fd, const void *key, void *value);
 int llb_flush_ct_by_nat(void *k, uint32_t rid);
@@ -6289,6 +6310,73 @@ func DpProxyDetachL7Policy(serviceIP net.IP, port uint16, proto uint8) int {
 	if ret != 0 {
 		tk.LogIt(tk.LogDebug, "[DP] L7 policy detach returned %d (may not exist)\n", int(ret))
 	}
+	return 0
+}
+
+// DpProxyAttachL7TrustedRanges - tell the sockproxy rule fronting VIP:port:proto
+// which peers are our own upstreams, so that the forwarding chain those peers
+// send may be believed. cidrs are "A.B.C.D" or "A.B.C.D/N" in any order; an
+// empty list clears the ranges and returns the listener to edge behaviour,
+// where the origin is the socket peer and an inbound chain is replaced rather
+// than extended.
+//
+// Every range is parsed and masked by l7_trust_parse_cidr, the same function the
+// request path's containment test was built around - Go never forms one of these
+// values itself, so no second reading of what a range means can develop here.
+// A range the parser refuses fails the whole call and nothing is attached: a
+// listener is never left trusting some prefix of what was asked for, since the
+// ranges it holds are exactly what bounds who may rewrite a client's address.
+func DpProxyAttachL7TrustedRanges(serviceIP net.IP, port uint16, proto uint8, cidrs []string) int {
+	tk.LogIt(tk.LogInfo, "[DP] Attaching %d L7 trusted range(s) for %s:%d proto=%d\n",
+		len(cidrs), serviceIP.String(), port, proto)
+
+	var proxyKey C.struct_proxy_ent
+	if serviceIP.To4() != nil {
+		proxyKey.xip = C.uint(tk.IPtonl(serviceIP))
+	} else {
+		tk.LogIt(tk.LogError, "[DP] L7 trusted ranges: IPv6 not yet supported\n")
+		return -1
+	}
+	proxyKey.xport = C.ushort(tk.Htons(port))
+	proxyKey.protocol = C.uchar(proto)
+
+	n := len(cidrs)
+	if n > int(C.L7_MAX_TRUSTED_RANGES) {
+		tk.LogIt(tk.LogError, "[DP] L7 trusted ranges: %d exceeds the %d a listener holds\n",
+			n, int(C.L7_MAX_TRUSTED_RANGES))
+		return -1
+	}
+
+	// The C side deep-copies into the listener, so this array lives only for the
+	// call. n == 0 passes NULL, which is how the clear is spelled.
+	var cRanges *C.l7_trusted_range_t
+	if n > 0 {
+		cRanges = (*C.l7_trusted_range_t)(C.calloc(C.size_t(n), C.sizeof_l7_trusted_range_t))
+		if cRanges == nil {
+			tk.LogIt(tk.LogError, "[DP] L7 trusted ranges: calloc failed\n")
+			return -1
+		}
+		defer C.free(unsafe.Pointer(cRanges))
+
+		cArr := (*[1 << 16]C.l7_trusted_range_t)(unsafe.Pointer(cRanges))[:n:n]
+		for i, cidr := range cidrs {
+			cText := C.CString(cidr)
+			rc := C.l7_trust_parse_cidr(cText, &cArr[i])
+			C.free(unsafe.Pointer(cText))
+			if rc != 0 {
+				tk.LogIt(tk.LogError, "[DP] L7 trusted ranges: %q is not an address range\n", cidr)
+				return -1
+			}
+		}
+	}
+
+	if ret := C.proxy_attach_l7_trusted_ranges(&proxyKey, cRanges, C.int(n)); ret != 0 {
+		tk.LogIt(tk.LogError, "[DP] Failed to attach L7 trusted ranges for %s:%d - ret=%d (no such service)\n",
+			serviceIP.String(), port, int(ret))
+		return -1
+	}
+	tk.LogIt(tk.LogInfo, "[DP] %d L7 trusted range(s) attached for %s:%d\n",
+		n, serviceIP.String(), port)
 	return 0
 }
 
