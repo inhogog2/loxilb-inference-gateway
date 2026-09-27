@@ -168,6 +168,7 @@ func TestExcludedDomainsDerivation(t *testing.T) {
 		AreaAIRateLimit,
 		AreaAuthUsers,
 		AreaSNI,
+		AreaAudit,
 		AreaCluster,
 		AreaGPUMode,
 		AreaInterface,
