@@ -25,8 +25,9 @@
 // what is being refused. The REST middleware consults Active() to refuse
 // mutating configuration calls; the read-back handler combines Status()
 // with live counters it fetches elsewhere. Refusal of new *inference*
-// requests happens on the data path (sockproxy) and is NOT implemented
-// by entering this state -- the read-back reports that truthfully.
+// requests happens on the data path (sockproxy): it installs a drain
+// (SetDataPathDrain) that Enter turns on and Leave turns off, and the
+// read-back reports whether such a drain is installed.
 package maintenance
 
 import (
@@ -57,6 +58,11 @@ type Status struct {
 	// episode is in effect. A Leave response carries the ID of the
 	// episode it ended (empty when Leave was a no-op).
 	OperationID string
+	// RefusingInference reports that the data path refuses new inference
+	// requests for this episode: true while in maintenance once the data
+	// path has installed its drain (SetDataPathDrain); false for a
+	// management plane with no data path behind it.
+	RefusingInference bool
 	// EnteredAt is when the current episode began (zero when active).
 	EnteredAt time.Time
 	// DrainTimeout is the operator-declared drain window for the current
@@ -84,6 +90,32 @@ type Manager struct {
 	now          func() time.Time
 }
 
+// DataPathDrain is what the data path does when maintenance is entered
+// (on = true) or left (on = false): refuse new inference requests, end the
+// ones waiting for capacity, and let the executing ones finish. Installed
+// once by the data path at start; nil means no data path is attached and
+// maintenance refuses configuration writes only.
+type DataPathDrain func(on bool)
+
+var (
+	drainMu   sync.Mutex
+	drainHook DataPathDrain
+)
+
+// SetDataPathDrain installs the data path's drain. Entering maintenance
+// after this call drains the data path; leaving it restores admission.
+func SetDataPathDrain(fn DataPathDrain) {
+	drainMu.Lock()
+	drainHook = fn
+	drainMu.Unlock()
+}
+
+func dataPathDrain() DataPathDrain {
+	drainMu.Lock()
+	defer drainMu.Unlock()
+	return drainHook
+}
+
 // NewManager returns a Manager in the active state. A nil clock means
 // time.Now; tests inject a fake clock.
 func NewManager(clock func() time.Time) *Manager {
@@ -100,15 +132,25 @@ func NewManager(clock func() time.Time) *Manager {
 // resulting status.
 func (m *Manager) Enter(drainTimeout time.Duration) Status {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	entered := false
 	if m.state != StateMaintenance {
 		m.opSeq++
 		m.enteredAt = m.now()
 		m.drainTimeout = drainTimeout
 		m.opID = fmt.Sprintf("maint-%d-%d", m.enteredAt.Unix(), m.opSeq)
 		m.state = StateMaintenance
+		entered = true
 	}
-	return m.statusLocked()
+	st := m.statusLocked()
+	m.mu.Unlock()
+	// The data path is drained outside the lock: it walks its pools and
+	// ends waiting requests, and a status read must not wait for that.
+	if entered {
+		if fn := dataPathDrain(); fn != nil {
+			fn(true)
+		}
+	}
+	return st
 }
 
 // Leave returns the manager to the active state. Idempotent: leaving
@@ -117,7 +159,6 @@ func (m *Manager) Enter(drainTimeout time.Duration) Status {
 // no-op Leave carries an empty OperationID.
 func (m *Manager) Leave() Status {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	endedID := ""
 	if m.state == StateMaintenance {
 		endedID = m.opID
@@ -128,6 +169,12 @@ func (m *Manager) Leave() Status {
 	}
 	st := m.statusLocked()
 	st.OperationID = endedID
+	m.mu.Unlock()
+	if endedID != "" {
+		if fn := dataPathDrain(); fn != nil {
+			fn(false)
+		}
+	}
 	return st
 }
 
@@ -156,6 +203,7 @@ func (m *Manager) statusLocked() Status {
 	if m.state == StateMaintenance {
 		st.Elapsed = m.now().Sub(m.enteredAt)
 		st.DeadlineExceeded = m.drainTimeout > 0 && st.Elapsed > m.drainTimeout
+		st.RefusingInference = dataPathDrain() != nil
 	}
 	return st
 }

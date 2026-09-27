@@ -69,6 +69,9 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if err := pres.validateConnectionLimit(); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
+	if err := pres.validateFcQueue(params.Attr.ServiceArguments); err != nil {
+		return errorResponseWithCode(http.StatusBadRequest, err.Error())
+	}
 
 	var lbRules cmn.LbRuleMod
 
@@ -158,6 +161,9 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	lbRules.Serv.PDCacheAwareMode = params.Attr.ServiceArguments.PdCacheAwareMode
 	lbRules.Serv.PDSessionTTLSec = uint32(params.Attr.ServiceArguments.PdSessionTTLSec)
 	pres.applyPDThresholds(&lbRules.Serv, params.Attr.ServiceArguments)
+	// The capacity admission queue of the service's pool, with presence so a
+	// replace can reset a depth to the process default with an explicit 0.
+	pres.applyFcQueue(&lbRules.Serv, params.Attr.ServiceArguments)
 
 	// Per-endpoint circuit breaker. Resolved HERE, in exactly one place, so
 	// create and update behave identically. An omitted field on a P/D rule
@@ -655,6 +661,29 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	}
 	if lb.Serv.PDBalanceAbsThreshold != 0 {
 		tmpSvc.PdBalanceAbsThreshold = int32(lb.Serv.PDBalanceAbsThreshold)
+	}
+
+	// Capacity admission queue: the declared fields as posted (zero stays
+	// absent) and the gate's resolved state on the pool, read-only.
+	if lb.Serv.FcMaxQueueDepth != 0 {
+		tmpSvc.FcMaxQueueDepth = int32(lb.Serv.FcMaxQueueDepth)
+	}
+	if lb.Serv.FcMaxQueueWaitMs != 0 {
+		tmpSvc.FcMaxQueueWaitMs = int32(lb.Serv.FcMaxQueueWaitMs)
+	}
+	if eff := lb.Serv.FcEffective; eff != nil {
+		tmpSvc.FcEffective = &models.LoadbalanceEntryServiceArgumentsFcEffective{
+			Mode:                eff.Mode,
+			MaxOutstanding:      int32(eff.MaxOutstanding),
+			EpMaxInflight:       int32(eff.EpMaxInflight),
+			PrefillMaxInflight:  int32(eff.PrefillMaxInflight),
+			DecodeMaxInflight:   int32(eff.DecodeMaxInflight),
+			QueueDepth:          int32(eff.QueueDepth),
+			QueueWaitMs:         int32(eff.QueueWaitMs),
+			Inflight:            int32(eff.Inflight),
+			Queued:              int32(eff.Queued),
+			QueueMemoryBoundMib: int64(eff.QueueMemoryBoundMib),
+		}
 	}
 
 	// Per-endpoint circuit breaker — report the RESOLVED value, so a P/D

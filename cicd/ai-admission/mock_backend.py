@@ -17,6 +17,8 @@ Endpoints:
   GET  /__peak/<nonce>        the most requests with that nonce executing at
                               once, across every port, plus the per-port peaks
   GET  /__inflight            requests executing right now
+  GET  /__order/<nonce>       the X-Request-Id of every request carrying that
+                              nonce, in the order they arrived
   GET  /__release/<nonce>     let every held request with that nonce answer
   GET  /__release_all         let every held request answer
 
@@ -57,6 +59,7 @@ INFLIGHT = 0         # executing right now, every port
 INFLIGHT_PORT = {}   # port -> executing right now
 PEAK = {}            # nonce -> most executing at once, every port
 PEAK_PORT = {}       # nonce -> {port: most executing at once on that port}
+ORDER = {}           # nonce -> request ids in arrival order
 RELEASED = set()     # nonces whose holds were released
 RELEASE_ALL = 0      # generation: bumped by /__release_all
 COND = threading.Condition(LOCK)
@@ -99,6 +102,8 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             if nonce:
                 RECEIPTS[nonce] = RECEIPTS.get(nonce, 0) + 1
+                ORDER.setdefault(nonce, []).append(
+                    self.headers.get("X-Request-Id", ""))
             INFLIGHT += 1
             INFLIGHT_PORT[self.port] = INFLIGHT_PORT.get(self.port, 0) + 1
             if nonce:
@@ -166,6 +171,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"nonce": n, "peak": PEAK.get(n, 0),
                                  "ports": {str(k): v for k, v in
                                            PEAK_PORT.get(n, {}).items()}})
+            return
+        if path.startswith("/__order/"):
+            n = path[len("/__order/"):]
+            with LOCK:
+                self._send_json({"nonce": n, "order": list(ORDER.get(n, []))})
             return
         if path == "/__inflight":
             with LOCK:

@@ -170,6 +170,78 @@ func (p *loadbalancerRequestPresence) validateKVNumericArguments(
 	return nil
 }
 
+// fcQueueDepthMax is the largest capacity queue depth a rule may declare.
+// The data plane bounds the queue ring by it; what actually scales with the
+// depth is the parked client connections, about a megabyte each.
+const fcQueueDepthMax = 65536
+
+// validateFcQueue checks the two capacity-queue fields of a whole rule: the
+// field checks below, then the pair rule on the values as posted. A PATCH
+// body carries only the keys it changes, so the PATCH path runs the field
+// checks on the body and the pair rule on the merged rule instead.
+func (p *loadbalancerRequestPresence) validateFcQueue(
+	src *models.LoadbalanceEntryServiceArguments,
+) error {
+	if err := p.validateFcQueueFields(src); err != nil {
+		return err
+	}
+	if src == nil {
+		return nil
+	}
+	return validateFcQueuePair(uint32(src.FcMaxQueueDepth), uint32(src.FcMaxQueueWaitMs))
+}
+
+// validateFcQueueFields checks each capacity-queue field on its own: JSON
+// null is never a sentinel (the binding decodes it to zero, so the raw
+// presence map refuses it), the depth has a ceiling and the wait an hour.
+func (p *loadbalancerRequestPresence) validateFcQueueFields(
+	src *models.LoadbalanceEntryServiceArguments,
+) error {
+	for _, key := range []string{"fc_max_queue_depth", "fc_max_queue_wait_ms"} {
+		if p.svcIsNull(key) {
+			return fmt.Errorf("%s must not be null", key)
+		}
+	}
+	if src == nil {
+		return nil
+	}
+	if src.FcMaxQueueDepth < 0 || src.FcMaxQueueDepth > fcQueueDepthMax {
+		return fmt.Errorf("fc_max_queue_depth must be within 0..%d", fcQueueDepthMax)
+	}
+	if src.FcMaxQueueWaitMs < 0 || src.FcMaxQueueWaitMs > 3600000 {
+		return fmt.Errorf("fc_max_queue_wait_ms must be within 0..3600000")
+	}
+	return nil
+}
+
+// validateFcQueuePair holds the one rule that spans both fields: a depth
+// without a wait window would park a request forever, so the window is
+// required with it. Checked on the values that will be stored.
+func validateFcQueuePair(depth, waitMs uint32) error {
+	if depth > 0 && waitMs == 0 {
+		return fmt.Errorf("fc_max_queue_wait_ms must be greater than 0 when fc_max_queue_depth is set")
+	}
+	return nil
+}
+
+// applyFcQueue copies the two capacity-queue declarations with their
+// presence bits, the way applyPDThresholds does: a nonzero typed value is
+// an update for callers without raw context, an explicit zero needs wire
+// presence, and for PATCH the destination already holds the stored values.
+func (p *loadbalancerRequestPresence) applyFcQueue(
+	dst *cmn.LbServiceArg,
+	src *models.LoadbalanceEntryServiceArguments,
+) {
+	if p.svcPresent("fc_max_queue_depth") || src.FcMaxQueueDepth != 0 {
+		dst.FcMaxQueueDepth = uint32(src.FcMaxQueueDepth)
+		dst.FcMaxQueueDepthPresent = p.svcPresent("fc_max_queue_depth")
+	}
+	if p.svcPresent("fc_max_queue_wait_ms") || src.FcMaxQueueWaitMs != 0 {
+		dst.FcMaxQueueWaitMs = uint32(src.FcMaxQueueWaitMs)
+		dst.FcMaxQueueWaitMsPresent = p.svcPresent("fc_max_queue_wait_ms")
+	}
+}
+
 // validateConnectionLimit rejects an explicit null. The generated model
 // declares connectionLimit as uint32, so a negative or oversized number never
 // reaches the handler; null is the one value the binding decodes to the zero

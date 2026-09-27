@@ -29,19 +29,24 @@ import (
 )
 
 // stubMaintenanceHook is the standard embed-and-override stub for the wide
-// hook interface: only the in-flight counter the maintenance surface reads
-// is implemented; any other call panics loudly on the nil embed.
+// hook interface: only the two in-flight figures the maintenance surface
+// reads are implemented; any other call panics loudly on the nil embed.
 type stubMaintenanceHook struct {
 	cmn.NetHookInterface
-	inFlight int64
+	inFlight         int64
+	inFlightRequests int64
 }
 
-func (s *stubMaintenanceHook) NetAiInFlightStreamsGet() int64 { return s.inFlight }
+func (s *stubMaintenanceHook) NetAiInFlightStreamsGet() int64  { return s.inFlight }
+func (s *stubMaintenanceHook) NetAiInFlightRequestsGet() int64 { return s.inFlightRequests }
 
+// withMaintenanceFixture installs the stub with inFlight streams and a
+// distinct request count, so the read-back proves each figure comes from
+// its own hook.
 func withMaintenanceFixture(t *testing.T, inFlight int64) {
 	t.Helper()
 	prev := ApiHooks
-	ApiHooks = &stubMaintenanceHook{inFlight: inFlight}
+	ApiHooks = &stubMaintenanceHook{inFlight: inFlight, inFlightRequests: inFlight * 3}
 	t.Cleanup(func() {
 		ApiHooks = prev
 		maintenance.Leave() // never leak operator state into another test
@@ -87,12 +92,16 @@ func TestMaintenanceEnterReportsTruthfully(t *testing.T) {
 	if !*st.RefusingNewConfig {
 		t.Fatal("refusing_new_config = false while in maintenance")
 	}
-	// The management-plane state must never claim a data-path drain.
+	// No data path installed its drain here, so the read-back must not
+	// claim one.
 	if *st.RefusingNewInference {
-		t.Fatal("refusing_new_inference = true; data-path refusal is not implemented by this state")
+		t.Fatal("refusing_new_inference = true with no data-path drain installed")
 	}
 	if *st.InFlightStreams != 7 {
 		t.Fatalf("in_flight_streams = %d, want the hook's 7", *st.InFlightStreams)
+	}
+	if st.InFlightRequests != 21 {
+		t.Fatalf("in_flight_requests = %d, want the hook's 21", st.InFlightRequests)
 	}
 	if st.DrainTimeoutSeconds != 300 {
 		t.Fatalf("drain_timeout_seconds = %d, want 300", st.DrainTimeoutSeconds)

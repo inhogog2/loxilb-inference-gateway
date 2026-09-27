@@ -165,8 +165,9 @@ int proxy_get_qos_stats(proxy_qos_svc_stat_t *out, int max) {
  * second) and must be updated in the same commit as the other two.
  */
 #define PROXY_FC_ROLES 3
-#define PROXY_FC_REASONS 5
+#define PROXY_FC_REASONS 12
 #define PROXY_FC_POOL_LEN 64
+#define PROXY_FC_QWAIT_BUCKETS 8
 
 typedef struct proxy_fc_svc_stat {
     uint32_t xip;
@@ -179,6 +180,13 @@ typedef struct proxy_fc_svc_stat {
     uint32_t ep_inflight[PROXY_FC_ROLES];
     uint64_t decisions[PROXY_FC_REASONS];
     char     pool[PROXY_FC_POOL_LEN];
+    uint32_t queued;
+    uint32_t max_queue_depth;
+    uint32_t max_queue_wait_ms;
+    uint32_t pad;
+    uint64_t qwait_bucket[PROXY_FC_QWAIT_BUCKETS];
+    uint64_t qwait_sum_ms;
+    uint64_t qwait_count;
 } proxy_fc_svc_stat_t;
 
 __attribute__((weak))

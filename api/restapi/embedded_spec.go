@@ -4605,6 +4605,80 @@ func init() {
               "type": "string",
               "x-nullable": true
             },
+            "fc_effective": {
+              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB).",
+              "properties": {
+                "decode_max_inflight": {
+                  "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "ep_max_inflight": {
+                  "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "inflight": {
+                  "description": "Inference requests executing on the pool right now.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "max_outstanding": {
+                  "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "mode": {
+                  "description": "The gate mode in force on the pool (off, observe or enforce).",
+                  "type": "string"
+                },
+                "prefill_max_inflight": {
+                  "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "queue_depth": {
+                  "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "queue_memory_bound_mib": {
+                  "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "queue_wait_ms": {
+                  "description": "The wait window in force for a queued request, in milliseconds.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "queued": {
+                  "description": "Inference requests waiting for a unit right now.",
+                  "format": "int32",
+                  "type": "integer"
+                }
+              },
+              "readOnly": true,
+              "type": "object"
+            },
+            "fc_max_queue_depth": {
+              "default": 0,
+              "description": "Capacity admission queue of the service's model pool: how many inference requests may wait for a capacity unit instead of being refused with 429 when the pool's ceilings are reached. 0 or omitted leaves the process default (LLB_FC_MAX_QUEUE_DEPTH) in force; the ceiling is 65536. HTTP/1.1 requests wait; HTTP/2 streams are refused on their stream and never wait. Every waiting request parks its client connection, which holds about one MiB of receive buffer, so a depth is a memory bound as much as a queue bound: depth x 1 MiB when the queue is full (65536 is about 64 GiB). The gateway logs a WARNING at rule apply when that bound exceeds half of the node's memory and still applies it; bound the connections themselves with connectionLimit or the process valve LLB_PD_MAX_TOTAL_INFLIGHT. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default); PATCH does not reach FullProxy rules. Explicit JSON null is rejected. The resolved values are read back in fc_effective.",
+              "format": "int32",
+              "maximum": 65536,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
+            "fc_max_queue_wait_ms": {
+              "default": 0,
+              "description": "The longest a request may wait in the capacity admission queue, in milliseconds, before it is answered 504 admission_queue_timeout with the wait it spent (queued_ms). Required, greater than 0, whenever fc_max_queue_depth is set; 0 or omitted with no depth leaves the process default (LLB_FC_MAX_QUEUE_WAIT_MS) in force. Replace and null semantics as fc_max_queue_depth.",
+              "format": "int32",
+              "maximum": 3600000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
             "host": {
               "description": "Host routing key for the proxy pool, distinct from path_prefix. It participates in the LB rule key, but L7 policy attachment is currently keyed only by listener VIP/port/protocol. The server accepts at most 255 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 256-byte data-plane field; UI validation must count encoded bytes rather than characters. Together with path_prefix and model_name, the conditional host, host|path, host||model or host|path|model key must not exceed 511 UTF-8 bytes including separators.",
               "type": "string",
@@ -5245,6 +5319,11 @@ func init() {
           "format": "date-time",
           "type": "string"
         },
+        "in_flight_requests": {
+          "description": "Inference requests the capacity admission gate counts as executing across every gated model pool, streaming and non-streaming alike; 0 when no pool is gated. Read from the data plane at each GET.",
+          "format": "int64",
+          "type": "integer"
+        },
         "in_flight_streams": {
           "description": "AI inference streaming sessions (SSE) currently open through the gateway. Non-streaming requests have no in-flight counter and are deliberately not estimated.",
           "format": "int64",
@@ -5259,7 +5338,7 @@ func init() {
           "type": "boolean"
         },
         "refusing_new_inference": {
-          "description": "New data-path inference requests are being refused. Gateway-wide data-path refusal is not implemented by this management-plane state - this field reports false so no caller mistakes maintenance for a traffic drain; per-service and per-endpoint drain remain the data path's own mechanisms.",
+          "description": "New data-path inference requests are being refused. True while maintenance is in effect on a gateway whose data path is attached; the capacity admission gate then answers new inference requests 503 gateway_draining with Retry-After, ends the requests waiting in its queues with 503 admission_drained, and lets executing requests finish. False on a management plane with no data path behind it, so no caller mistakes maintenance for a traffic drain that is not happening.",
           "type": "boolean"
         },
         "state": {
@@ -38304,6 +38383,80 @@ func init() {
               "type": "string",
               "x-nullable": true
             },
+            "fc_effective": {
+              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB).",
+              "type": "object",
+              "properties": {
+                "decode_max_inflight": {
+                  "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "ep_max_inflight": {
+                  "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "inflight": {
+                  "description": "Inference requests executing on the pool right now.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "max_outstanding": {
+                  "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "mode": {
+                  "description": "The gate mode in force on the pool (off, observe or enforce).",
+                  "type": "string"
+                },
+                "prefill_max_inflight": {
+                  "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "queue_depth": {
+                  "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "queue_memory_bound_mib": {
+                  "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "queue_wait_ms": {
+                  "description": "The wait window in force for a queued request, in milliseconds.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "queued": {
+                  "description": "Inference requests waiting for a unit right now.",
+                  "type": "integer",
+                  "format": "int32"
+                }
+              },
+              "readOnly": true
+            },
+            "fc_max_queue_depth": {
+              "description": "Capacity admission queue of the service's model pool: how many inference requests may wait for a capacity unit instead of being refused with 429 when the pool's ceilings are reached. 0 or omitted leaves the process default (LLB_FC_MAX_QUEUE_DEPTH) in force; the ceiling is 65536. HTTP/1.1 requests wait; HTTP/2 streams are refused on their stream and never wait. Every waiting request parks its client connection, which holds about one MiB of receive buffer, so a depth is a memory bound as much as a queue bound: depth x 1 MiB when the queue is full (65536 is about 64 GiB). The gateway logs a WARNING at rule apply when that bound exceeds half of the node's memory and still applies it; bound the connections themselves with connectionLimit or the process valve LLB_PD_MAX_TOTAL_INFLIGHT. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default); PATCH does not reach FullProxy rules. Explicit JSON null is rejected. The resolved values are read back in fc_effective.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 65536,
+              "minimum": 0,
+              "x-nullable": false
+            },
+            "fc_max_queue_wait_ms": {
+              "description": "The longest a request may wait in the capacity admission queue, in milliseconds, before it is answered 504 admission_queue_timeout with the wait it spent (queued_ms). Required, greater than 0, whenever fc_max_queue_depth is set; 0 or omitted with no depth leaves the process default (LLB_FC_MAX_QUEUE_WAIT_MS) in force. Replace and null semantics as fc_max_queue_depth.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 3600000,
+              "minimum": 0,
+              "x-nullable": false
+            },
             "host": {
               "description": "Host routing key for the proxy pool, distinct from path_prefix. It participates in the LB rule key, but L7 policy attachment is currently keyed only by listener VIP/port/protocol. The server accepts at most 255 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 256-byte data-plane field; UI validation must count encoded bytes rather than characters. Together with path_prefix and model_name, the conditional host, host|path, host||model or host|path|model key must not exceed 511 UTF-8 bytes including separators.",
               "type": "string",
@@ -38995,6 +39148,80 @@ func init() {
           "type": "string",
           "x-nullable": true
         },
+        "fc_effective": {
+          "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB).",
+          "type": "object",
+          "properties": {
+            "decode_max_inflight": {
+              "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "ep_max_inflight": {
+              "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "inflight": {
+              "description": "Inference requests executing on the pool right now.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "max_outstanding": {
+              "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "mode": {
+              "description": "The gate mode in force on the pool (off, observe or enforce).",
+              "type": "string"
+            },
+            "prefill_max_inflight": {
+              "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "queue_depth": {
+              "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "queue_memory_bound_mib": {
+              "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
+              "type": "integer",
+              "format": "int64"
+            },
+            "queue_wait_ms": {
+              "description": "The wait window in force for a queued request, in milliseconds.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "queued": {
+              "description": "Inference requests waiting for a unit right now.",
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "readOnly": true
+        },
+        "fc_max_queue_depth": {
+          "description": "Capacity admission queue of the service's model pool: how many inference requests may wait for a capacity unit instead of being refused with 429 when the pool's ceilings are reached. 0 or omitted leaves the process default (LLB_FC_MAX_QUEUE_DEPTH) in force; the ceiling is 65536. HTTP/1.1 requests wait; HTTP/2 streams are refused on their stream and never wait. Every waiting request parks its client connection, which holds about one MiB of receive buffer, so a depth is a memory bound as much as a queue bound: depth x 1 MiB when the queue is full (65536 is about 64 GiB). The gateway logs a WARNING at rule apply when that bound exceeds half of the node's memory and still applies it; bound the connections themselves with connectionLimit or the process valve LLB_PD_MAX_TOTAL_INFLIGHT. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default); PATCH does not reach FullProxy rules. Explicit JSON null is rejected. The resolved values are read back in fc_effective.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 65536,
+          "minimum": 0,
+          "x-nullable": false
+        },
+        "fc_max_queue_wait_ms": {
+          "description": "The longest a request may wait in the capacity admission queue, in milliseconds, before it is answered 504 admission_queue_timeout with the wait it spent (queued_ms). Required, greater than 0, whenever fc_max_queue_depth is set; 0 or omitted with no depth leaves the process default (LLB_FC_MAX_QUEUE_WAIT_MS) in force. Replace and null semantics as fc_max_queue_depth.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 3600000,
+          "minimum": 0,
+          "x-nullable": false
+        },
         "host": {
           "description": "Host routing key for the proxy pool, distinct from path_prefix. It participates in the LB rule key, but L7 policy attachment is currently keyed only by listener VIP/port/protocol. The server accepts at most 255 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 256-byte data-plane field; UI validation must count encoded bytes rather than characters. Together with path_prefix and model_name, the conditional host, host|path, host||model or host|path|model key must not exceed 511 UTF-8 bytes including separators.",
           "type": "string",
@@ -39444,6 +39671,62 @@ func init() {
         }
       }
     },
+    "LoadbalanceEntryServiceArgumentsFcEffective": {
+      "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB).",
+      "type": "object",
+      "properties": {
+        "decode_max_inflight": {
+          "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "ep_max_inflight": {
+          "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "inflight": {
+          "description": "Inference requests executing on the pool right now.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "max_outstanding": {
+          "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "mode": {
+          "description": "The gate mode in force on the pool (off, observe or enforce).",
+          "type": "string"
+        },
+        "prefill_max_inflight": {
+          "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "queue_depth": {
+          "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "queue_memory_bound_mib": {
+          "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
+          "type": "integer",
+          "format": "int64"
+        },
+        "queue_wait_ms": {
+          "description": "The wait window in force for a queued request, in milliseconds.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "queued": {
+          "description": "Inference requests waiting for a unit right now.",
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "readOnly": true
+    },
     "LoadbalanceEntryServiceArgumentsMtlsBackend": {
       "description": "Requested backend verification and client-certificate settings for FullProxy re-encryption (mode=4, security=2) with mTLS support. Implementation warning: REST stores and returns this object, but the active create encoder does not wire its verification flag or legacy path/inline material into the backend TLS configuration. The separate configuration bridge has no caller in the reviewed path. These fields therefore do not establish backend authentication, even after a successful POST. Backend cert-ID fields have separate C consumers; their existence does not repair this missing verification wiring. Requested-security fail-closed behavior and material precedence remain pending policy decisions, not supported fallback guarantees.",
       "type": "object",
@@ -39709,6 +39992,11 @@ func init() {
           "type": "string",
           "format": "date-time"
         },
+        "in_flight_requests": {
+          "description": "Inference requests the capacity admission gate counts as executing across every gated model pool, streaming and non-streaming alike; 0 when no pool is gated. Read from the data plane at each GET.",
+          "type": "integer",
+          "format": "int64"
+        },
         "in_flight_streams": {
           "description": "AI inference streaming sessions (SSE) currently open through the gateway. Non-streaming requests have no in-flight counter and are deliberately not estimated.",
           "type": "integer",
@@ -39723,7 +40011,7 @@ func init() {
           "type": "boolean"
         },
         "refusing_new_inference": {
-          "description": "New data-path inference requests are being refused. Gateway-wide data-path refusal is not implemented by this management-plane state - this field reports false so no caller mistakes maintenance for a traffic drain; per-service and per-endpoint drain remain the data path's own mechanisms.",
+          "description": "New data-path inference requests are being refused. True while maintenance is in effect on a gateway whose data path is attached; the capacity admission gate then answers new inference requests 503 gateway_draining with Retry-After, ends the requests waiting in its queues with 503 admission_drained, and lets executing requests finish. False on a management plane with no data path behind it, so no caller mistakes maintenance for a traffic drain that is not happening.",
           "type": "boolean"
         },
         "state": {

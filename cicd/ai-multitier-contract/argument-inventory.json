@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "bdcaa5385a8e776d7e5f910481b7c0bf25fdd52ad9bf3b107d732aa75bdc1556"
+    "swagger.yml": "c6e7022636c4ae49a3d87e44d294d8a577a36dfff9fa667366e8e341d7938bdc"
   },
   "fields": [
     {
@@ -501,6 +501,130 @@
         "description": "External service IP used in the LB rule key. The domain validates the address. Create callers must provide it; shared PATCH-compatible schema optionality does not make an omitted create address usable.",
         "type": "string",
         "x-nullable": true
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective",
+      "required": false,
+      "contract": {
+        "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB).",
+        "readOnly": true,
+        "type": "object"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/decode_max_inflight",
+      "required": false,
+      "contract": {
+        "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/ep_max_inflight",
+      "required": false,
+      "contract": {
+        "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/inflight",
+      "required": false,
+      "contract": {
+        "description": "Inference requests executing on the pool right now.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/max_outstanding",
+      "required": false,
+      "contract": {
+        "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/mode",
+      "required": false,
+      "contract": {
+        "description": "The gate mode in force on the pool (off, observe or enforce).",
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/prefill_max_inflight",
+      "required": false,
+      "contract": {
+        "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/queue_depth",
+      "required": false,
+      "contract": {
+        "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/queue_memory_bound_mib",
+      "required": false,
+      "contract": {
+        "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
+        "format": "int64",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/queue_wait_ms",
+      "required": false,
+      "contract": {
+        "description": "The wait window in force for a queued request, in milliseconds.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/queued",
+      "required": false,
+      "contract": {
+        "description": "Inference requests waiting for a unit right now.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_max_queue_depth",
+      "required": false,
+      "contract": {
+        "default": 0,
+        "description": "Capacity admission queue of the service's model pool: how many inference requests may wait for a capacity unit instead of being refused with 429 when the pool's ceilings are reached. 0 or omitted leaves the process default (LLB_FC_MAX_QUEUE_DEPTH) in force; the ceiling is 65536. HTTP/1.1 requests wait; HTTP/2 streams are refused on their stream and never wait. Every waiting request parks its client connection, which holds about one MiB of receive buffer, so a depth is a memory bound as much as a queue bound: depth x 1 MiB when the queue is full (65536 is about 64 GiB). The gateway logs a WARNING at rule apply when that bound exceeds half of the node's memory and still applies it; bound the connections themselves with connectionLimit or the process valve LLB_PD_MAX_TOTAL_INFLIGHT. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default); PATCH does not reach FullProxy rules. Explicit JSON null is rejected. The resolved values are read back in fc_effective.",
+        "format": "int32",
+        "maximum": 65536,
+        "minimum": 0,
+        "type": "integer",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_max_queue_wait_ms",
+      "required": false,
+      "contract": {
+        "default": 0,
+        "description": "The longest a request may wait in the capacity admission queue, in milliseconds, before it is answered 504 admission_queue_timeout with the wait it spent (queued_ms). Required, greater than 0, whenever fc_max_queue_depth is set; 0 or omitted with no depth leaves the process default (LLB_FC_MAX_QUEUE_WAIT_MS) in force. Replace and null semantics as fc_max_queue_depth.",
+        "format": "int32",
+        "maximum": 3600000,
+        "minimum": 0,
+        "type": "integer",
+        "x-nullable": false
       }
     },
     {

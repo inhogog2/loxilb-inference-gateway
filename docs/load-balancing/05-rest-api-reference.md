@@ -103,6 +103,14 @@ snake_case (`pd_disagg_mode`, `sse_mode`, `model_name`, …) vs camelCase (`kvEx
 | `pd_cache_threshold` | int | cache-match threshold `0`–`100`; lower = more aggressive cache routing. Create omission/`0` uses effective `20`; on replace/PATCH omission retains, explicit `0` resets to `20`, and explicit `null` is rejected. |
 | `pd_balance_abs_threshold` | int | if max−min active connections exceeds this, bypass cache affinity. Create omission/`0` uses effective `3`; on replace/PATCH omission retains, explicit `0` resets to `3`, and explicit `null` is rejected. |
 
+**Capacity admission queue** (AI-gateway services; the gate itself is described in [doc 23](23-ai-admission-flow-control.md))
+
+| Field | Type | Notes |
+|---|---|---|
+| `fc_max_queue_depth` | int32 | requests that may wait for a capacity unit instead of being refused `429` when the pool's ceilings are reached; `0`/omitted leaves the process default (`LLB_FC_MAX_QUEUE_DEPTH`) in force; ceiling `65536`. HTTP/1.1 requests wait, HTTP/2 streams never do. Each waiter parks its client connection (about 1 MiB of receive buffer), so the depth is a memory bound: depth × 1 MiB; a WARNING is logged at apply when that exceeds half of the node's memory. Runtime-changeable by a replace `POST` (omission retains, explicit `0` resets to the default); `PATCH` does not reach FullProxy rules; explicit `null` is rejected. |
+| `fc_max_queue_wait_ms` | int32 | the longest a request may wait, in milliseconds, before `504 admission_queue_timeout` (body carries `queued_ms`); required, greater than `0`, whenever `fc_max_queue_depth` is set; ceiling `3600000`; `0`/omitted with no depth leaves `LLB_FC_MAX_QUEUE_WAIT_MS` in force. Replace and `null` semantics as the depth. |
+| `fc_effective` | object (read-only) | on `GET` for AI-gateway services: the gate's resolved state on the rule's model pool as the data plane holds it: `mode` (`off`/`observe`/`enforce`), `max_outstanding`, `ep_max_inflight`, `prefill_max_inflight`, `decode_max_inflight`, `queue_depth`, `queue_wait_ms`, live `inflight` and `queued`, and `queue_memory_bound_mib` (`queue_depth` × 1 MiB). Ignored on input. |
+
 > **Always set `monitor: true` on a P/D rule.** Endpoint health is what
 > demotes a dead role member out of P/D selection: without monitoring (and
 > without a circuit-breaker policy) a prefill endpoint that dies keeps being

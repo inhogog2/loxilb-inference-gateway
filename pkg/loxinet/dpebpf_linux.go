@@ -1818,6 +1818,11 @@ func DpLBRuleMod(w *LBDpWorkQ) int {
 	dat.pd_cache_threshold = C.uint8_t(cacheThreshold)
 	dat.pd_balance_abs_threshold = C.uint8_t(balanceThreshold)
 
+	// Capacity admission queue of the rule's pool, as declared (0 = the
+	// process default from the environment applies in the data plane).
+	dat.fc_max_queue_depth = C.uint32_t(w.FcMaxQueueDepth)
+	dat.fc_max_queue_wait_ms = C.uint32_t(w.FcMaxQueueWaitMs)
+
 	// Per-endpoint circuit breaker (opt-in per rule)
 	if w.CbEnable {
 		dat.cb_enable = 1

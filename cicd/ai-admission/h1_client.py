@@ -12,6 +12,13 @@
       the SAME socket. Reports both statuses and the second's headers, so
       the caller can see whether the kept backend leg was re-gated.
 
+  shed_keepalive <host> <port> --signal <file> [--nonce-prefix P] [--timeout S]
+      ONE connection whose FIRST request is sent against a full pool: the
+      refusal must arrive with the connection kept open. Then a wait until
+      <file> exists (the caller frees the pool), then a SECOND request on the
+      SAME socket, which must be admitted. Reports both statuses and whether
+      the refusal closed the connection.
+
 Every mode prints one JSON line per request and a final "summary" line.
 """
 import argparse
@@ -125,9 +132,40 @@ def mode_kept(args):
     return 0
 
 
+def mode_shed_keepalive(args):
+    host = "%s:%d" % (args.host, args.port)
+    s = socket.create_connection((args.host, args.port), timeout=30)
+    n1 = args.nonce_prefix + "-first"
+    s.sendall(request(host, n1, args.model))
+    st1, h1, b1, closed1 = read_response(s, 30)
+    print(json.dumps({"nonce": n1, "status": st1, "closed": closed1,
+                      "connection": h1.get("connection", ""),
+                      "headers": {k: v for k, v in h1.items()
+                                  if k.startswith("x-loxilb-admission-") or k == "retry-after"}}),
+          flush=True)
+    if closed1:
+        print(json.dumps({"summary": "shed_keepalive", "first": st1, "first_closed": True,
+                          "second": "NOT_SENT", "reused": False}), flush=True)
+        return 1
+    deadline = time.monotonic() + args.timeout
+    while not os.path.exists(args.signal):
+        if time.monotonic() > deadline:
+            print(json.dumps({"summary": "shed_keepalive", "first": st1, "first_closed": False,
+                              "second": "NO_SIGNAL", "reused": False}), flush=True)
+            return 1
+        time.sleep(0.2)
+    n2 = args.nonce_prefix + "-second"
+    s.sendall(request(host, n2, args.model))
+    st2, h2, b2, closed2 = read_response(s, 30)
+    print(json.dumps({"nonce": n2, "status": st2, "closed": closed2}), flush=True)
+    print(json.dumps({"summary": "shed_keepalive", "first": st1, "first_closed": False,
+                      "second": st2, "reused": True}), flush=True)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["disconnect", "kept"])
+    ap.add_argument("mode", choices=["disconnect", "kept", "shed_keepalive"])
     ap.add_argument("host")
     ap.add_argument("port", type=int)
     ap.add_argument("--n", type=int, default=4)
@@ -139,6 +177,8 @@ def main():
     args = ap.parse_args()
     if args.mode == "disconnect":
         return mode_disconnect(args)
+    if args.mode == "shed_keepalive":
+        return mode_shed_keepalive(args)
     return mode_kept(args)
 
 

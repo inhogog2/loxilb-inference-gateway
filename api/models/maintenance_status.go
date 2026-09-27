@@ -39,6 +39,9 @@ type MaintenanceStatus struct {
 	// Format: date-time
 	EnteredAt strfmt.DateTime `json:"entered_at,omitempty"`
 
+	// Inference requests the capacity admission gate counts as executing across every gated model pool, streaming and non-streaming alike; 0 when no pool is gated. Read from the data plane at each GET.
+	InFlightRequests int64 `json:"in_flight_requests,omitempty"`
+
 	// AI inference streaming sessions (SSE) currently open through the gateway. Non-streaming requests have no in-flight counter and are deliberately not estimated.
 	// Required: true
 	InFlightStreams *int64 `json:"in_flight_streams"`
@@ -50,7 +53,7 @@ type MaintenanceStatus struct {
 	// Required: true
 	RefusingNewConfig *bool `json:"refusing_new_config"`
 
-	// New data-path inference requests are being refused. Gateway-wide data-path refusal is not implemented by this management-plane state - this field reports false so no caller mistakes maintenance for a traffic drain; per-service and per-endpoint drain remain the data path's own mechanisms.
+	// New data-path inference requests are being refused. True while maintenance is in effect on a gateway whose data path is attached; the capacity admission gate then answers new inference requests 503 gateway_draining with Retry-After, ends the requests waiting in its queues with 503 admission_drained, and lets executing requests finish. False on a management plane with no data path behind it, so no caller mistakes maintenance for a traffic drain that is not happening.
 	// Required: true
 	RefusingNewInference *bool `json:"refusing_new_inference"`
 

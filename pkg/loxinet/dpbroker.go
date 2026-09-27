@@ -385,6 +385,8 @@ type LBDpWorkQ struct {
 	PDSessionTTLSec             uint32                  // Session stickiness TTL in seconds
 	PDCacheThreshold            uint8                   // Cache match threshold (0-100)
 	PDBalanceAbsThreshold       uint8                   // Load imbalance threshold
+	FcMaxQueueDepth             uint32                  // capacity admission queue depth (0 = process default)
+	FcMaxQueueWaitMs            uint32                  // capacity admission queue wait window in ms
 	CbEnable                    bool                    // per-endpoint circuit breaker for full-proxy rules
 	KvExactMode                 uint8                   // KV-cache exact routing: 0=off, 1=zmq
 	KvBlockSize                 uint32                  // Token block size for KV hash computation

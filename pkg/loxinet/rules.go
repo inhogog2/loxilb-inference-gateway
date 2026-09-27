@@ -632,6 +632,8 @@ type ruleEnt struct {
 	pdSessionTTLSec             uint32                  // Session stickiness TTL in seconds (0 = no expiry)
 	pdCacheThreshold            uint8                   // Cache match threshold (0-100, default 20)
 	pdBalanceAbsThreshold       uint8                   // Load imbalance threshold (default 3)
+	fcMaxQueueDepth             uint32                  // capacity admission queue depth (0 = process default)
+	fcMaxQueueWaitMs            uint32                  // capacity admission queue wait window in ms
 	cbEnable                    bool                    // per-endpoint circuit breaker for full-proxy rules
 	kvExactMode                 uint8                   // KV-cache exact routing: 0=off, 1=zmq P/D, 2=nats (reserved), 3=zmq single-role
 	kvBlockSize                 uint32                  // Token block size for KV hash computation
@@ -1228,6 +1230,18 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.PDSessionTTLSec = data.pdSessionTTLSec
 		ret.Serv.PDCacheThreshold = data.pdCacheThreshold
 		ret.Serv.PDBalanceAbsThreshold = data.pdBalanceAbsThreshold
+		ret.Serv.FcMaxQueueDepth = data.fcMaxQueueDepth
+		ret.Serv.FcMaxQueueWaitMs = data.fcMaxQueueWaitMs
+		// The capacity gate's resolved state on the pool, for an AI-gateway
+		// service: what the data plane holds, not what was posted. A read
+		// model beside the configuration, never replayed into a POST.
+		if data.aiGwMode() && mh.dpEbpf != nil {
+			if eff, ok := mh.dpEbpf.DpFcStateGet(data.tuples.l3Dst.addr.IP,
+				data.tuples.l4Dst.valMin, uint8(data.tuples.l4Prot.val),
+				data.tuples.path, data.tuples.pathPrefix, data.tuples.modelName); ok {
+				ret.Serv.FcEffective = &eff
+			}
+		}
 		ret.Serv.CbEnable = data.cbEnable
 		ret.Serv.KvExactMode = data.kvExactMode // KV-cache exact routing
 		ret.Serv.KvBlockSize = data.kvBlockSize
@@ -4202,6 +4216,10 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.pdCacheThreshold, serv.PDCacheThreshold, serv.PDCacheThresholdPresent)
 		nextPDBalanceAbsThreshold := pdThresholdOnReplace(
 			eRule.pdBalanceAbsThreshold, serv.PDBalanceAbsThreshold, serv.PDBalanceAbsThresholdPresent)
+		nextFcMaxQueueDepth := u32OnReplace(
+			eRule.fcMaxQueueDepth, serv.FcMaxQueueDepth, serv.FcMaxQueueDepthPresent)
+		nextFcMaxQueueWaitMs := u32OnReplace(
+			eRule.fcMaxQueueWaitMs, serv.FcMaxQueueWaitMs, serv.FcMaxQueueWaitMsPresent)
 
 		if !reflect.DeepEqual(eRule.secIP, nSecIP) {
 			return RuleUnknownServiceErr, errors.New("secIP modify error")
@@ -4239,6 +4257,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.pdSessionTTLSec != serv.PDSessionTTLSec ||
 			eRule.pdCacheThreshold != nextPDCacheThreshold ||
 			eRule.pdBalanceAbsThreshold != nextPDBalanceAbsThreshold ||
+			// the capacity queue fields change at runtime: a replace re-pushes them
+			eRule.fcMaxQueueDepth != nextFcMaxQueueDepth ||
+			eRule.fcMaxQueueWaitMs != nextFcMaxQueueWaitMs ||
 			eRule.cbEnable != serv.CbEnable ||
 			eRule.kvExactMode != serv.KvExactMode ||
 			eRule.kvBlockSize != serv.KvBlockSize ||
@@ -4435,6 +4456,8 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		eRule.pdSessionTTLSec = serv.PDSessionTTLSec
 		eRule.pdCacheThreshold = nextPDCacheThreshold
 		eRule.pdBalanceAbsThreshold = nextPDBalanceAbsThreshold
+		eRule.fcMaxQueueDepth = nextFcMaxQueueDepth
+		eRule.fcMaxQueueWaitMs = nextFcMaxQueueWaitMs
 		eRule.cbEnable = serv.CbEnable
 		eRule.kvExactMode = serv.KvExactMode
 		eRule.kvBlockSize = serv.KvBlockSize
@@ -4749,6 +4772,10 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	r.pdSessionTTLSec = serv.PDSessionTTLSec
 	r.pdCacheThreshold = serv.PDCacheThreshold
 	r.pdBalanceAbsThreshold = serv.PDBalanceAbsThreshold
+
+	// Store the capacity admission queue declaration
+	r.fcMaxQueueDepth = serv.FcMaxQueueDepth
+	r.fcMaxQueueWaitMs = serv.FcMaxQueueWaitMs
 
 	// Store the per-endpoint circuit-breaker enable
 	r.cbEnable = serv.CbEnable
@@ -6588,6 +6615,8 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.PDSessionTTLSec = r.pdSessionTTLSec
 	nWork.PDCacheThreshold = r.pdCacheThreshold
 	nWork.PDBalanceAbsThreshold = r.pdBalanceAbsThreshold
+	nWork.FcMaxQueueDepth = r.fcMaxQueueDepth
+	nWork.FcMaxQueueWaitMs = r.fcMaxQueueWaitMs
 	nWork.CbEnable = r.cbEnable
 	nWork.KvExactMode = r.kvExactMode // KV-cache exact routing
 	nWork.KvBlockSize = r.kvBlockSize

@@ -82,6 +82,15 @@ func (*NetAPIStruct) NetAiInFlightStreamsGet() int64 {
 	return AiInFlightStreamsTotal()
 }
 
+// NetAiInFlightRequestsGet - inference requests executing under the capacity
+// admission gate, summed over every gated model pool.
+func (*NetAPIStruct) NetAiInFlightRequestsGet() int64 {
+	if mh.dpEbpf == nil {
+		return 0
+	}
+	return int64(mh.dpEbpf.DpFcInflightTotal())
+}
+
 // NetPortAdd - Add a port in loxinet
 func (na *NetAPIStruct) NetPortAdd(pm *cmn.PortMod) (int, error) {
 	if na.BgpPeerMode {
