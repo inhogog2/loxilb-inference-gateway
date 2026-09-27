@@ -139,6 +139,24 @@ func TestAuditStatusWithoutWriter(t *testing.T) {
 	}
 }
 
+// The unavailable answer is sent as available:false, not as a body without
+// the key: a reader cannot tell an absent field from a gateway that never
+// had it, so the one fact the call exists to report has to be on the wire.
+func TestAuditStatusWithoutWriterSendsAvailableFalse(t *testing.T) {
+	SetAuditWriter(nil)
+	body, err := json.Marshal(auditStatusModel(nil, time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := m["available"]; !ok || v != false {
+		t.Fatalf("available not sent as false: %s", body)
+	}
+}
+
 // A retention policy is projected from the age bound; the writer under
 // the gate carries the policy it was given.
 func TestAuditStatusProjectsRetention(t *testing.T) {
