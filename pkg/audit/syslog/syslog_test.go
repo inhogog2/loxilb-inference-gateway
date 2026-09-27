@@ -324,6 +324,42 @@ func TestNewRefusesAFrameCapItCannotRepresent(t *testing.T) {
 	}
 }
 
+// A caller may make Now return a fixed instant — the field exists for it.
+// Once real time passes that instant, a socket deadline derived from it is
+// in the past and every write fails as a timeout with nothing attempted.
+// The record timestamp and the transport deadline are therefore separate
+// clocks, and this pins it with an instant long past.
+func TestAFixedClockInThePastDoesNotBreakWrites(t *testing.T) {
+	caCert, caKey, caPEM := genCAFull(t)
+	dir := t.TempDir()
+	trusted := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(trusted, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, addr, lines := tlsReceiver(t, serverCert(t, caCert, caKey))
+	defer srv.Close()
+
+	past := func() time.Time { return time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC) }
+	s, err := New(Config{Address: addr, CABundlePath: trusted, ServerName: "localhost", Now: past})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Submit([]byte(sampleRecord)); err != nil {
+		t.Fatalf("a fixed clock must not make the write time out: %v", err)
+	}
+	select {
+	case got := <-lines:
+		// The record's own ts still wins for the message timestamp, so the
+		// fixed clock is visibly not what stamps a record that has one.
+		if !strings.Contains(got, "2026-09-27T01:02:03.004Z") {
+			t.Errorf("the record's own timestamp did not reach the receiver: %q", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the receiver saw no frame")
+	}
+}
+
 // capPlus is a preallocation hint, so the only thing it must never do is
 // hand make() a wrapped, negative capacity.
 func TestCapPlusGivesUpTheHintRatherThanWrapping(t *testing.T) {

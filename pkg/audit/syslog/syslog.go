@@ -107,7 +107,10 @@ type Config struct {
 	DialTimeout  time.Duration
 	WriteTimeout time.Duration
 
-	// Now and Logf are injection points for tests.
+	// Now and Logf are injection points for tests. Now supplies the
+	// message timestamp for a record that carries no usable ts of its own
+	// and nothing else — in particular no socket deadline is derived from
+	// it, so a fixed instant here cannot turn a write into a timeout.
 	Now  func() time.Time
 	Logf func(format string, args ...any)
 }
@@ -254,7 +257,13 @@ func (s *Sink) Submit(line []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := conn.SetWriteDeadline(s.cfg.Now().Add(s.cfg.WriteTimeout)); err != nil {
+	// The deadline comes from the real clock, never from cfg.Now: that one
+	// stamps a record when the record carries no timestamp of its own, and
+	// a caller is free to make it return a fixed instant. A socket deadline
+	// built from a fixed instant is in the past as soon as real time passes
+	// it, and then every write fails as a timeout without one byte being
+	// attempted.
+	if err := conn.SetWriteDeadline(time.Now().Add(s.cfg.WriteTimeout)); err != nil {
 		s.dropLocked(err)
 		return err
 	}
