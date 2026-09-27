@@ -98,6 +98,13 @@ func (w *Writer) prunePass() {
 		if w.isHeld(uuid) {
 			continue
 		}
+		// A segment sealed before the retention target was lowered keeps
+		// the terms it was written under. A reserve breach overrides
+		// that: a trail that cannot write is worse than one that pruned
+		// early, and `breached` is the only reason that survives here.
+		if !breached && w.grandfatherHolds(uuid, now) {
+			continue
+		}
 		// Announce first, durably; only then delete.
 		if err := w.writeSystemDurable(sysRecord("sys.segment.prune", "audit_segment:"+uuid, &SysDetail{
 			AgeDays: int(age.Hours() / 24), Bytes: s.Bytes, Hold: false,
@@ -109,6 +116,7 @@ func (w *Writer) prunePass() {
 			w.logf("audit: prune %s: %v", s.Name, err)
 			continue
 		}
+		w.forgetGrandfather(uuid)
 		total -= s.Bytes
 		pruned++
 		w.stats.pruned.Add(1)

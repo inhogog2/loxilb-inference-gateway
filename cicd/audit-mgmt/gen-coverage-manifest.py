@@ -73,6 +73,17 @@ RED_TWINS = {
     "1b-complete": "llbigw-2-twin-1b-complete-r1",
     "1b-deny": "llbigw-2-twin-1b-deny-r1",
     "1b-gap": "llbigw-2-twin-1b-gap-r1",
+    "2-exact": "llbigw-2-twin-2-exact-r1",
+    # Stage 2, run against cicd/audit-mgmt. One mutation each, so a row claims
+    # the twin that actually exercises its own assertions.
+    # sinkrange: the sink accepts the two numeric knobs without checking their
+    #   range, as it did before they were bounded.
+    # polfields: a policy change no longer names the fields it changed.
+    # rotate: sealing reports the active segment as both sealed and opened,
+    #   making the seal a label rather than a boundary.
+    "2-sinkrange": "llbigw-2-twin-2-sinkrange-r1",
+    "2-polfields": "llbigw-2-twin-2-polfields-r1",
+    "2-rotate": "llbigw-2-twin-2-rotate-r1",
 }
 
 
@@ -189,9 +200,55 @@ MATRIX = [
         req("1a", ["active_from", "active_to"], "pair carrying both values",
             assertions=["TM-3"], unit=["TestAuditEmitMaintenanceTransition"]),
     ]),
-    entry("mgmt.audit.policy", "M", [later("2", ["changed_fields", "floor_rejected"], "T-GW-2 policy endpoint")]),
-    entry("mgmt.audit.sink", "M", [later("2", ["changed_fields", "endpoint", "tls_ca_id"], "T-GW-2 sink endpoint")]),
-    entry("mgmt.audit.rotate_now", "M", [later("2", ["sealed_segment_uuid", "new_segment_uuid"], "operator seal-and-rotate")]),
+    entry("mgmt.audit.policy", "M", [
+        req("2", ["changed_fields", "floor_rejected"],
+            "the runtime-changeable policy is replaced through the gate like any other mutation: the "
+            "result names the fields that changed and states whether the deployment profile's floor "
+            "refused them, and a refused change leaves the policy untouched",
+            assertions=["T-GW-2-1a", "T-GW-2-1b", "T-GW-2-2a", "T-GW-2-2b", "T-GW-2-2c",
+                        "T-GW-2-3a", "T-GW-2-3b"],
+            unit=["TestAuditPolicyChangeIsAuditedWithWhatChanged",
+                  "TestAuditPolicyBelowTheFloorIsRefusedAndRecorded",
+                  "TestSetPolicyRefusesBelowTheFloorForEveryCaller",
+                  "TestLoweringRetentionDoesNotDeleteWhatIsAlreadySealed"],
+            twin="2-polfields",
+            note="a floor refusal answers 400 rather than 403 on purpose: the gate re-types every 403 "
+                 "into sec.mgmt.authz_denied, which would file a refused policy change as an "
+                 "authorization failure and lose the record that names the refused field. The bed "
+                 "drives an accepted change and an unsatisfiable one; the FLOOR refusal itself stays "
+                 "unit-owned, because the floor comes from a deployment profile and this bed runs "
+                 "with the zero floor, which refuses nothing. The endpoint REPLACES the policy rather "
+                 "than patching it, so the scenario reads it and writes the whole thing back"),
+    ]),
+    entry("mgmt.audit.sink", "M", [
+        req("2", ["changed_fields", "endpoint", "tls_ca_id"],
+            "a sink change is recorded with where the trail is being sent and what vouches for the "
+            "receiver, both named and never their contents; a configuration whose receiver could not "
+            "be verified is refused when it is configured, not when it first connects",
+            assertions=["T-GW-2-4a", "T-GW-2-4b", "T-GW-2-5a", "T-GW-2-5b", "T-GW-2-6a",
+                        "T-GW-2-6b", "T-GW-2-6c", "T-GW-2-7a", "T-GW-2-7b", "T-GW-2-7c",
+                        "T-GW-2-7d", "T-GW-2-7e", "T-GW-2-7f"],
+            unit=["TestAuditSinkChangeRecordsTheEndpointAndItsTrustAnchor",
+                  "TestAuditSinkWithoutATrustAnchorIsRefused",
+                  "TestAuditSinkNumbersOutsideTheirRangeAreRefused"],
+            twin="2-sinkrange",
+            note="the transport itself is covered in pkg/audit/syslog, including a receiver signed by "
+                 "an untrusted authority being refused. On the bed the anchor is generated per run "
+                 "inside the container, and both the record and the read-back are checked for "
+                 "certificate material: the anchor is named, never served"),
+    ]),
+    entry("mgmt.audit.rotate_now", "M", [
+        req("2", ["sealed_segment_uuid", "new_segment_uuid"],
+            "the operator seals the active segment and the record names both the segment sealed and "
+            "the one now active",
+            assertions=["T-GW-2-8a", "T-GW-2-8b", "T-GW-2-8c", "T-GW-2-8d", "T-GW-2-8e",
+                        "T-GW-2-8f", "T-GW-2-8g"],
+            unit=["TestRotateNowSealsAndOpens"],
+            twin="2-rotate",
+            note="the bed checks the seal is a boundary and not a label: the sealed uuid is the one "
+                 "the status named, the new one differs, the status moves to it, and the next record "
+                 "written lands in the new segment"),
+    ]),
     entry("mgmt.opa.policy", "M", [later("2", ["policy_version", "digest"], "pin in stage 2")]),
     entry("mgmt.audit.replay", "M", [later("2", ["sink", "seq_from", "seq_to"], "re-submission of a range to a sink")]),
     entry("mgmt.audit.hold", "M", [later("3", ["hold_id", "segments", "reason_code"], "legal hold applied")]),
@@ -321,11 +378,24 @@ MATRIX = [
             scenario="audit-data",
             twin="1b-gap",
             unit=["TestProducerDropAccounting"],
-            note="the EXACT range is unit-only by arithmetic, not by omission: nothing is dropped until "
-                 "the 8192-deep queue is full, and a producer refused at all has been refused far more "
-                 "times than its 256-entry ring can name, so every gap a bed can produce is "
-                 "conservative. TestProducerDropAccounting drives a four-deep queue, where the whole "
-                 "drop set fits the ring"),
+            note="this row is the per-producer claim: that a gap names whose records were lost, on "
+                 "which stream, over which range. Whether the range is honest about being exact is a "
+                 "separate claim and is scoped to the row below"),
+        req("2", ["ring_overflows", "dropped_total"],
+            "the exactness claim is falsifiable: a gap may call its range exact only when the "
+            "producer's drop ring discarded nothing since that producer's previous gap, and the "
+            "ranges plus the entries the ring admits it discarded reconcile to the producer's own "
+            "counted total",
+            assertions=["T18-1e", "T18-1g", "T18-2b", "T18-2e"],
+            scenario="audit-data",
+            twin="2-exact",
+            unit=["TestProducerDropAccounting", "TestProducerGapRingOverflow"],
+            note="before these two fields the trail carried nothing a reader could hold the claim "
+                 "against: exact was checked only against a width the emitter derived from the range "
+                 "it was asserting, so a gap that always claimed exactness went undetected. Both "
+                 "inexact branch is asserted on the bed, where a producer refused at all has been "
+                 "refused far more often than its ring can name; the exact branch is opportunistic "
+                 "there and varies run to run, so it is driven in the unit suite instead"),
     ]),
     entry("sys.intent.orphaned", "A", [
         req("1a", ["intent_event_id", "config_generation_at_boot"],

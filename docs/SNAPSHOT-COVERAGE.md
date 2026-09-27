@@ -113,6 +113,12 @@ operator:
 - **Runtime toggles** — metrics exporter, log level, trace and L4-trace
   enablement and sampling, GPU mode, cluster/HA instance state (driven by
   the HA manager).
+- **Audit sealing/retention policy and remote sink** — the audit root
+  directory, the mandatory-audit mode and the instance identity are
+  startup-only; the policy and the sink are changeable while running and
+  held in memory, so a restart returns the policy to its startup values
+  and leaves no sink configured. An operator who pointed the trail at a
+  receiver must point it there again.
 
 ### Lifecycle operations
 

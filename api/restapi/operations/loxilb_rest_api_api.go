@@ -162,6 +162,12 @@ func NewLoxilbRestAPIAPI(spec *loads.Document) *LoxilbRestAPIAPI {
 		DeleteSniCertificatesHandler: DeleteSniCertificatesHandlerFunc(func(params DeleteSniCertificatesParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation DeleteSniCertificates has not yet been implemented")
 		}),
+		AuditGetAuditPolicyHandler: audit.GetAuditPolicyHandlerFunc(func(params audit.GetAuditPolicyParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation audit.GetAuditPolicy has not yet been implemented")
+		}),
+		AuditGetAuditSinkHandler: audit.GetAuditSinkHandlerFunc(func(params audit.GetAuditSinkParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation audit.GetAuditSink has not yet been implemented")
+		}),
 		AuditGetAuditStatusHandler: audit.GetAuditStatusHandlerFunc(func(params audit.GetAuditStatusParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation audit.GetAuditStatus has not yet been implemented")
 		}),
@@ -398,6 +404,15 @@ func NewLoxilbRestAPIAPI(spec *loads.Document) *LoxilbRestAPIAPI {
 		}),
 		GetVersionHandler: GetVersionHandlerFunc(func(params GetVersionParams) middleware.Responder {
 			return middleware.NotImplemented("operation GetVersion has not yet been implemented")
+		}),
+		AuditPostAuditPolicyHandler: audit.PostAuditPolicyHandlerFunc(func(params audit.PostAuditPolicyParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation audit.PostAuditPolicy has not yet been implemented")
+		}),
+		AuditPostAuditRotateHandler: audit.PostAuditRotateHandlerFunc(func(params audit.PostAuditRotateParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation audit.PostAuditRotate has not yet been implemented")
+		}),
+		AuditPostAuditSinkHandler: audit.PostAuditSinkHandlerFunc(func(params audit.PostAuditSinkParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation audit.PostAuditSink has not yet been implemented")
 		}),
 		AuthPostAuthLoginHandler: auth.PostAuthLoginHandlerFunc(func(params auth.PostAuthLoginParams) middleware.Responder {
 			return middleware.NotImplemented("operation auth.PostAuthLogin has not yet been implemented")
@@ -864,6 +879,10 @@ type LoxilbRestAPIAPI struct {
 	DeleteConfigVlanVlanIDMemberIfNameTaggedTaggedHandler DeleteConfigVlanVlanIDMemberIfNameTaggedTaggedHandler
 	// DeleteSniCertificatesHandler sets the operation handler for the delete sni certificates operation
 	DeleteSniCertificatesHandler DeleteSniCertificatesHandler
+	// AuditGetAuditPolicyHandler sets the operation handler for the get audit policy operation
+	AuditGetAuditPolicyHandler audit.GetAuditPolicyHandler
+	// AuditGetAuditSinkHandler sets the operation handler for the get audit sink operation
+	AuditGetAuditSinkHandler audit.GetAuditSinkHandler
 	// AuditGetAuditStatusHandler sets the operation handler for the get audit status operation
 	AuditGetAuditStatusHandler audit.GetAuditStatusHandler
 	// UsersGetAuthUsersHandler sets the operation handler for the get auth users operation
@@ -1022,6 +1041,12 @@ type LoxilbRestAPIAPI struct {
 	GetStatusReadyHandler GetStatusReadyHandler
 	// GetVersionHandler sets the operation handler for the get version operation
 	GetVersionHandler GetVersionHandler
+	// AuditPostAuditPolicyHandler sets the operation handler for the post audit policy operation
+	AuditPostAuditPolicyHandler audit.PostAuditPolicyHandler
+	// AuditPostAuditRotateHandler sets the operation handler for the post audit rotate operation
+	AuditPostAuditRotateHandler audit.PostAuditRotateHandler
+	// AuditPostAuditSinkHandler sets the operation handler for the post audit sink operation
+	AuditPostAuditSinkHandler audit.PostAuditSinkHandler
 	// AuthPostAuthLoginHandler sets the operation handler for the post auth login operation
 	AuthPostAuthLoginHandler auth.PostAuthLoginHandler
 	// AuthPostAuthLogoutHandler sets the operation handler for the post auth logout operation
@@ -1441,6 +1466,12 @@ func (o *LoxilbRestAPIAPI) Validate() error {
 	if o.DeleteSniCertificatesHandler == nil {
 		unregistered = append(unregistered, "DeleteSniCertificatesHandler")
 	}
+	if o.AuditGetAuditPolicyHandler == nil {
+		unregistered = append(unregistered, "audit.GetAuditPolicyHandler")
+	}
+	if o.AuditGetAuditSinkHandler == nil {
+		unregistered = append(unregistered, "audit.GetAuditSinkHandler")
+	}
 	if o.AuditGetAuditStatusHandler == nil {
 		unregistered = append(unregistered, "audit.GetAuditStatusHandler")
 	}
@@ -1677,6 +1708,15 @@ func (o *LoxilbRestAPIAPI) Validate() error {
 	}
 	if o.GetVersionHandler == nil {
 		unregistered = append(unregistered, "GetVersionHandler")
+	}
+	if o.AuditPostAuditPolicyHandler == nil {
+		unregistered = append(unregistered, "audit.PostAuditPolicyHandler")
+	}
+	if o.AuditPostAuditRotateHandler == nil {
+		unregistered = append(unregistered, "audit.PostAuditRotateHandler")
+	}
+	if o.AuditPostAuditSinkHandler == nil {
+		unregistered = append(unregistered, "audit.PostAuditSinkHandler")
 	}
 	if o.AuthPostAuthLoginHandler == nil {
 		unregistered = append(unregistered, "auth.PostAuthLoginHandler")
@@ -2264,6 +2304,14 @@ func (o *LoxilbRestAPIAPI) initHandlerCache() {
 	if o.handlers["GET"] == nil {
 		o.handlers["GET"] = make(map[string]http.Handler)
 	}
+	o.handlers["GET"]["/audit/policy"] = audit.NewGetAuditPolicy(o.context, o.AuditGetAuditPolicyHandler)
+	if o.handlers["GET"] == nil {
+		o.handlers["GET"] = make(map[string]http.Handler)
+	}
+	o.handlers["GET"]["/audit/sink"] = audit.NewGetAuditSink(o.context, o.AuditGetAuditSinkHandler)
+	if o.handlers["GET"] == nil {
+		o.handlers["GET"] = make(map[string]http.Handler)
+	}
 	o.handlers["GET"]["/audit/status"] = audit.NewGetAuditStatus(o.context, o.AuditGetAuditStatusHandler)
 	if o.handlers["GET"] == nil {
 		o.handlers["GET"] = make(map[string]http.Handler)
@@ -2577,6 +2625,18 @@ func (o *LoxilbRestAPIAPI) initHandlerCache() {
 		o.handlers["GET"] = make(map[string]http.Handler)
 	}
 	o.handlers["GET"]["/version"] = NewGetVersion(o.context, o.GetVersionHandler)
+	if o.handlers["POST"] == nil {
+		o.handlers["POST"] = make(map[string]http.Handler)
+	}
+	o.handlers["POST"]["/audit/policy"] = audit.NewPostAuditPolicy(o.context, o.AuditPostAuditPolicyHandler)
+	if o.handlers["POST"] == nil {
+		o.handlers["POST"] = make(map[string]http.Handler)
+	}
+	o.handlers["POST"]["/audit/rotate"] = audit.NewPostAuditRotate(o.context, o.AuditPostAuditRotateHandler)
+	if o.handlers["POST"] == nil {
+		o.handlers["POST"] = make(map[string]http.Handler)
+	}
+	o.handlers["POST"]["/audit/sink"] = audit.NewPostAuditSink(o.context, o.AuditPostAuditSinkHandler)
 	if o.handlers["POST"] == nil {
 		o.handlers["POST"] = make(map[string]http.Handler)
 	}

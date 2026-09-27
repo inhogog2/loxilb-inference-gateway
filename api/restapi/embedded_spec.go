@@ -290,6 +290,42 @@ func init() {
       },
       "type": "object"
     },
+    "AuditPolicy": {
+      "description": "The runtime-changeable audit policy. A zero means \"no limit\" for every field except max_prune_per_pass, where it means the built-in default.",
+      "properties": {
+        "max_segment_age_seconds": {
+          "description": "Seal the active segment once it has been open this long. Zero never seals by age, which leaves the unsealed part of the trail growing without bound and is what a profile ceiling refuses.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "max_segment_bytes": {
+          "description": "Seal the active segment before it exceeds this many bytes. Zero never seals by size.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "retention_max_age_seconds": {
+          "description": "Prune a sealed segment older than this. Zero keeps by age forever, which is the strongest setting and never below a floor.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "retention_max_bytes": {
+          "description": "Prune oldest first while the sealed segments exceed this total. Zero disables the quota. A quota below one segment is refused, since pruning could never satisfy it.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "retention_max_prune_per_pass": {
+          "description": "Deletions allowed per retention pass. Zero means the built-in default of one.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "retention_reserve_bytes": {
+          "description": "Free-space floor on the audit filesystem. Below it, pruning proceeds regardless of age and quota and durable management writes are refused. Zero disables the check.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "AuditProducerStatus": {
       "properties": {
         "accepted": {
@@ -342,6 +378,20 @@ func init() {
       },
       "type": "object"
     },
+    "AuditRotateResult": {
+      "description": "The segments either side of an operator-requested rotation.",
+      "properties": {
+        "new_segment_uuid": {
+          "description": "The segment now active.",
+          "type": "string"
+        },
+        "sealed_segment_uuid": {
+          "description": "The segment that was sealed.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "AuditSegmentStatus": {
       "description": "The segment the writer is appending to.",
       "properties": {
@@ -360,6 +410,69 @@ func init() {
         },
         "uuid": {
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AuditSink": {
+      "description": "The remote sink's configuration and session state. Certificate material is named by path and never served.",
+      "properties": {
+        "address": {
+          "description": "The receiver's host and port.",
+          "type": "string"
+        },
+        "ca_bundle_path": {
+          "description": "PEM bundle the receiver's certificate is verified against. Required; there is no unverified mode.",
+          "type": "string"
+        },
+        "client_cert_path": {
+          "description": "Client certificate for mutual TLS. Both this and the key must be set, or neither.",
+          "type": "string"
+        },
+        "client_key_path": {
+          "description": "Client key for mutual TLS.",
+          "type": "string"
+        },
+        "connected": {
+          "description": "Read-only. Whether a session is currently established.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether a sink is configured and submitting.",
+          "type": "boolean"
+        },
+        "facility": {
+          "description": "Syslog facility. Defaults to 13, log audit.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "last_error": {
+          "description": "Read-only. The most recent transport error, empty when the last attempt succeeded.",
+          "type": "string"
+        },
+        "max_frame_bytes": {
+          "description": "Largest message this receiver accepts. A record that does not fit is truncated at a field boundary and marked, never cut mid-record. Zero means no limit.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "server_name": {
+          "description": "Name expected in the receiver's certificate. Defaults to the host part of the address.",
+          "type": "string"
+        },
+        "submitted": {
+          "description": "Read-only. Records written to the socket since this sink was configured. Not a delivery count, the protocol carries no acknowledgement.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "truncated": {
+          "description": "Read-only. Records that did not fit the receiver's cap and were sent shortened.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "write_errors": {
+          "description": "Read-only. Submissions that failed, each of which stops the cursor from advancing.",
+          "format": "int64",
+          "type": "integer"
         }
       },
       "type": "object"
@@ -7544,6 +7657,168 @@ func init() {
     "version": "0.0.1"
   },
   "paths": {
+    "/audit/policy": {
+      "get": {
+        "description": "Returns the runtime-changeable part of the audit configuration: the limits that seal the active segment and the local retention target. The audit root directory, the mandatory-audit mode and the instance identity are startup-only and are not served here, because changing where the trail is written while it is being written would break the one thing the trail is for. This read is not itself audited, by the same decision that leaves the status read unaudited.",
+        "operationId": "GetAuditPolicy",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit policy",
+            "schema": {
+              "$ref": "#/definitions/AuditPolicy"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/ManagementUnauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "503": {
+            "$ref": "#/responses/ManagementStoreUnavailable"
+          }
+        },
+        "summary": "Audit policy in force",
+        "tags": [
+          "audit"
+        ]
+      },
+      "post": {
+        "description": "Replaces the runtime-changeable audit policy. The change is itself audited before it is applied, like any other management mutation. A value below the deployment profile's floor is refused for every caller, the gateway administrator included, and the refusal names the fields. That refusal answers 400, not 403: the caller was authorized and the values were not acceptable, and a 403 here would be recorded as an authorization denial rather than as the refused policy change it is. Lowering a retention target never deletes segments already on disk: they keep the terms they were sealed under, and only what is sealed afterwards is subject to the shorter one.",
+        "operationId": "PostAuditPolicy",
+        "parameters": [
+          {
+            "description": "The policy to apply",
+            "in": "body",
+            "name": "attr",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AuditPolicy"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/responses/ManagementBadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/ManagementUnauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "503": {
+            "$ref": "#/responses/ManagementStoreUnavailable"
+          }
+        },
+        "summary": "Change the audit policy",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/audit/rotate": {
+      "post": {
+        "description": "Seals the active segment and opens the next one, as the operator action of the same name. It is audited, and the record names both the segment that was sealed and the one now active.",
+        "operationId": "PostAuditRotate",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Segment rotated",
+            "schema": {
+              "$ref": "#/definitions/AuditRotateResult"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/ManagementUnauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "503": {
+            "$ref": "#/responses/ManagementStoreUnavailable"
+          }
+        },
+        "summary": "Seal the active segment now",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/audit/sink": {
+      "get": {
+        "description": "Returns the remote sink's configuration and what is known about its current session. Certificate material is named by path and never served: the management API reports where the trust anchors are, not what they contain.",
+        "operationId": "GetAuditSink",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit sink",
+            "schema": {
+              "$ref": "#/definitions/AuditSink"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/ManagementUnauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "503": {
+            "$ref": "#/responses/ManagementStoreUnavailable"
+          }
+        },
+        "summary": "Audit sink configuration and state",
+        "tags": [
+          "audit"
+        ]
+      },
+      "post": {
+        "description": "Configures the remote syslog sink. The receiver's certificate is always verified against the configured bundle; there is no mode that disables verification, and a configuration without a bundle is refused. The change is audited like any other management mutation.",
+        "operationId": "PostAuditSink",
+        "parameters": [
+          {
+            "description": "The sink configuration to apply",
+            "in": "body",
+            "name": "attr",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AuditSink"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/responses/ManagementBadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/ManagementUnauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "503": {
+            "$ref": "#/responses/ManagementStoreUnavailable"
+          }
+        },
+        "summary": "Configure the audit sink",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/audit/status": {
       "get": {
         "description": "Reports the state of the management audit trail: whether a writer is configured and running, records accepted and dropped per stream, write, sync and timeout failures, the time of the last write, the active segment and the sealed bytes, the retention policy with the retention it projects, and the management intents of the previous boot that never received a result. Status only: no record content is served over the management API, and this read is not itself audited because it is designed to be polled. A gateway whose audit directory was unusable at start still answers, with available false, so the refused management calls can be explained.",
@@ -19566,6 +19841,12 @@ func init() {
     "application/json"
   ],
   "responses": {
+    "ManagementBadRequest": {
+      "description": "The request is malformed or the values are not acceptable; nothing was changed",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      }
+    },
     "ManagementForbidden": {
       "description": "Authenticated principal is not authorized for this operation",
       "schema": {
@@ -19967,6 +20248,219 @@ func init() {
   "host": "0.0.0.0:11111",
   "basePath": "/netlox/v1",
   "paths": {
+    "/audit/policy": {
+      "get": {
+        "description": "Returns the runtime-changeable part of the audit configuration: the limits that seal the active segment and the local retention target. The audit root directory, the mandatory-audit mode and the instance identity are startup-only and are not served here, because changing where the trail is written while it is being written would break the one thing the trail is for. This read is not itself audited, by the same decision that leaves the status read unaudited.",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "audit"
+        ],
+        "summary": "Audit policy in force",
+        "operationId": "GetAuditPolicy",
+        "responses": {
+          "200": {
+            "description": "Audit policy",
+            "schema": {
+              "$ref": "#/definitions/AuditPolicy"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid management credential",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "Replaces the runtime-changeable audit policy. The change is itself audited before it is applied, like any other management mutation. A value below the deployment profile's floor is refused for every caller, the gateway administrator included, and the refusal names the fields. That refusal answers 400, not 403: the caller was authorized and the values were not acceptable, and a 403 here would be recorded as an authorization denial rather than as the refused policy change it is. Lowering a retention target never deletes segments already on disk: they keep the terms they were sealed under, and only what is sealed afterwards is subject to the shorter one.",
+        "tags": [
+          "audit"
+        ],
+        "summary": "Change the audit policy",
+        "operationId": "PostAuditPolicy",
+        "parameters": [
+          {
+            "description": "The policy to apply",
+            "name": "attr",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AuditPolicy"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "The request is malformed or the values are not acceptable; nothing was changed",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid management credential",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/audit/rotate": {
+      "post": {
+        "description": "Seals the active segment and opens the next one, as the operator action of the same name. It is audited, and the record names both the segment that was sealed and the one now active.",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "audit"
+        ],
+        "summary": "Seal the active segment now",
+        "operationId": "PostAuditRotate",
+        "responses": {
+          "200": {
+            "description": "Segment rotated",
+            "schema": {
+              "$ref": "#/definitions/AuditRotateResult"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid management credential",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/audit/sink": {
+      "get": {
+        "description": "Returns the remote sink's configuration and what is known about its current session. Certificate material is named by path and never served: the management API reports where the trust anchors are, not what they contain.",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "audit"
+        ],
+        "summary": "Audit sink configuration and state",
+        "operationId": "GetAuditSink",
+        "responses": {
+          "200": {
+            "description": "Audit sink",
+            "schema": {
+              "$ref": "#/definitions/AuditSink"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid management credential",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "Configures the remote syslog sink. The receiver's certificate is always verified against the configured bundle; there is no mode that disables verification, and a configuration without a bundle is refused. The change is audited like any other management mutation.",
+        "tags": [
+          "audit"
+        ],
+        "summary": "Configure the audit sink",
+        "operationId": "PostAuditSink",
+        "parameters": [
+          {
+            "description": "The sink configuration to apply",
+            "name": "attr",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AuditSink"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "The request is malformed or the values are not acceptable; nothing was changed",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid management credential",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
     "/audit/status": {
       "get": {
         "description": "Reports the state of the management audit trail: whether a writer is configured and running, records accepted and dropped per stream, write, sync and timeout failures, the time of the last write, the active segment and the sealed bytes, the retention policy with the retention it projects, and the management intents of the previous boot that never received a result. Status only: no record content is served over the management API, and this read is not itself audited because it is designed to be polled. A gateway whose audit directory was unusable at start still answers, with available false, so the refused management calls can be explained.",
@@ -33011,6 +33505,42 @@ func init() {
         }
       }
     },
+    "AuditPolicy": {
+      "description": "The runtime-changeable audit policy. A zero means \"no limit\" for every field except max_prune_per_pass, where it means the built-in default.",
+      "type": "object",
+      "properties": {
+        "max_segment_age_seconds": {
+          "description": "Seal the active segment once it has been open this long. Zero never seals by age, which leaves the unsealed part of the trail growing without bound and is what a profile ceiling refuses.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "max_segment_bytes": {
+          "description": "Seal the active segment before it exceeds this many bytes. Zero never seals by size.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "retention_max_age_seconds": {
+          "description": "Prune a sealed segment older than this. Zero keeps by age forever, which is the strongest setting and never below a floor.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "retention_max_bytes": {
+          "description": "Prune oldest first while the sealed segments exceed this total. Zero disables the quota. A quota below one segment is refused, since pruning could never satisfy it.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "retention_max_prune_per_pass": {
+          "description": "Deletions allowed per retention pass. Zero means the built-in default of one.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "retention_reserve_bytes": {
+          "description": "Free-space floor on the audit filesystem. Below it, pruning proceeds regardless of age and quota and durable management writes are refused. Zero disables the check.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
     "AuditProducerStatus": {
       "type": "object",
       "properties": {
@@ -33063,6 +33593,20 @@ func init() {
         }
       }
     },
+    "AuditRotateResult": {
+      "description": "The segments either side of an operator-requested rotation.",
+      "type": "object",
+      "properties": {
+        "new_segment_uuid": {
+          "description": "The segment now active.",
+          "type": "string"
+        },
+        "sealed_segment_uuid": {
+          "description": "The segment that was sealed.",
+          "type": "string"
+        }
+      }
+    },
     "AuditSegmentStatus": {
       "description": "The segment the writer is appending to.",
       "type": "object",
@@ -33082,6 +33626,69 @@ func init() {
         },
         "uuid": {
           "type": "string"
+        }
+      }
+    },
+    "AuditSink": {
+      "description": "The remote sink's configuration and session state. Certificate material is named by path and never served.",
+      "type": "object",
+      "properties": {
+        "address": {
+          "description": "The receiver's host and port.",
+          "type": "string"
+        },
+        "ca_bundle_path": {
+          "description": "PEM bundle the receiver's certificate is verified against. Required; there is no unverified mode.",
+          "type": "string"
+        },
+        "client_cert_path": {
+          "description": "Client certificate for mutual TLS. Both this and the key must be set, or neither.",
+          "type": "string"
+        },
+        "client_key_path": {
+          "description": "Client key for mutual TLS.",
+          "type": "string"
+        },
+        "connected": {
+          "description": "Read-only. Whether a session is currently established.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether a sink is configured and submitting.",
+          "type": "boolean"
+        },
+        "facility": {
+          "description": "Syslog facility. Defaults to 13, log audit.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "last_error": {
+          "description": "Read-only. The most recent transport error, empty when the last attempt succeeded.",
+          "type": "string"
+        },
+        "max_frame_bytes": {
+          "description": "Largest message this receiver accepts. A record that does not fit is truncated at a field boundary and marked, never cut mid-record. Zero means no limit.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "server_name": {
+          "description": "Name expected in the receiver's certificate. Defaults to the host part of the address.",
+          "type": "string"
+        },
+        "submitted": {
+          "description": "Read-only. Records written to the socket since this sink was configured. Not a delivery count, the protocol carries no acknowledgement.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "truncated": {
+          "description": "Read-only. Records that did not fit the receiver's cap and were sent shortened.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "write_errors": {
+          "description": "Read-only. Submissions that failed, each of which stops the cursor from advancing.",
+          "type": "integer",
+          "format": "int64"
         }
       }
     },
@@ -41870,6 +42477,12 @@ func init() {
     }
   },
   "responses": {
+    "ManagementBadRequest": {
+      "description": "The request is malformed or the values are not acceptable; nothing was changed",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      }
+    },
     "ManagementForbidden": {
       "description": "Authenticated principal is not authorized for this operation",
       "schema": {

@@ -627,6 +627,115 @@ done
 chk     T15-5 "no record carries a password field" 0 "$(jq -R 'fromjson? | select(type=="object") | .. | objects | select(has("password"))' "$SWEEP" | grep -c .)"
 chk     T15-6 "no query string survived into any recorded path" 0 "$(jq -R -r 'fromjson? | select(type=="object") | .detail.path // empty' "$SWEEP" | grep -c '[?#]')"
 
+# This section runs last on purpose. It is the only part of the scenario that
+# seals a segment, and `trail_raw` concatenates *.jsonl before *.jsonl.gz, so
+# a sealed-and-compressed segment lands after the active one and every helper
+# that takes "the newest record" by position stops being right. Nothing after
+# this point may rely on that order.
+# ── T-GW-2: the audit policy, the remote sink and sealing on demand ─────────
+echo ""
+echo "T-GW-2: /audit/policy, /audit/sink and /audit/rotate"
+
+# A trust anchor the sink can actually read. Only a certificate is needed --
+# it is what the receiver is verified against, never a credential of ours --
+# and it is made per run so nothing is committed. It is generated on the host
+# and copied in: the image's openssl is built against a config prefix that
+# does not exist in it, so it cannot write one itself.
+SINK_CA=/tmp/audit-sink-ca.pem
+HOST_CA=$(mktemp -d)/ca.pem
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "${HOST_CA%.pem}.key" -out "$HOST_CA" \
+    -days 1 -subj '/CN=audit-sink-receiver-ca' >/dev/null 2>&1
+docker cp "$HOST_CA" "llb1:$SINK_CA" >/dev/null 2>&1
+if docker exec llb1 grep -q 'BEGIN CERTIFICATE' "$SINK_CA" 2>/dev/null; then
+    ok T-GW-2-0 "a trust anchor the sink can read is in place"
+else
+    bad T-GW-2-0 "trust anchor for the sink" "could not place $SINK_CA in llb1"
+fi
+
+# The policy endpoint REPLACES the policy rather than patching it, so a
+# correct caller reads it, changes one field and writes the whole thing back.
+# Anything else silently zeroes the fields it leaves out.
+api GET /audit/policy "${AUTH[@]}"
+chk     T-GW-2-1a "GET /audit/policy answers 200" 200 "$RESP_CODE"
+POL_BEFORE=$RESP_BODY
+AGE_BEFORE=$(printf '%s' "$POL_BEFORE" | jq -r '.max_segment_age_seconds // 0')
+chk_nonempty T-GW-2-1b "the policy names its segment age ceiling" "$AGE_BEFORE"
+
+AGE_AFTER=$(( AGE_BEFORE + 60 ))
+POL_BODY=$(printf '%s' "$POL_BEFORE" | jq -c ".max_segment_age_seconds = $AGE_AFTER")
+api POST /audit/policy "${AUTH[@]}" "${CT[@]}" -d "$POL_BODY"
+chk     T-GW-2-2a "a policy change is accepted" 204 "$RESP_CODE"
+tm_pair T-GW-2-2b "mgmt.audit.policy names the changed field and states the floor did not refuse it" \
+        mgmt.audit.policy '.outcome.ok==true and (.detail.changed_fields|index("max_segment_age")!=null) and .detail.floor_rejected==false'
+api GET /audit/policy "${AUTH[@]}"
+chk     T-GW-2-2c "the running policy carries the new ceiling" "$AGE_AFTER" "$(json '.max_segment_age_seconds')"
+
+# A policy that cannot be satisfied is refused before it is applied, and the
+# running policy is left alone: a quota below one segment would have the
+# writer delete everything and still be over.
+POL_BAD=$(printf '%s' "$POL_BEFORE" | jq -c '.max_segment_bytes = 1048576 | .retention_max_bytes = 4096')
+api POST /audit/policy "${AUTH[@]}" "${CT[@]}" -d "$POL_BAD"
+chk     T-GW-2-3a "a quota below one segment is refused" 400 "$RESP_CODE"
+api GET /audit/policy "${AUTH[@]}"
+chk     T-GW-2-3b "the refused change did not touch the running policy" "$AGE_AFTER" "$(json '.max_segment_age_seconds')"
+
+# The sink. A receiver that could not be verified is refused when it is
+# configured, not when it first connects.
+api GET /audit/sink "${AUTH[@]}"
+chk     T-GW-2-4a "GET /audit/sink answers 200" 200 "$RESP_CODE"
+chk     T-GW-2-4b "no sink is configured yet" false "$(json '.enabled // false')"
+
+api POST /audit/sink "${AUTH[@]}" "${CT[@]}" -d '{"enabled":true,"address":"siem.example:6514"}'
+chk     T-GW-2-5a "a sink with no trust anchor is refused" 400 "$RESP_CODE"
+api GET /audit/sink "${AUTH[@]}"
+chk     T-GW-2-5b "the refused sink was not installed" false "$(json '.enabled // false')"
+
+# The two numbers are used as an int internally. A value outside its range is
+# refused as it arrived, because converting first would replace it with a
+# different number rather than fail.
+api POST /audit/sink "${AUTH[@]}" "${CT[@]}" \
+    -d "{\"enabled\":true,\"address\":\"127.0.0.1:6514\",\"ca_bundle_path\":\"$SINK_CA\",\"facility\":24}"
+chk     T-GW-2-6a "a facility outside RFC 5424 table 1 is refused" 400 "$RESP_CODE"
+api POST /audit/sink "${AUTH[@]}" "${CT[@]}" \
+    -d "{\"enabled\":true,\"address\":\"127.0.0.1:6514\",\"ca_bundle_path\":\"$SINK_CA\",\"max_frame_bytes\":9223372036854775807}"
+chk     T-GW-2-6b "a frame cap the framing cannot carry is refused" 400 "$RESP_CODE"
+api GET /audit/sink "${AUTH[@]}"
+chk     T-GW-2-6c "neither refusal installed a sink" false "$(json '.enabled // false')"
+
+api POST /audit/sink "${AUTH[@]}" "${CT[@]}" \
+    -d "{\"enabled\":true,\"address\":\"127.0.0.1:6514\",\"ca_bundle_path\":\"$SINK_CA\",\"server_name\":\"localhost\"}"
+chk     T-GW-2-7a "a sink with a readable trust anchor is accepted" 204 "$RESP_CODE"
+api GET /audit/sink "${AUTH[@]}"
+chk     T-GW-2-7b "the sink reads as configured" true "$(json '.enabled // false')"
+chk     T-GW-2-7c "the sink names its receiver" 127.0.0.1:6514 "$(json '.address')"
+tm_pair T-GW-2-7d "mgmt.audit.sink names the endpoint and the anchor that vouches for the receiver" \
+        mgmt.audit.sink '.outcome.ok==true and .detail.endpoint=="127.0.0.1:6514" and (.detail.tls_ca_id|length)>0'
+# The anchor is named, never served: no certificate material may appear in a
+# record or in the read-back.
+SINK_RECS=$(records '.event_type=="mgmt.audit.sink"')
+chk     T-GW-2-7e "no certificate material in any sink record" 0 "$(printf '%s' "$SINK_RECS" | grep -c 'BEGIN CERTIFICATE')"
+chk     T-GW-2-7f "no certificate material served by the read" 0 "$(printf '%s' "$RESP_BODY" | grep -c 'BEGIN CERTIFICATE')"
+
+# Sealing on demand. The record names both segments, and the writer really
+# did move: the sealed uuid is the one the status reported a moment ago.
+SEG_BEFORE=$(printf '%s' "$(astatus)" | jq -r '.segment.uuid')
+api POST /audit/rotate "${AUTH[@]}" "${CT[@]}" -d '{}'
+chk     T-GW-2-8a "sealing the active segment is accepted" 200 "$RESP_CODE"
+SEALED=$(json '.sealed_segment_uuid'); OPENED=$(json '.new_segment_uuid')
+chk     T-GW-2-8b "the reply seals the segment the status named" "$SEG_BEFORE" "$SEALED"
+chk_ne  T-GW-2-8c "the new segment is not the sealed one" "$SEALED" "$OPENED"
+chk     T-GW-2-8d "the status now reports the new segment" "$OPENED" "$(printf '%s' "$(astatus)" | jq -r '.segment.uuid')"
+tm_pair T-GW-2-8e "mgmt.audit.rotate_now names the segment sealed and the one now active" \
+        mgmt.audit.rotate_now '.outcome.ok==true and (.detail.sealed_segment_uuid|length)>0 and (.detail.new_segment_uuid|length)>0 and .detail.sealed_segment_uuid!=.detail.new_segment_uuid'
+# A record written after the seal lands in the new segment, which is what
+# makes the seal a boundary rather than a label. The reads of this endpoint
+# are deliberately unaudited, so it takes a mutation to produce one.
+POL_BODY2=$(printf '%s' "$POL_BEFORE" | jq -c ".max_segment_age_seconds = $(( AGE_AFTER + 60 ))")
+api POST /audit/policy "${AUTH[@]}" "${CT[@]}" -d "$POL_BODY2"
+chk     T-GW-2-8f "a further policy change is accepted after the seal" 204 "$RESP_CODE"
+chk_ge  T-GW-2-8g "a record written after the seal lands in the new segment" 1 \
+        "$(count ".event_type==\"mgmt.audit.policy\" and .segment_uuid==\"$OPENED\"")"
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "Trail summary:"

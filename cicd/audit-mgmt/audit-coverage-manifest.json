@@ -3,7 +3,7 @@
   "generated_by": "cicd/audit-mgmt/gen-coverage-manifest.py",
   "stage_claimed": "1b",
   "event_types": 65,
-  "matrix_digest": "e8f7ad58bff9411337061bb86ef63c8ae71513aabce55a61acfcfd3b8fc3683e",
+  "matrix_digest": "66a0187f296af20c8740f79763ef492879905e22525e7f0963969f153be5b3e3",
   "requirements_by_stage": {
     "1b": {
       "covered and tested": 4
@@ -12,7 +12,8 @@
       "uncovered": 9
     },
     "2": {
-      "uncovered": 22
+      "covered and tested": 4,
+      "uncovered": 19
     },
     "1a": {
       "covered and tested": 5,
@@ -167,12 +168,26 @@
             "changed_fields",
             "floor_rejected"
           ],
-          "behaviour": "T-GW-2 policy endpoint",
-          "scenario": null,
-          "assertion_ids": [],
-          "unit_tests": [],
-          "red_twin_run_id": null,
-          "state": "uncovered"
+          "behaviour": "the runtime-changeable policy is replaced through the gate like any other mutation: the result names the fields that changed and states whether the deployment profile's floor refused them, and a refused change leaves the policy untouched",
+          "scenario": "audit-mgmt",
+          "assertion_ids": [
+            "T-GW-2-1a",
+            "T-GW-2-1b",
+            "T-GW-2-2a",
+            "T-GW-2-2b",
+            "T-GW-2-2c",
+            "T-GW-2-3a",
+            "T-GW-2-3b"
+          ],
+          "unit_tests": [
+            "TestAuditPolicyChangeIsAuditedWithWhatChanged",
+            "TestAuditPolicyBelowTheFloorIsRefusedAndRecorded",
+            "TestSetPolicyRefusesBelowTheFloorForEveryCaller",
+            "TestLoweringRetentionDoesNotDeleteWhatIsAlreadySealed"
+          ],
+          "red_twin_run_id": "llbigw-2-twin-2-polfields-r1",
+          "note": "a floor refusal answers 400 rather than 403 on purpose: the gate re-types every 403 into sec.mgmt.authz_denied, which would file a refused policy change as an authorization failure and lose the record that names the refused field. The bed drives an accepted change and an unsatisfiable one; the FLOOR refusal itself stays unit-owned, because the floor comes from a deployment profile and this bed runs with the zero floor, which refuses nothing. The endpoint REPLACES the policy rather than patching it, so the scenario reads it and writes the whole thing back",
+          "state": "covered and tested"
         }
       ],
       "state": "uncovered"
@@ -210,12 +225,23 @@
             "sealed_segment_uuid",
             "new_segment_uuid"
           ],
-          "behaviour": "operator seal-and-rotate",
-          "scenario": null,
-          "assertion_ids": [],
-          "unit_tests": [],
-          "red_twin_run_id": null,
-          "state": "uncovered"
+          "behaviour": "the operator seals the active segment and the record names both the segment sealed and the one now active",
+          "scenario": "audit-mgmt",
+          "assertion_ids": [
+            "T-GW-2-8a",
+            "T-GW-2-8b",
+            "T-GW-2-8c",
+            "T-GW-2-8d",
+            "T-GW-2-8e",
+            "T-GW-2-8f",
+            "T-GW-2-8g"
+          ],
+          "unit_tests": [
+            "TestRotateNowSealsAndOpens"
+          ],
+          "red_twin_run_id": "llbigw-2-twin-2-rotate-r1",
+          "note": "the bed checks the seal is a boundary and not a label: the sealed uuid is the one the status named, the new one differs, the status moves to it, and the next record written lands in the new segment",
+          "state": "covered and tested"
         }
       ],
       "state": "uncovered"
@@ -232,12 +258,31 @@
             "endpoint",
             "tls_ca_id"
           ],
-          "behaviour": "T-GW-2 sink endpoint",
-          "scenario": null,
-          "assertion_ids": [],
-          "unit_tests": [],
-          "red_twin_run_id": null,
-          "state": "uncovered"
+          "behaviour": "a sink change is recorded with where the trail is being sent and what vouches for the receiver, both named and never their contents; a configuration whose receiver could not be verified is refused when it is configured, not when it first connects",
+          "scenario": "audit-mgmt",
+          "assertion_ids": [
+            "T-GW-2-4a",
+            "T-GW-2-4b",
+            "T-GW-2-5a",
+            "T-GW-2-5b",
+            "T-GW-2-6a",
+            "T-GW-2-6b",
+            "T-GW-2-6c",
+            "T-GW-2-7a",
+            "T-GW-2-7b",
+            "T-GW-2-7c",
+            "T-GW-2-7d",
+            "T-GW-2-7e",
+            "T-GW-2-7f"
+          ],
+          "unit_tests": [
+            "TestAuditSinkChangeRecordsTheEndpointAndItsTrustAnchor",
+            "TestAuditSinkWithoutATrustAnchorIsRefused",
+            "TestAuditSinkNumbersOutsideTheirRangeAreRefused"
+          ],
+          "red_twin_run_id": "llbigw-2-twin-2-sinkrange-r1",
+          "note": "the transport itself is covered in pkg/audit/syslog, including a receiver signed by an untrusted authority being refused. On the bed the anchor is generated per run inside the container, and both the record and the read-back are checked for certificate material: the anchor is named, never served",
+          "state": "covered and tested"
         }
       ],
       "state": "uncovered"
@@ -1246,7 +1291,29 @@
             "TestProducerDropAccounting"
           ],
           "red_twin_run_id": "llbigw-2-twin-1b-gap-r1",
-          "note": "the EXACT range is unit-only by arithmetic, not by omission: nothing is dropped until the 8192-deep queue is full, and a producer refused at all has been refused far more times than its 256-entry ring can name, so every gap a bed can produce is conservative. TestProducerDropAccounting drives a four-deep queue, where the whole drop set fits the ring",
+          "note": "this row is the per-producer claim: that a gap names whose records were lost, on which stream, over which range. Whether the range is honest about being exact is a separate claim and is scoped to the row below",
+          "state": "covered and tested"
+        },
+        {
+          "stage": "2",
+          "fields": [
+            "ring_overflows",
+            "dropped_total"
+          ],
+          "behaviour": "the exactness claim is falsifiable: a gap may call its range exact only when the producer's drop ring discarded nothing since that producer's previous gap, and the ranges plus the entries the ring admits it discarded reconcile to the producer's own counted total",
+          "scenario": "audit-data",
+          "assertion_ids": [
+            "T18-1e",
+            "T18-1g",
+            "T18-2b",
+            "T18-2e"
+          ],
+          "unit_tests": [
+            "TestProducerDropAccounting",
+            "TestProducerGapRingOverflow"
+          ],
+          "red_twin_run_id": "llbigw-2-twin-2-exact-r1",
+          "note": "before these two fields the trail carried nothing a reader could hold the claim against: exact was checked only against a width the emitter derived from the range it was asserting, so a gap that always claimed exactness went undetected. Both inexact branch is asserted on the bed, where a producer refused at all has been refused far more often than its ring can name; the exact branch is opportunistic there and varies run to run, so it is driven in the unit suite instead",
           "state": "covered and tested"
         }
       ],
