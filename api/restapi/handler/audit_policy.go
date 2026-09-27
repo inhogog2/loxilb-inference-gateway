@@ -159,6 +159,21 @@ func AuditPostSink(params auditops.PostAuditSinkParams, principal interface{}) m
 		return auditops.NewPostAuditSinkNoContent()
 	}
 
+	// The two numbers are checked here, on the value as it arrived, and not
+	// after the conversion below: int(x) does not fail on a value too large
+	// for an int, it yields a different number, so a check afterwards would
+	// be checking something the caller never sent.
+	if a.Facility < 0 || a.Facility > syslog.MaxFacility {
+		tk.LogIt(tk.LogError, "api: audit sink refused: facility %d outside 0..%d\n",
+			a.Facility, syslog.MaxFacility)
+		return auditops.NewPostAuditSinkBadRequest()
+	}
+	if a.MaxFrameBytes < 0 || a.MaxFrameBytes > syslog.MaxFrameBytesLimit {
+		tk.LogIt(tk.LogError, "api: audit sink refused: max_frame_bytes %d outside 0..%d\n",
+			a.MaxFrameBytes, syslog.MaxFrameBytesLimit)
+		return auditops.NewPostAuditSinkBadRequest()
+	}
+
 	cfg := syslog.Config{
 		Address:        a.Address,
 		CABundlePath:   a.CaBundlePath,

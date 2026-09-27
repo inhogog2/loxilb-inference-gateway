@@ -14,6 +14,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"math"
 	"math/big"
 	"net/http"
 	"os"
@@ -153,6 +154,54 @@ func TestAuditSinkWithoutATrustAnchorIsRefused(t *testing.T) {
 
 	if AuditSink() != nil {
 		t.Fatal("a refused sink configuration was installed anyway")
+	}
+}
+
+// The two numeric knobs arrive as int64 and are used as int. A value that
+// does not fit is refused as it arrived: converting first would replace it
+// with a different number, and a facility outside RFC 5424 would put the
+// PRI outside 0..191, so every frame would be rejected by a strict
+// receiver while the sink read as configured.
+func TestAuditSinkNumbersOutsideTheirRangeAreRefused(t *testing.T) {
+	withAuthMode(t, true)
+	ca := writeTestCA(t)
+
+	cases := []struct {
+		name string
+		attr models.AuditSink
+	}{
+		{"facility above RFC 5424 table 1", models.AuditSink{
+			Enabled: true, Address: "127.0.0.1:6514", CaBundlePath: ca,
+			Facility: int64(syslog.MaxFacility) + 1}},
+		{"negative facility", models.AuditSink{
+			Enabled: true, Address: "127.0.0.1:6514", CaBundlePath: ca, Facility: -1}},
+		{"frame cap larger than the framing can carry", models.AuditSink{
+			Enabled: true, Address: "127.0.0.1:6514", CaBundlePath: ca,
+			MaxFrameBytes: int64(syslog.MaxFrameBytesLimit) + 1}},
+		{"frame cap that would not fit an int", models.AuditSink{
+			Enabled: true, Address: "127.0.0.1:6514", CaBundlePath: ca,
+			MaxFrameBytes: math.MaxInt64}},
+		{"negative frame cap", models.AuditSink{
+			Enabled: true, Address: "127.0.0.1:6514", CaBundlePath: ca, MaxFrameBytes: -1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGateFixture(t)
+			f.status = http.StatusBadRequest
+			attr := tc.attr
+			f.inside = func(r *http.Request) {
+				RecordAuditPrincipal(r, "alice|admin")
+				resp := AuditPostSink(auditops.PostAuditSinkParams{HTTPRequest: r, Attr: &attr}, "alice|admin")
+				if rec := f.serve(resp); rec.Code != http.StatusBadRequest {
+					t.Fatalf("answered %d, want 400", rec.Code)
+				}
+			}
+			f.do("POST", "/netlox/v1/audit/sink", `{"enabled":true}`,
+				"Content-Type", "application/json")
+			if AuditSink() != nil {
+				t.Fatal("a refused sink configuration was installed anyway")
+			}
+		})
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net"
 	"os"
@@ -266,6 +267,77 @@ func TestNewRefusesHalfAClientKeypair(t *testing.T) {
 func TestNewRefusesAMissingAddress(t *testing.T) {
 	if _, err := New(Config{}); err != ErrNotConfigured {
 		t.Fatalf("want ErrNotConfigured, got %v", err)
+	}
+}
+
+// A facility outside RFC 5424 table 1 does not produce a frame a strict
+// receiver will take: the PRI leaves 0..191 and every record is rejected
+// at the far end. It is refused where it is configured, like an
+// unverifiable receiver, rather than read as working until it matters.
+func TestNewRefusesAFacilityOutsideRFC5424(t *testing.T) {
+	dir := t.TempDir()
+	_, caPEM := genCA(t)
+	caPath := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := Config{Address: "127.0.0.1:6514", CABundlePath: caPath, Now: fixedNow}
+	for _, facility := range []int{-1, MaxFacility + 1, math.MaxInt} {
+		cfg := base
+		cfg.Facility = facility
+		if _, err := New(cfg); err == nil {
+			t.Errorf("facility %d must be refused", facility)
+		}
+	}
+	for _, facility := range []int{1, MaxFacility, DefaultFacility} {
+		cfg := base
+		cfg.Facility = facility
+		if _, err := New(cfg); err != nil {
+			t.Errorf("facility %d is valid, got %v", facility, err)
+		}
+	}
+}
+
+func TestNewRefusesAFrameCapItCannotRepresent(t *testing.T) {
+	dir := t.TempDir()
+	_, caPEM := genCA(t)
+	caPath := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := Config{Address: "127.0.0.1:6514", CABundlePath: caPath, Now: fixedNow}
+	for _, cap := range []int{-1, MaxFrameBytesLimit + 1} {
+		cfg := base
+		cfg.MaxFrameBytes = cap
+		if _, err := New(cfg); err == nil {
+			t.Errorf("max_frame_bytes %d must be refused", cap)
+		}
+	}
+	// Zero is "no limit" and the ceiling itself is accepted: neither is a
+	// number the framing cannot carry.
+	for _, cap := range []int{0, 2048, MaxFrameBytesLimit} {
+		cfg := base
+		cfg.MaxFrameBytes = cap
+		if _, err := New(cfg); err != nil {
+			t.Errorf("max_frame_bytes %d is valid, got %v", cap, err)
+		}
+	}
+}
+
+// capPlus is a preallocation hint, so the only thing it must never do is
+// hand make() a wrapped, negative capacity.
+func TestCapPlusGivesUpTheHintRatherThanWrapping(t *testing.T) {
+	if got := capPlus(10, 12); got != 22 {
+		t.Errorf("capPlus(10, 12) = %d, want 22", got)
+	}
+	if got := capPlus(math.MaxInt, 12); got != math.MaxInt {
+		t.Errorf("capPlus(MaxInt, 12) = %d, want MaxInt", got)
+	}
+	if got := capPlus(math.MaxInt-12, 12); got != math.MaxInt {
+		t.Errorf("capPlus(MaxInt-12, 12) = %d, want MaxInt", got)
+	}
+	if got := capPlus(math.MaxInt-13, 12); got < 0 {
+		t.Errorf("capPlus returned a negative capacity %d", got)
 	}
 }
 

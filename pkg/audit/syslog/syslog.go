@@ -35,6 +35,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"strconv"
@@ -52,6 +53,18 @@ const (
 	severityNotice  = 5
 	severityWarning = 4
 )
+
+// MaxFacility is the highest facility RFC 5424 table 1 defines. A value
+// above it produces a PRI outside 0..191, which is not a valid header: a
+// strict receiver rejects every frame, so the trail stops arriving because
+// of one number. It is refused where it is configured instead.
+const MaxFacility = 23
+
+// MaxFrameBytesLimit bounds the configurable frame cap. One frame carries
+// one record, so a cap this large is not a receiver's limit; accepting a
+// larger number would only let the octet count and the buffer sizes
+// derived from it stop being representable.
+const MaxFrameBytesLimit = 1 << 30
 
 // DefaultAppName is the RFC 5424 APP-NAME every frame carries.
 const DefaultAppName = "loxilb-igw"
@@ -168,6 +181,13 @@ func New(cfg Config) (*Sink, error) {
 	}
 	if _, _, err := net.SplitHostPort(cfg.Address); err != nil {
 		return nil, fmt.Errorf("syslog: address %q: %w", cfg.Address, err)
+	}
+	if cfg.Facility < 0 || cfg.Facility > MaxFacility {
+		return nil, fmt.Errorf("syslog: facility %d outside 0..%d", cfg.Facility, MaxFacility)
+	}
+	if cfg.MaxFrameBytes < 0 || cfg.MaxFrameBytes > MaxFrameBytesLimit {
+		return nil, fmt.Errorf("syslog: max_frame_bytes %d outside 0..%d",
+			cfg.MaxFrameBytes, MaxFrameBytesLimit)
 	}
 	tc, err := buildTLS(cfg)
 	if err != nil {
@@ -364,11 +384,31 @@ func (s *Sink) frame(line []byte) ([]byte, bool, error) {
 				s.cfg.MaxFrameBytes, len(syslogMsg))
 		}
 	}
-	out := make([]byte, 0, len(syslogMsg)+12)
+	out := make([]byte, 0, capPlus(len(syslogMsg), framePrefixHint))
 	out = strconv.AppendInt(out, int64(len(syslogMsg)), 10)
 	out = append(out, ' ')
 	out = append(out, syslogMsg...)
 	return out, truncated, nil
+}
+
+// framePrefixHint covers the RFC 5425 length prefix: the decimal octet
+// count and the space after it. msgHeaderHint covers the RFC 5424 HEADER
+// ahead of the JSON. Both are preallocation hints, not limits — a longer
+// hostname or app name simply grows the slice once.
+const (
+	framePrefixHint = 12
+	msgHeaderHint   = 128
+)
+
+// capPlus returns n+extra for use as a preallocation hint, giving up the
+// extra rather than wrapping when the sum would not fit in an int. A
+// wrapped sum would reach make() as a negative capacity; the hint only
+// ever saves a reallocation, so losing it costs nothing that matters.
+func capPlus(n, extra int) int {
+	if n > math.MaxInt-extra {
+		return n
+	}
+	return n + extra
 }
 
 // overBy reports how many octets the assembled message exceeds the cap by.
@@ -387,7 +427,7 @@ func (s *Sink) syslogMessage(h header, msg []byte) []byte {
 	msgID := valueOr(h.Stream)
 	ts := timestampOr(h.TS, s.cfg.Now)
 
-	out := make([]byte, 0, len(msg)+128)
+	out := make([]byte, 0, capPlus(len(msg), msgHeaderHint))
 	out = append(out, '<')
 	out = strconv.AppendInt(out, int64(pri), 10)
 	out = append(out, '>', '1', ' ')
