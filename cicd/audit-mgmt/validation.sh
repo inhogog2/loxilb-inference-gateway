@@ -52,6 +52,10 @@ SINK_CA=/tmp/audit-sink-ca.pem
 WORK=$(mktemp -d)
 REQLOG=$WORK/requests.log      # the harness's own record of what it sent
 ERRBODIES=$WORK/error-bodies.log
+# Settle probes (gw_start) that got no HTTP answer at all, over every boot.
+# A dropped connection is not the freeze answer, so the probe moves on, but
+# a management call that is never answered is a finding, and T-GW-6 scores it.
+SETTLE_NOANSWER=0
 trap 'rm -rf "$WORK"' EXIT
 
 # ── verdict helpers ─────────────────────────────────────────────────────────
@@ -222,9 +226,18 @@ gw_start() { # gw_start <flags...>: datapath cleanup, start, wait for the API an
     return 1
   fi
   # The boot config replay freezes mutations for a while after the listener
-  # answers; a write that cannot apply (empty body) probes the freeze.
+  # answers; a write that cannot apply (empty body) probes the freeze. The
+  # status is kept apart from the body: a connection dropped without an
+  # answer (000) is not the freeze, but neither is it an answer.
+  local out status
   for i in $(seq 1 40); do
-    if ! docker exec llb1 curl -s -m 3 -X POST "$API/config/loadbalancer" -H 'Content-Type: application/json' -d '{}' | grep -qE 'boot config replay settles|frozen while a snapshot restore is in progress'; then
+    out=$(docker exec llb1 curl -s -m 3 -w '\n%{http_code}' -X POST "$API/config/loadbalancer" -H 'Content-Type: application/json' -d '{}')
+    status=${out##*$'\n'}
+    if ! printf '%s' "${out%$'\n'*}" | grep -qE 'boot config replay settles|frozen while a snapshot restore is in progress'; then
+      if [[ "$status" == 000 ]]; then
+        SETTLE_NOANSWER=$((SETTLE_NOANSWER + 1))
+        echo "  settle probe: POST /config/loadbalancer {} got no HTTP answer"
+      fi
       return 0
     fi
     sleep 2
@@ -989,6 +1002,39 @@ t_gw_5() {
   chk_gt  T-GW-5-9j "and the trail advanced across the removal" "$SEQ_BEFORE" "$(astatus | jq -r '.seq_high // 0')"
 }
 [[ "$T_GW_5" == 1 ]] && t_gw_5
+
+# ── T-GW-6: every admitted management call is answered and has a result ────
+echo ""
+echo "T-GW-6: no admitted management call is left without an answer or a result"
+# gw_start's settle probe, POST /config/loadbalancer with an empty body, is
+# the one request every boot sends. Where management authentication is off
+# (boots 4 and 6) it reaches the handler itself, so it is the scenario's
+# standing check that a malformed create is refused rather than crashing
+# the handler -- which drops the connection without an answer and, before
+# the gate recorded the result of a handler that panicked, left its durable
+# intent without one.
+chk     T-GW-6-1 "settle probes that got no HTTP answer, over every boot" 0 "$SETTLE_NOANSWER"
+PROBE_F='.event_type=="mgmt.config.mutate" and .phase=="intent" and .detail.method=="POST" and .detail.path=="/netlox/v1/config/loadbalancer" and ((.detail.changed_fields // []) | length) == 0'
+PROBES=$(records "$PROBE_F" | jq -r '.event_id')
+# One per boot that had a writer to take it: 1, 2 and 4, and 6 when T-GW-5
+# ran. Boot 3's are refused by the wedged writer, boot 5 has no writer.
+PROBE_FLOOR=3; [[ "$T_GW_5" == 1 ]] && PROBE_FLOOR=4
+chk_ge  T-GW-6-2 "settle-probe intents in the trail (the floor that keeps 6-3 from passing empty)" "$PROBE_FLOOR" "$(printf '%s\n' "$PROBES" | grep -c .)"
+wait_result "$(printf '%s\n' "$PROBES" | tail -n1)" || true
+OPEN_PROBES=$(comm -23 <(printf '%s\n' "$PROBES" | grep . | sort -u) \
+                       <(records '.phase=="result"' | jq -r '.event_id' | sort -u))
+chk     T-GW-6-3 "settle-probe intents with no result" 0 "$(printf '%s\n' "$OPEN_PROBES" | grep -c .)"
+if [[ -n "$OPEN_PROBES" ]]; then echo "  open: $(printf '%s' "$OPEN_PROBES" | tr '\n' ' ')"; fi
+echo "  settle-probe results by status: $(records '.phase=="result"' | jq -r --argjson ids "$(printf '%s\n' "$PROBES" | jq -R . | jq -s .)" 'select(.event_id as $e | $ids | index($e)) | .outcome.status' | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
+# A later boot's recovery scan is what turns an intent without a result into
+# a report. Boot 6 scans boot 4 (boot 5 wrote nothing), so with T-GW-5 run
+# the only orphan the trail may carry is the one T20 makes on purpose.
+if [[ "$T_GW_5" == 1 ]]; then
+  chk   T-GW-6-4 "sys.intent.orphaned in the whole trail: only T20's deliberate crash" 1 "$(count '.event_type=="sys.intent.orphaned"')"
+  chk   T-GW-6-5 "and it names T20's intent" "$ORPHAN_ID" "$(records '.event_type=="sys.intent.orphaned"' | jq -r '.detail.intent_event_id' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+else
+  echo "  (T-GW-6-4/6-5 need boot 6 to scan boot 4; T-GW-5 was skipped)"
+fi
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 echo ""
