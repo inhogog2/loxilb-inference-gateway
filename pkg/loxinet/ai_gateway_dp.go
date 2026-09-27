@@ -1596,10 +1596,10 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 //	modelName:     effective model name extracted from X-Model header or JSON body
 //	statusCode:    HTTP response status code (200, 401, 403, 429, 500, …)
 //	latencyMs:     request latency in milliseconds; 0 when unknown
-//	promptTokens,
-//	completTokens: usage as the datapath read it; recorded, never charged here
-//	streamStart,
-//	streamEnd:     stream lifecycle flags, tracked by the stream exports
+//	promptTokens, completTokens: usage as the datapath read it; never charged here
+//	streamStart, streamEnd: stream lifecycle flags, tracked by the stream exports
+//	clientIP, originIP, trustedHops: where the request came from, with the
+//	               header's meanings; accepted here, recorded once the envelope carries them
 //	errorCode:     how the response ended when it ended badly ("" otherwise)
 //	requestID:     correlation key shared with the settle and deny records
 //	userID, keyID: identity resolved at admission
@@ -1608,7 +1608,7 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 //	producerID:    emitting thread's worker identity; negative off a worker
 //
 //export llb_ai_record_request
-func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int, latencyMs C.int64_t, promptTokens C.int, completTokens C.int, streamStart C.int, streamEnd C.int, errorCode *C.char, requestID *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, isStream C.int, producerID C.int) {
+func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int, latencyMs C.int64_t, promptTokens C.int, completTokens C.int, streamStart C.int, streamEnd C.int, errorCode *C.char, requestID *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, isStream C.int, producerID C.int, clientIP *C.char, originIP *C.char, trustedHops C.int) {
 	defer cgoRecover("llb_ai_record_request")
 	tenantIDStr := C.GoString(tenantID)
 	modelNameStr := C.GoString(modelName)
@@ -1640,11 +1640,11 @@ func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int
 // The C gate calls this once per refusal from its single verdict frame, so
 // an arm added to the decision cannot refuse a request unrecorded. There
 // is no metric here: the deny counters are already raised on the export
-// that produced the decision, and counting the same refusal twice would
-// double every denial rate in the dashboards.
+// that produced the decision; counting it twice would double every denial
+// rate. The attribution triple is accepted as llb_ai_record_request documents.
 //
 //export llb_ai_record_deny
-func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, modelName *C.char, tenantID *C.char, keyID *C.char, userID *C.char, stage C.int, httpStatus C.int, errorCode *C.char) {
+func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, modelName *C.char, tenantID *C.char, keyID *C.char, userID *C.char, stage C.int, httpStatus C.int, errorCode *C.char, clientIP *C.char, originIP *C.char, trustedHops C.int) {
 	defer cgoRecover("llb_ai_record_deny")
 
 	emitAIDeny(aiDenyRecord{
