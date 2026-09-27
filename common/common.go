@@ -1371,6 +1371,18 @@ type L7PolicyArg struct {
 	LbId string `json:"lbId,omitempty"`
 	// Rules - the ordered L7 routes (FIRST-MATCH-WINS by ascending position).
 	Rules []L7RuleArg `json:"rules,omitempty"`
+	// TrustedProxies - the address ranges, as "A.B.C.D" or "A.B.C.D/N", that
+	// this listener's own upstreams occupy. A request arriving from one of them
+	// may be attributed to the address that upstream recorded in its forwarding
+	// chain rather than to the socket peer, and the chain is extended rather
+	// than replaced. Empty means nothing is trusted, which is how a listener at
+	// the edge of a network behaves and is the default.
+	//
+	// These ride the policy because the data plane rewrites headers only for a
+	// listener that carries one: ranges left on a listener with no policy would
+	// be recorded trust that nothing acts on. Detaching the policy drops them;
+	// attaching one leaves them alone.
+	TrustedProxies []string `json:"trustedProxies,omitempty"`
 	// RestoreReplay - set by the snapshot engine when this attach is a restore
 	// replay rather than a fresh POST. A replay must not be refused for a
 	// conflict the snapshot already contains: the loadbalancer domain applies

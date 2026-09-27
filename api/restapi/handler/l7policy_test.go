@@ -305,3 +305,82 @@ func TestL7PolicySessionPersistenceMutualExclusion(t *testing.T) {
 		t.Fatalf("all-HTTP_COOKIE policy must be accepted, got %v", err)
 	}
 }
+
+// --- trustedProxies validation and round-trip --------------------
+
+// withTrustedProxies sets the policy's trusted upstream ranges.
+func withTrustedProxies(r []string) *cmn.L7PolicyArg {
+	p := okPolicy()
+	p.TrustedProxies = r
+	return p
+}
+
+func TestL7PolicyTrustedProxiesAbsentIsEdgeDefault(t *testing.T) {
+	// Trusting nothing is the default and must stay valid: it is what makes a
+	// listener at the edge behave as it did before this field existed.
+	if err := validateL7Policy(withTrustedProxies(nil)); err != nil {
+		t.Fatalf("a policy with no trustedProxies must be accepted, got %v", err)
+	}
+	if err := validateL7Policy(withTrustedProxies([]string{})); err != nil {
+		t.Fatalf("a policy with an empty trustedProxies must be accepted, got %v", err)
+	}
+}
+
+func TestL7PolicyTrustedProxiesAccepted(t *testing.T) {
+	if err := validateL7Policy(withTrustedProxies([]string{"10.0.0.0/8", "192.168.1.1"})); err != nil {
+		t.Fatalf("well-formed trustedProxies rejected: %v", err)
+	}
+}
+
+func TestL7PolicyTrustedProxiesOverCount(t *testing.T) {
+	var r []string
+	for i := 0; i < l7MaxTrustedProxies+1; i++ {
+		r = append(r, "10.0.0.0/8")
+	}
+	// Over-count is refused rather than truncated: a listener trusting fewer
+	// upstreams than was asked for attributes requests to the wrong address,
+	// and nothing would say so.
+	if err := validateL7Policy(withTrustedProxies(r)); err == nil {
+		t.Fatalf("over-count trustedProxies (> %d) must be a 400, got nil", l7MaxTrustedProxies)
+	}
+}
+
+func TestL7PolicyTrustedProxiesEmptyEntry(t *testing.T) {
+	for _, bad := range []string{"", "   "} {
+		if err := validateL7Policy(withTrustedProxies([]string{"10.0.0.0/8", bad})); err == nil {
+			t.Fatalf("an empty trustedProxies entry (%q) must be a 400, got nil", bad)
+		}
+	}
+}
+
+func TestL7PolicyTrustedProxiesRoundTrip(t *testing.T) {
+	// The field has to survive both conversions or a caller cannot read back
+	// the trust boundary it configured.
+	in := []string{"10.0.0.0/8", "172.16.0.0/12"}
+	m := serializeL7Policy(withTrustedProxies(in))
+	if len(m.TrustedProxies) != len(in) {
+		t.Fatalf("serialize dropped trustedProxies: got %v want %v", m.TrustedProxies, in)
+	}
+	back := l7PolicyFromModel(m)
+	if len(back.TrustedProxies) != len(in) {
+		t.Fatalf("model->arg dropped trustedProxies: got %v want %v", back.TrustedProxies, in)
+	}
+	for i := range in {
+		if back.TrustedProxies[i] != in[i] {
+			t.Fatalf("trustedProxies[%d] round-tripped as %q, want %q", i, back.TrustedProxies[i], in[i])
+		}
+	}
+}
+
+func TestL7PolicyExportTrustedProxiesIsHardError(t *testing.T) {
+	// Dropping this silently would not weaken a match, it would change which
+	// address the exported policy attributes every request to.
+	p := withTrustedProxies([]string{"10.0.0.0/8"})
+	if err := exportToGateway(p); err == nil {
+		t.Fatalf("trustedProxies is unrepresentable on Gateway — export MUST return an error, not silently drop")
+	}
+	// A policy that trusts nothing is still faithfully representable.
+	if err := exportToGateway(withTrustedProxies(nil)); err != nil {
+		t.Fatalf("a policy with no trustedProxies must stay exportable, got %v", err)
+	}
+}

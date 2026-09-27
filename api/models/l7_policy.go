@@ -33,6 +33,9 @@ type L7Policy struct {
 	// At least one route is required by shared validation. Evaluation is first-match-wins by ascending position; stored GET order is not an effective-order or capacity-validation report.
 	// Required: true
 	Rules []*L7Rule `json:"rules"`
+
+	// Address ranges this listener's own upstreams occupy, each "A.B.C.D" or "A.B.C.D/N" IPv4. A request whose socket peer falls in one of them is attributed to the right-most address in its inbound forwarding chain that does not, and its chain is extended rather than replaced. Omitted or empty trusts nothing, which is edge behaviour: the peer is the origin. At most 16 ranges; more is refused rather than truncated, as is a range the dataplane parser will not read, and either refusal fails the whole request. An IPv6 peer never falls inside a range and so is never treated as an upstream. These ranges are dropped when the policy is deleted, since the dataplane acts on them only while a policy is attached.
+	TrustedProxies []string `json:"trustedProxies"`
 }
 
 // Validate validates this l7 policy

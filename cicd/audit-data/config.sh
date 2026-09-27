@@ -263,7 +263,7 @@ mkrule() { # mkrule <port> <sse>
     }"
 }
 
-for spec in "2020 false" "2021 true"; do
+for spec in "2020 false" "2021 true" "2022 false"; do
   set -- $spec
   resp=$(mkrule "$1" "$2")
   case "$resp" in
@@ -271,6 +271,41 @@ for spec in "2020 false" "2021 true"; do
     *) echo "  FATAL: service :$1 rejected: $resp"; exit 1 ;;
   esac
 done
+
+sleep 2
+
+# :2022 is the one listener told which upstreams it believes. The ranges are
+# inert without an L7 policy -- the header rewrite and the chain read both
+# gate on there being one -- so the policy is what carries them, and its one
+# rule FORWARDs to the listener's base pool so the inference path behaves
+# exactly as it does on :2020. That is the point: the only difference between
+# the two ports is who the request is attributed to.
+#
+# 10.10.10.0/24 is the client's own subnet, so l3h1 is a believed upstream and
+# the chain it sends is extended rather than replaced. :2020 and :2021 are left
+# telling the gateway nothing, which is edge behaviour and the negative arm.
+TRUST_LBID=$($hexec l3h1 curl -s -m 10 "http://$VIP:11111/netlox/v1/config/loadbalancer/all" \
+  | jq -r '.lbAttr[] | select(.serviceArguments.port==2022) | .serviceArguments.id' | head -n1)
+[[ -n "$TRUST_LBID" && "$TRUST_LBID" != "null" ]] || {
+  echo "  FATAL: could not resolve the stable id of the :2022 listener"; exit 1; }
+
+resp=$($hexec l3h1 curl -s -m 10 -X POST http://$VIP:11111/netlox/v1/config/l7policy \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"id\": \"ad-trust-pol\", \"name\": \"ad-trusted-upstreams\",
+    \"lbId\": \"$TRUST_LBID\",
+    \"trustedProxies\": [ \"10.10.10.0/24\" ],
+    \"rules\": [ {
+      \"position\": 1,
+      \"matchSets\": [ { \"conditions\": [
+        { \"field\": \"PATH\", \"op\": \"STARTS_WITH\", \"value\": \"/\" } ] } ],
+      \"action\": { \"kind\": \"FORWARD\", \"forward\": {} }
+    } ]
+  }")
+case "$resp" in
+  *Success*|"") echo "  service :2022 trusts 10.10.10.0/24 as its own upstreams" ;;
+  *) echo "  FATAL: the trusted-upstream policy was refused: $resp"; exit 1 ;;
+esac
 
 sleep 2
 
@@ -288,6 +323,8 @@ K_MODEL_ID='$K_MODEL_ID'
 K_QUOTA='$K_QUOTA'
 K_QUOTA_ID='$K_QUOTA_ID'
 GW_ARGS='$GW_ARGS'
+TRUST_PORT='2022'
+EDGE_PORT='2020'
 EOF
 
 echo "#########################################"
@@ -295,4 +332,4 @@ echo "audit-data testbed ready"
 echo "#########################################"
 echo "  Control plane API: http://$VIP:11111/netlox/v1"
 echo "  Audit directory:   llb1:$AUDIT_DIR"
-echo "  Services:          $VIP:2020 (non-streaming), $VIP:2021 (SSE)"
+echo "  Services:          $VIP:2020 (non-streaming), $VIP:2021 (SSE), $VIP:2022 (trusted upstreams)"

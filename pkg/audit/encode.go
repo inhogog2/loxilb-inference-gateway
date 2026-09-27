@@ -87,6 +87,14 @@ func (e *encoder) encode(r *Record, st stamp) ([]byte, error) {
 	b = appendOptField(b, "role", r.Actor.Role)
 	b = appendOptField(b, "tenant", r.Actor.Tenant)
 	b = appendOptField(b, "remote", r.Actor.Remote)
+	b = appendOptField(b, "origin_ip", r.Actor.Origin)
+	// The hop count is written only where an origin was derived, so it
+	// cannot be read as a count on a record that decided nothing. Written
+	// even at zero in that case, because zero is the answer that separates
+	// a client that connected directly from a chain walked past our hops.
+	if r.Actor.Origin != "" {
+		b = appendInt(b, "trusted_hops", int64(r.Actor.TrustedHops))
+	}
 	b = appendOptField(b, "delegated", r.Actor.Delegated)
 	if r.Actor.Delegated != "" {
 		b = appendBool(b, "delegation_trusted", r.Actor.DelegationTrusted)
@@ -163,6 +171,15 @@ func appendDataDetail(b []byte, d *DataDetail) []byte {
 	return append(b, '}')
 }
 
+// appendInt writes an integer field whatever its value, for a field whose
+// zero is an answer rather than an absence.
+func appendInt(b []byte, key string, v int64) []byte {
+	b = append(b, ',', '"')
+	b = append(b, key...)
+	b = append(b, '"', ':')
+	return strconv.AppendInt(b, v, 10)
+}
+
 // appendOptInt writes an integer field only when it is non-zero. A
 // reservation field is absent on the records that have no reservation
 // rather than present and zero, so "no reservation" and "a reservation of
@@ -171,10 +188,7 @@ func appendOptInt(b []byte, key string, v int64) []byte {
 	if v == 0 {
 		return b
 	}
-	b = append(b, ',', '"')
-	b = append(b, key...)
-	b = append(b, '"', ':')
-	return strconv.AppendInt(b, v, 10)
+	return appendInt(b, key, v)
 }
 
 // mgmtJSON is the wire shape of MgmtDetail. Keeping the tags on a

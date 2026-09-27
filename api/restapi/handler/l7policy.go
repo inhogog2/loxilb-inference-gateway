@@ -69,6 +69,8 @@ var validateL7Policy = cmn.ValidateL7Policy
 
 const l7HdrMaxFilters = cmn.L7HdrMaxFilters
 
+const l7MaxTrustedProxies = cmn.L7MaxTrustedProxies
+
 // exportToGateway is HARD-ERROR superset-divergence guard (the Cilium
 // GHSA-qcm3-7879-xcww silent-drop bug class). When a policy is exported to a Kubernetes
 // Gateway API target, any feature Gateway CANNOT represent MUST surface as an EXPLICIT ERROR
@@ -79,13 +81,23 @@ const l7HdrMaxFilters = cmn.L7HdrMaxFilters
 //   - per-condition `invert` (Gateway has no negated match),
 //   - the REJECT action kind (Gateway has no synthetic-reject filter),
 //   - a COOKIE field (Gateway HTTPRoute matches have no cookie matcher),
-//   - a FILE_TYPE field (Gateway has no file-extension matcher).
+//   - a FILE_TYPE field (Gateway has no file-extension matcher),
+//   - trustedProxies (Gateway API has no per-listener notion of which upstreams
+//     may be believed; where an implementation offers one it is its own
+//     configuration, outside the exported route).
 //
 // Returns a non-nil error naming the unrepresentable feature when one is present; nil only
 // when the WHOLE policy is faithfully representable on Gateway API.
 func exportToGateway(p *cmn.L7PolicyArg) error {
 	if p == nil {
 		return fmt.Errorf("l7policy: nil body cannot be exported")
+	}
+	// Dropping this one silently would not weaken a match, it would change
+	// which address every request on the listener is attributed to: the
+	// exported policy would name the upstream that forwarded a request in
+	// place of the client that made it, and say nothing about the difference.
+	if len(p.TrustedProxies) > 0 {
+		return fmt.Errorf("l7policy: trustedProxies is unrepresentable on Gateway API — refusing to silently drop")
 	}
 	for ri := range p.Rules {
 		rule := &p.Rules[ri]
@@ -233,9 +245,10 @@ func l7PolicyFromModel(m *models.L7Policy) *cmn.L7PolicyArg {
 		return &cmn.L7PolicyArg{}
 	}
 	p := &cmn.L7PolicyArg{
-		Id:   m.ID,
-		Name: m.Name,
-		LbId: l7Str(m.LbID),
+		Id:             m.ID,
+		Name:           m.Name,
+		LbId:           l7Str(m.LbID),
+		TrustedProxies: append([]string(nil), m.TrustedProxies...),
 	}
 	for _, r := range m.Rules {
 		if r == nil {
@@ -316,9 +329,10 @@ func serializeL7Policy(p *cmn.L7PolicyArg) *models.L7Policy {
 		return &models.L7Policy{}
 	}
 	m := &models.L7Policy{
-		ID:   p.Id,
-		Name: p.Name,
-		LbID: l7Ptr(p.LbId),
+		ID:             p.Id,
+		Name:           p.Name,
+		LbID:           l7Ptr(p.LbId),
+		TrustedProxies: append([]string(nil), p.TrustedProxies...),
 	}
 	for ri := range p.Rules {
 		r := &p.Rules[ri]
