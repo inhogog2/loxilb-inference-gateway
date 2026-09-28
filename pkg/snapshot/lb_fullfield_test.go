@@ -115,6 +115,9 @@ func fullFieldLbRule() cmn.LbRuleMod {
 			CHWBLMeanLoadFactor:         125,
 			CHWBLReplication:            2,
 			CHWBLEnableCacheSalt:        true,
+			// A depth needs a wait: the rule layer refuses one without it.
+			FcMaxQueueDepth:  4,
+			FcMaxQueueWaitMs: 4000,
 			MTLSFrontend: &cmn.MTLSFrontendConfig{
 				ClientCertMode:   "require",
 				ClientCAPath:     "/etc/loxilb/certs/frontend-ca.pem",
