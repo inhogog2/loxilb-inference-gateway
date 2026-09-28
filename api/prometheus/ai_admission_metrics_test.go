@@ -106,6 +106,11 @@ func TestAdmissionCollectorEmitsLabelledSeries(t *testing.T) {
 		qwaitBuckets:   [8]uint64{10, 5, 0, 0, 2, 0, 0, 1},
 		qwaitSumMs:     8_250,
 		qwaitCount:     18,
+		effectiveLimit: 51,
+		adaptState:     2,
+		adaptReason:    1,
+		adaptMoves:     [2]float64{3, 1},
+		warmingEps:     1,
 	}}, [2]float64{0, 1})
 
 	want := `
@@ -198,10 +203,68 @@ loxilb_ai_admission_mode{pool="llm",service="192.168.1.10:8080"} 2
 		t.Errorf("mode series mismatch: %v", err)
 	}
 
+	want = `
+# HELP loxilb_ai_admission_effective_limit The pool-wide ceiling in force right now: the adaptive one while the pool adapts (at most the configured loxilb_ai_admission_limit{role="service"}), else the configured one. 0 means unlimited.
+# TYPE loxilb_ai_admission_effective_limit gauge
+loxilb_ai_admission_effective_limit{pool="llm",service="192.168.1.10:8080"} 51
+`
+	if err := testutil.CollectAndCompare(admissionCollector{}, strings.NewReader(want),
+		"loxilb_ai_admission_effective_limit"); err != nil {
+		t.Errorf("effective limit mismatch: %v", err)
+	}
+
+	// The state and the reason are state sets: exactly one member is 1.
+	want = `
+# HELP loxilb_ai_admission_adapt_state Where the adaptive ceiling stands, 1 for the current state and 0 for the others: off (not adaptive, or no ceiling), open (at the configured ceiling), tightened (below it, following fresh backpressure signals), frozen (below it with no fresh signal: held, never widened on stale telemetry).
+# TYPE loxilb_ai_admission_adapt_state gauge
+loxilb_ai_admission_adapt_state{pool="llm",service="192.168.1.10:8080",state="frozen"} 0
+loxilb_ai_admission_adapt_state{pool="llm",service="192.168.1.10:8080",state="off"} 0
+loxilb_ai_admission_adapt_state{pool="llm",service="192.168.1.10:8080",state="open"} 0
+loxilb_ai_admission_adapt_state{pool="llm",service="192.168.1.10:8080",state="tightened"} 1
+`
+	if err := testutil.CollectAndCompare(admissionCollector{}, strings.NewReader(want),
+		"loxilb_ai_admission_adapt_state"); err != nil {
+		t.Errorf("adapt state mismatch: %v", err)
+	}
+	want = `
+# HELP loxilb_ai_admission_adapt_reason Why the adaptive ceiling last moved or holds, 1 for the current reason: queued (an endpoint reported waiting requests), ttft (an endpoint's time to first token is over the target), clear (fresh signals without backpressure: widened), stale (no fresh signal: held), none.
+# TYPE loxilb_ai_admission_adapt_reason gauge
+loxilb_ai_admission_adapt_reason{pool="llm",reason="clear",service="192.168.1.10:8080"} 0
+loxilb_ai_admission_adapt_reason{pool="llm",reason="none",service="192.168.1.10:8080"} 0
+loxilb_ai_admission_adapt_reason{pool="llm",reason="queued",service="192.168.1.10:8080"} 1
+loxilb_ai_admission_adapt_reason{pool="llm",reason="stale",service="192.168.1.10:8080"} 0
+loxilb_ai_admission_adapt_reason{pool="llm",reason="ttft",service="192.168.1.10:8080"} 0
+`
+	if err := testutil.CollectAndCompare(admissionCollector{}, strings.NewReader(want),
+		"loxilb_ai_admission_adapt_reason"); err != nil {
+		t.Errorf("adapt reason mismatch: %v", err)
+	}
+	want = `
+# HELP loxilb_ai_admission_adapt_moves_total Steps of the adaptive ceiling: direction="down" to four fifths on fresh backpressure, direction="up" by one on a fresh clear second.
+# TYPE loxilb_ai_admission_adapt_moves_total counter
+loxilb_ai_admission_adapt_moves_total{direction="down",pool="llm",service="192.168.1.10:8080"} 3
+loxilb_ai_admission_adapt_moves_total{direction="up",pool="llm",service="192.168.1.10:8080"} 1
+`
+	if err := testutil.CollectAndCompare(admissionCollector{}, strings.NewReader(want),
+		"loxilb_ai_admission_adapt_moves_total"); err != nil {
+		t.Errorf("adapt moves mismatch: %v", err)
+	}
+	want = `
+# HELP loxilb_ai_admission_warming_endpoints Endpoints of the pool inside their warm-up window, their ceilings ramping from a quarter to all of it after a return to service.
+# TYPE loxilb_ai_admission_warming_endpoints gauge
+loxilb_ai_admission_warming_endpoints{pool="llm",service="192.168.1.10:8080"} 1
+`
+	if err := testutil.CollectAndCompare(admissionCollector{}, strings.NewReader(want),
+		"loxilb_ai_admission_warming_endpoints"); err != nil {
+		t.Errorf("warming endpoints mismatch: %v", err)
+	}
+
 	// Per pool: 1 mode + 4 inflight + 5 limit + 1 queued + 1 wait histogram
-	// + 12 decisions = 24, plus the 2 process-wide anomaly counters.
-	if n := testutil.CollectAndCount(admissionCollector{}); n != 26 {
-		t.Errorf("collected %d metrics for one pool, want 26", n)
+	// + 12 decisions + 1 effective limit + 4 adapt states + 5 adapt reasons
+	// + 2 adapt moves + 1 warming = 37, plus the 2 process-wide anomaly
+	// counters.
+	if n := testutil.CollectAndCount(admissionCollector{}); n != 39 {
+		t.Errorf("collected %d metrics for one pool, want 39", n)
 	}
 }
 

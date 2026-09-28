@@ -112,6 +112,9 @@ typedef struct proxy_metrics_snapshot {
      * sockproxy_metrics.go; keep ALL THREE in lockstep, same commit. */
     uint64_t pd_admission_overflow_shed;
     uint64_t hdr_deadline_drops;
+    uint64_t proxy_context_inflight;
+    uint64_t proxy_accept_blocked;
+    uint64_t proxy_accept_bound;
 } proxy_metrics_snapshot_t;
 
 __attribute__((weak))
@@ -170,6 +173,7 @@ int proxy_get_qos_stats(proxy_qos_svc_stat_t *out, int max) {
 #define PROXY_FC_POOL_LEN 64
 #define PROXY_FC_QWAIT_BUCKETS 8
 #define PROXY_FC_LIMITS 8
+#define PROXY_FC_ADAPT_LIMITS 3
 
 typedef struct proxy_fc_svc_stat {
     uint32_t xip;
@@ -192,9 +196,19 @@ typedef struct proxy_fc_svc_stat {
     uint32_t telemetry_stale_ms;
     uint8_t  src[PROXY_FC_LIMITS];
     uint32_t pad2;
+    uint32_t effective_max_outstanding;
+    uint32_t warmup_ms;
+    uint32_t ttft_target_ms;
+    uint8_t  adaptive;
+    uint8_t  adapt_state;
+    uint8_t  adapt_reason;
+    uint8_t  src_adapt[PROXY_FC_ADAPT_LIMITS];
+    uint16_t warming_eps;
+    uint64_t adapt_down;
+    uint64_t adapt_up;
 } proxy_fc_svc_stat_t;
 /* Pinned to the layout in sockproxy_metrics.h. */
-_Static_assert(sizeof(proxy_fc_svc_stat_t) == 312, "proxy_fc_svc_stat_t size");
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 352, "proxy_fc_svc_stat_t size");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 136, "pool offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 200, "queued offset");
@@ -202,6 +216,10 @@ _Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 216, "qwait_bucket
 _Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 288, "qwait_count offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, telemetry_stale_ms) == 296, "telemetry_stale_ms offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, src) == 300, "src offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, effective_max_outstanding) == 312, "effective_max_outstanding offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 324, "adaptive offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 330, "warming_eps offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 336, "adapt_down offset");
 
 __attribute__((weak))
 int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max) {

@@ -16,9 +16,19 @@ PORT_W=2026           # one backend, depth 65536: the memory warning fires at ap
 # (2027 is the port row R13's refused create names; it never exists.)
 PORT_P=2028           # the same two backends, the rule's own ceiling (4) under the env's 8
 PORT_U=2029           # the same two backends, rule ceiling 2 and a queue: raised at runtime
+PORT_AD=2030          # two scraped backends, an adaptive ceiling of 10 on their queue depth
+PORT_TT=2031          # the same two, an adaptive ceiling of 8 on their time to first token
+PORT_WU=2032          # two backends of its own, per-endpoint ceiling 8, a 20 s warm-up
 FC_P_MAX=4
 FC_P_STALE_MS=45000
 FC_U_MAX=2
+FC_AD_MAX=10
+FC_AD_FLOOR=2         # a quarter of the ceiling: what fresh backpressure tightens it to
+FC_AD_STALE_MS=15000  # the scrape comes every 10 s, so this is one missed scrape
+FC_TT_MAX=8
+FC_TT_TARGET_MS=300
+FC_WU_EP=8
+FC_WU_MS=20000
 FC_Q_DEPTH=4
 # The pool's wait is long enough that a waiter outlives the 10 s metric
 # republish the rows poll between parking it and releasing a unit; row T
@@ -31,7 +41,7 @@ GW_ARGS="--audit-dir $AUDIT_DIR --audit-required"
 API="http://$VIP:11111/netlox/v1"
 
 gw_env() { # gw_env <mode> -> the environment the gate reads at pool creation
-  echo "LLB_FC_MODE=$1 LLB_FC_MAX_OUTSTANDING=$FC_MAX_OUT LLB_FC_EP_MAX_INFLIGHT=$FC_EP_CAP"
+  echo "LLB_FC_MODE=$1 LLB_FC_MAX_OUTSTANDING=$FC_MAX_OUT LLB_FC_EP_MAX_INFLIGHT=$FC_EP_CAP${GW_EXTRA_ENV:+ $GW_EXTRA_ENV}"
 }
 
 gw_wait_api() {
@@ -112,6 +122,12 @@ gw_queue_json() { echo ", \"fc_max_queue_depth\": $1, \"fc_max_queue_wait_ms\": 
 gw_p_json() { echo ", \"fc_max_outstanding\": $FC_P_MAX, \"fc_telemetry_stale_ms\": $FC_P_STALE_MS${1:-}"; }
 # gw_u_json <ceiling>: the :PORT_U rule's ceiling and queue
 gw_u_json() { echo ", \"fc_max_outstanding\": $1$(gw_queue_json $FC_Q_DEPTH $FC_Q_WAIT_MS)"; }
+# gw_ad_json <on|off>: the :PORT_AD rule, adaptive on its scraped queue depth
+gw_ad_json() { echo ", \"fc_max_outstanding\": $FC_AD_MAX, \"fc_adaptive\": \"$1\", \"fc_telemetry_stale_ms\": $FC_AD_STALE_MS"; }
+# gw_tt_json: the :PORT_TT rule, adaptive on its time to first token
+gw_tt_json() { echo ", \"fc_max_outstanding\": $FC_TT_MAX, \"fc_adaptive\": \"on\", \"fc_ttft_target_ms\": $FC_TT_TARGET_MS, \"fc_telemetry_stale_ms\": $FC_AD_STALE_MS"; }
+# gw_wu_json: the :PORT_WU rule, a per-endpoint ceiling and a warm-up window
+gw_wu_json() { echo ", \"fc_ep_max_inflight\": $FC_WU_EP, \"fc_warmup_ms\": $FC_WU_MS"; }
 
 gw_add_rules() {
   gw_add_rule $PORT_H1  ""                                                       8080 8081 || return 1
@@ -122,6 +138,9 @@ gw_add_rules() {
   gw_add_rule $PORT_W   "$(gw_queue_json 65536 $FC_Q_WAIT_MS)"                   8080      || return 1
   gw_add_rule $PORT_P   "$(gw_p_json)"                                           8080 8081 || return 1
   gw_add_rule $PORT_U   "$(gw_u_json $FC_U_MAX)"                                 8080 8081 || return 1
+  gw_add_rule $PORT_AD  "$(gw_ad_json on)"                                       8084 8085 || return 1
+  gw_add_rule $PORT_TT  "$(gw_tt_json)"                                          8084 8085 || return 1
+  gw_add_rule $PORT_WU  "$(gw_wu_json)"                                          8082 8083 || return 1
   sleep 2
 }
 

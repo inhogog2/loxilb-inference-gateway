@@ -56,6 +56,15 @@ wait_metric() { # wait_metric <family> <want> <secs> [label-substr ...]
   done
   echo "$got"
 }
+wait_metric_ge() { # wait_metric_ge <family> <min> <secs> [label-substr ...]
+  local fam="$1" want="$2" secs="$3" got="" i; shift 3
+  for i in $(seq 1 "$secs"); do
+    got=$(msum "$fam" "$@")
+    [ "$got" != "unreadable" ] && [ "$got" -ge "$want" ] 2>/dev/null && { echo "$got"; return; }
+    sleep 1
+  done
+  echo "$got"
+}
 svc() { echo "service=\"$VIP:$1\""; }
 inflight() { msum loxilb_ai_admission_inflight "$(svc "$1")" 'role="service"'; }
 queued() { msum loxilb_ai_admission_queued "$(svc "$1")"; }
@@ -385,7 +394,7 @@ echo "J: the gate's accounting stayed consistent"
 chk J1 "no accounting anomaly (underflow)"      0 "$(msum loxilb_ai_admission_anomalies_total 'kind="underflow"')"
 chk J2 "no accounting anomaly (unknown permit)" 0 "$(msum loxilb_ai_admission_anomalies_total 'kind="unknown_permit"')"
 chk J3 "no request was refused for no capacity" 0 "$(msum loxilb_ai_admission_decisions_total 'reason="no_healthy_capacity"')"
-chk J4 "every pool is exported"                 8 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
+chk J4 "every pool is exported"                11 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
 
 # ── Q: the bounded queue, FIFO ──────────────────────────────────────────────
 echo ""
@@ -682,6 +691,113 @@ c=$($hexec l3h1 curl -s -o /dev/null -w '%{http_code}' --max-time 20 "${HDRS[@]}
 chk M16 "admission is restored"                        200 "$c"
 chk M17 "gauge back to zero"                           0 "$(wait_metric loxilb_ai_admission_inflight 0 25 "$(svc $PORT_Q)" 'role="service"')"
 
+# ── AD: the adaptive ceiling on the endpoints' scraped queue depth ──────────
+echo ""
+echo "AD: the :$PORT_AD ceiling ($FC_AD_MAX) tightens on fresh waiting requests, holds on stale telemetry, recovers on fresh clear"
+AD_URL="http://$VIP:$PORT_AD/v1/chat/completions"
+adstate() { # adstate <port> -> "<effective ceiling> <state> <reason>" from the data plane now
+  lb_get "$1" | jq -r '.serviceArguments.fc_effective | "\(.effective_max_outstanding) \(.adapt_state) \(.adapt_reason)"' 2>/dev/null
+}
+wait_adstate() { # wait_adstate <port> <want> <secs>
+  local got="" i
+  for i in $(seq 1 "$3"); do got=$(adstate "$1"); [ "$got" == "$2" ] && { echo "$got"; return; }; sleep 1; done
+  echo "$got"
+}
+wait_adwhy() { # wait_adwhy <port> "<state> <reason>" <secs>: whatever the ceiling
+  local got="" i
+  for i in $(seq 1 "$3"); do got=$(adstate "$1" | cut -d' ' -f2-3); [ "$got" == "$2" ] && { echo "$got"; return; }; sleep 1; done
+  echo "$got"
+}
+be __waiting/0 >/dev/null; be __metrics/on >/dev/null
+chk AD1 "declared on the rule and read back with its source" "on on rule" "$(lb_get $PORT_AD | jq -r '.serviceArguments | "\(.fc_adaptive) \(.fc_effective.adaptive) \(.fc_effective.source.adaptive)"')"
+# Nothing has moved it yet: open at the configured ceiling.
+chk AD2 "open at its ceiling while nothing waits" "$FC_AD_MAX open" "$(wait_adstate $PORT_AD "$FC_AD_MAX open none" 25 | cut -d' ' -f1-2)"
+be __waiting/5 >/dev/null
+# 10 -> 8 -> 6 -> 4 -> 3 -> 2: four fifths per second once the next scrape
+# (every 10 s) reports the waiting requests, never under a quarter.
+chk AD3 "fresh waiting requests tighten it to a quarter" "$FC_AD_FLOOR tightened queued" "$(wait_adstate $PORT_AD "$FC_AD_FLOOR tightened queued" 40)"
+DAD=$(mktemp -d)
+hold_burst "$DAD" 4 capAD "$AD_URL"
+chk AD4 "the gate admits to the tightened ceiling: two of four" "$FC_AD_FLOOR" "$(wait_receipts capAD $FC_AD_FLOOR 15)"
+chk AD5 "the other two refused with 429" 2 "$(wait_codes "$DAD" 429 2 15)"
+release capAD
+be __metrics/off >/dev/null
+# The scrapes fail from now on: once the last good one is older than the
+# pool's telemetry window the ceiling holds where it is and says why.
+chk AD6 "stale telemetry freezes it where it is" "$FC_AD_FLOOR frozen stale" "$(wait_adstate $PORT_AD "$FC_AD_FLOOR frozen stale" 40)"
+sleep 6
+chk AD7 "and a stale second never widens it" "$FC_AD_FLOOR frozen stale" "$(adstate $PORT_AD)"
+be __waiting/0 >/dev/null; be __metrics/on >/dev/null
+chk AD8 "a fresh clear scrape gives it back, one unit a second" "$FC_AD_MAX open clear" "$(wait_adstate $PORT_AD "$FC_AD_MAX open clear" 40)"
+chk_ge AD9 "the steps down are exported" 4 "$(wait_metric_ge loxilb_ai_admission_adapt_moves_total 4 25 "$(svc $PORT_AD)" 'direction="down"')"
+chk_ge AD10 "and the steps up" 8 "$(wait_metric_ge loxilb_ai_admission_adapt_moves_total 8 25 "$(svc $PORT_AD)" 'direction="up"')"
+chk AD11 "the state is exported as a state set" 1 "$(wait_metric loxilb_ai_admission_adapt_state 1 25 "$(svc $PORT_AD)" 'state="open"')"
+# Switched off at runtime: a gate-only replace, applied in place, gives the
+# configured ceiling back at once whatever the evidence.
+be __waiting/5 >/dev/null
+chk AD12 "tightened again" "tightened queued" "$(wait_adwhy $PORT_AD "tightened queued" 40)"
+gw_add_rule $PORT_AD "$(gw_ad_json off)" 8084 8085 >/dev/null
+chk AD13 "adaptive off: the configured ceiling at once" "$FC_AD_MAX off" "$(wait_adstate $PORT_AD "$FC_AD_MAX off none" 5 | cut -d' ' -f1-2)"
+be __waiting/0 >/dev/null
+gw_add_rule $PORT_AD "$(gw_ad_json on)" 8084 8085 >/dev/null
+
+# ── TT: the adaptive ceiling on the time to first token ─────────────────────
+echo ""
+echo "TT: the :$PORT_TT ceiling ($FC_TT_MAX) tightens while streamed responses take over ${FC_TT_TARGET_MS} ms to their first token"
+TT_URL="http://$VIP:$PORT_TT/v1/chat/completions"
+SBODY='{"model":"cap-model","stream":true,"messages":[{"role":"user","content":"x"}]}'
+tt_send() { # tt_send <n> <first-token delay ms> <body>: n requests one after another, their codes
+  local i
+  for i in $(seq 1 "$1"); do
+    $hexec l3h1 curl -s -o /dev/null -w '%{http_code} ' --max-time 20 "${HDRS[@]}" \
+      -H "X-Test-Delay-Ms: $2" -d "$3" "$TT_URL"
+  done
+}
+chk TT1 "open at its ceiling" "$FC_TT_MAX open" "$(wait_adstate $PORT_TT "$FC_TT_MAX open" 40 | cut -d' ' -f1-2)"
+# Buffered responses are never sampled: their first byte is the whole answer.
+tt_send 4 1200 "$BODY" >/dev/null
+sleep 3
+chk TT2 "slow buffered responses leave it open" "$FC_TT_MAX open" "$(adstate $PORT_TT | cut -d' ' -f1-2)"
+chk_has TT3 "three slow streams answered" "200 200 200" "$(tt_send 3 800 "$SBODY")"
+chk TT4 "slow first tokens tighten it" "tightened ttft" "$(wait_adwhy $PORT_TT "tightened ttft" 6)"
+# Fast streams bring the estimate under the target, an eighth per sample on
+# each endpoint, and the ceiling climbs only while no endpoint is over it.
+# Round robin gives each of the two endpoints twelve: 800 ms * (7/8)^12 is
+# about 160 ms. Fourteen (seven each) leave both at about 314 ms, over 300.
+tt_send 24 0 "$SBODY" >/dev/null
+chk TT5 "fast first tokens give it back" "$FC_TT_MAX open" "$(wait_adstate $PORT_TT "$FC_TT_MAX open clear" 20 | cut -d' ' -f1-2)"
+chk TT6 "the target is read back with its source" "$FC_TT_TARGET_MS rule" "$(lb_get $PORT_TT | jq -r '.serviceArguments.fc_effective | "\(.ttft_target_ms) \(.source.ttft_target_ms)"')"
+
+# ── WU: an endpoint back in service ramps up ───────────────────────────────
+echo ""
+echo "WU: after a return to service each :$PORT_WU endpoint ramps from a quarter of its ceiling ($FC_WU_EP) over ${FC_WU_MS} ms"
+WU_URL="http://$VIP:$PORT_WU/v1/chat/completions"
+hoststate() { # hoststate <red|green>: the :$PORT_WU backends' host state (targets 8082, flips its address)
+  $hexec l3h1 curl -s -m 8 -X POST "$API/config/endpointhoststate" -H 'Content-Type: application/json' \
+    -d "{\"hostName\": \"31.31.31.1\", \"epPort\": 8082, \"epProto\": \"tcp\", \"state\": \"$1\"}"
+}
+chk WU1 "the window is read back with its source" "$FC_WU_MS rule 0" "$(lb_get $PORT_WU | jq -r '.serviceArguments.fc_effective | "\(.warmup_ms) \(.source.warmup_ms) \(.warming_endpoints // 0)"')"
+chk_has WU2 "the backends go red" Success "$(hoststate red)"
+sleep 1
+chk_has WU3 "and come back green" Success "$(hoststate green)"
+chk WU4 "both endpoints are warming" 2 "$(wait_lb_field $PORT_WU '.serviceArguments.fc_effective.warming_endpoints' 2 5)"
+DWU=$(mktemp -d)
+hold_burst "$DWU" 8 capWU "$WU_URL"
+chk WU5 "a quarter of each ceiling admitted: four of eight" 4 "$(wait_receipts capWU 4 10)"
+chk WU6 "the other four refused with 429" 4 "$(wait_codes "$DWU" 429 4 10)"
+chk_le WU7 "no endpoint above its ramp" 2 "$(( $(peak_port capWU 8082) > $(peak_port capWU 8083) ? $(peak_port capWU 8082) : $(peak_port capWU 8083) ))"
+release capWU
+sleep $(( FC_WU_MS / 1000 + 1 ))
+chk WU8 "the window over, nothing is warming" 0 "$(wait_lb_field $PORT_WU '(.serviceArguments.fc_effective | select(. != null) | (.warming_endpoints // 0))' 0 5)"
+DWU2=$(mktemp -d)
+hold_burst "$DWU2" 8 capWU2 "$WU_URL"
+chk WU9 "the whole ceiling again: all eight admitted" 8 "$(wait_receipts capWU2 8 10)"
+# The process valve is exported, and with no bound it counts nothing: the
+# accept path stays byte-identical, so eight held requests still read 0.
+chk_has WU10 "unbounded, connection contexts are not counted" "loxilb_proxy_context_inflight 0" "$(metrics_raw)"
+chk_has WU11 "the valve is unbounded and says so" "loxilb_proxy_accept_bound 0" "$(metrics_raw)"
+release capWU2
+
 # ── H: observe mode ─────────────────────────────────────────────────────────
 echo ""
 echo "H: the same load in observe mode is admitted and only counted"
@@ -712,7 +828,24 @@ else
   echo "  [FAIL] H0 the gateway did not come back in observe mode"; nfail=$((nfail+1)); code=1
 fi
 
-rm -rf "$DB" "$DN" "$DC" "$E" "$DG" "$DL" "$DQ" "$DT" "$DX" "$DK" "$DD" "$DM" "$DP" "$DO" "$DU" "${DH:-/nonexistent}" 2>/dev/null
+
+# ── VA: the process accept valve bites, and says so ─────────────────────────
+echo ""
+echo "VA: a gateway with a connection-context bound of 12 holds accepts back past it"
+DVA=$(mktemp -d)
+if GW_EXTRA_ENV="LLB_PD_MAX_TOTAL_INFLIGHT=12" gw_restart enforce; then
+  chk VA1 "the bound is exported" 12 "$(wait_metric loxilb_proxy_accept_bound 12 25)"
+  hold_burst "$DVA" 10 capVA "http://$VIP:$PORT_WU/v1/chat/completions"
+  chk_ge VA2 "accepts were held back at the bound" 1 "$(wait_metric_ge loxilb_proxy_accept_blocked_total 1 25)"
+  # Every held request is a client and a backend context; the valve holds
+  # accepts back once the count reaches the bound.
+  chk_ge VA3 "connection contexts held are counted, up to the bound" 12 "$(wait_metric_ge loxilb_proxy_context_inflight 12 25)"
+  release capVA; release_all
+else
+  echo "  [FAIL] VA0 the gateway did not come back with the valve bound"; nfail=$((nfail+1)); code=1
+fi
+
+rm -rf "$DB" "$DN" "$DC" "$E" "$DG" "$DL" "$DQ" "$DT" "$DX" "$DK" "$DD" "$DM" "$DP" "$DO" "$DU" "$DAD" "$DWU" "$DWU2" "$DVA" "${DH:-/nonexistent}" 2>/dev/null
 
 echo ""
 if [ "$code" -eq 0 ]; then

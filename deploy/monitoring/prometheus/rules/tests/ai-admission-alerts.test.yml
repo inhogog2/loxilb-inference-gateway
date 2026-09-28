@@ -1,0 +1,160 @@
+# promtool unit tests for the loxilb-ai-admission group of loxilb-alerts.yml.
+#
+# One firing case and one must-stay-silent case per alert. The silent cases
+# pin the guards: a pool with the gate off emits every family at zero, and a
+# gateway with no AI service emits none of them.
+#
+# Run: promtool test rules tests/ai-admission-alerts.test.yml
+
+rule_files:
+  - ../loxilb-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ── silence: no AI service, and a gated pool with nothing happening ──────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_ai_admission_decisions_total{instance="gw",service="10.0.0.1:80",pool="p",reason="capacity_shed"}'
+        values: '0x60'
+      - series: 'loxilb_ai_admission_decisions_total{instance="gw",service="10.0.0.1:80",pool="p",reason="admitted"}'
+        values: '0x60'
+      - series: 'loxilb_ai_admission_decisions_total{instance="gw",service="10.0.0.1:80",pool="p",reason="queue_timeout"}'
+        values: '0x60'
+      - series: 'loxilb_ai_admission_queued{instance="gw",service="10.0.0.1:80",pool="p"}'
+        values: '0x60'
+      - series: 'loxilb_ai_admission_limit{instance="gw",service="10.0.0.1:80",pool="p",role="queue"}'
+        values: '0x60'
+      - series: 'loxilb_ai_admission_adapt_state{instance="gw",service="10.0.0.1:80",pool="p",state="frozen"}'
+        values: '0x60'
+      - series: 'loxilb_proxy_accept_blocked_total{instance="gw"}'
+        values: '0x60'
+      - series: 'loxilb_ai_admission_anomalies_total{instance="gw",kind="underflow"}'
+        values: '0x60'
+    alert_rule_test:
+      - alertname: LoxilbAIAdmissionShedding
+        eval_time: 30m
+        exp_alerts: []
+      - alertname: LoxilbAIAdmissionQueueTimeouts
+        eval_time: 30m
+        exp_alerts: []
+      - alertname: LoxilbAIAdmissionQueueNearDepth
+        eval_time: 30m
+        exp_alerts: []
+      - alertname: LoxilbAIAdmissionAdaptiveFrozen
+        eval_time: 30m
+        exp_alerts: []
+      - alertname: LoxilbProxyAcceptValveBlocking
+        eval_time: 30m
+        exp_alerts: []
+      - alertname: LoxilbAIAdmissionAnomaly
+        eval_time: 30m
+        exp_alerts: []
+
+  # ── shedding: refused while admitting, not while idle ────────────────────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_ai_admission_decisions_total{instance="gw",service="10.0.0.1:80",pool="p",reason="capacity_shed"}'
+        values: '0+30x60'           # 1/s
+      - series: 'loxilb_ai_admission_decisions_total{instance="gw",service="10.0.0.1:80",pool="p",reason="admitted"}'
+        values: '0+60x60'
+      - series: 'loxilb_ai_admission_decisions_total{instance="gw",service="10.0.0.2:80",pool="q",reason="capacity_shed"}'
+        values: '0+30x60'           # refusing, but nothing admitted: the guard holds
+      - series: 'loxilb_ai_admission_decisions_total{instance="gw",service="10.0.0.2:80",pool="q",reason="admitted"}'
+        values: '0x60'
+    alert_rule_test:
+      - alertname: LoxilbAIAdmissionShedding
+        eval_time: 20m
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: gw, service: "10.0.0.1:80", pool: p }
+            exp_annotations:
+              summary: "AI pool 10.0.0.1:80 p refusing on capacity for 10m"
+              description: "More than one inference request every 2 s is answered 429 on capacity while the pool keeps admitting: the pool is at its ceiling. If the adaptive ceiling is below the configured one the engines asked for it; otherwise raise the ceiling or add endpoints (runbook: docs/load-balancing/23-ai-admission-flow-control.md)."
+              dashboard: "LoxiLB / AI Gateway"
+              panel: "Gate decisions/s by reason"
+
+  # ── queue timeouts ───────────────────────────────────────────────────────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_ai_admission_decisions_total{instance="gw",service="10.0.0.1:80",pool="p",reason="queue_timeout"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - alertname: LoxilbAIAdmissionQueueTimeouts
+        eval_time: 20m
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: gw, service: "10.0.0.1:80", pool: p }
+            exp_annotations:
+              summary: "AI pool 10.0.0.1:80 p ending queued requests with 504"
+              description: "Requests wait their whole fc_max_queue_wait_ms and are answered 504 admission_queue_timeout: at this load the queue only delays the refusal. Shorten the wait or add capacity."
+              dashboard: "LoxiLB / AI Gateway"
+              panel: "Gate decisions/s by reason"
+
+  # ── queue near its depth; a pool with no queue never fires ───────────────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_ai_admission_queued{instance="gw",service="10.0.0.1:80",pool="p"}'
+        values: '9x60'
+      - series: 'loxilb_ai_admission_limit{instance="gw",service="10.0.0.1:80",pool="p",role="queue"}'
+        values: '10x60'
+      - series: 'loxilb_ai_admission_queued{instance="gw",service="10.0.0.2:80",pool="q"}'
+        values: '9x60'
+      - series: 'loxilb_ai_admission_limit{instance="gw",service="10.0.0.2:80",pool="q",role="queue"}'
+        values: '0x60'
+    alert_rule_test:
+      - alertname: LoxilbAIAdmissionQueueNearDepth
+        eval_time: 20m
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: gw, service: "10.0.0.1:80", pool: p }
+            exp_annotations:
+              summary: "AI pool 10.0.0.1:80 p queue above 80% of its depth for 10m"
+              description: "The queue absorbs a sustained overload, not a burst; each waiter parks about 1 MiB of client buffer. Add capacity rather than depth."
+              dashboard: "LoxiLB / AI Gateway"
+              panel: "Queued vs queue depth"
+
+  # ── adaptive ceiling frozen ──────────────────────────────────────────────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_ai_admission_adapt_state{instance="gw",service="10.0.0.1:80",pool="p",state="frozen"}'
+        values: '0x5 1x60'
+    alert_rule_test:
+      - alertname: LoxilbAIAdmissionAdaptiveFrozen
+        eval_time: 20m
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: gw, service: "10.0.0.1:80", pool: p }
+            exp_annotations:
+              summary: "AI pool 10.0.0.1:80 p adaptive ceiling frozen on stale telemetry"
+              description: "The ceiling was tightened and the engines' reports stopped (their /metrics fails or is unreachable): it is held where it was and never widened on stale data. Check the engines' /metrics and loxilb_ai_worker_scrape_total; fc_adaptive off by a replace returns the configured ceiling at once."
+              dashboard: "LoxiLB / AI Gateway"
+              panel: "Adaptive ceiling vs configured"
+
+  # ── accept valve holding connections back ────────────────────────────────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_proxy_accept_blocked_total{instance="gw"}'
+        values: '0+5x60'
+    alert_rule_test:
+      - alertname: LoxilbProxyAcceptValveBlocking
+        eval_time: 20m
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: gw }
+            exp_annotations:
+              summary: "loxilb holding new connections back at its context bound on gw"
+              description: "loxilb_proxy_context_inflight reached LLB_PD_MAX_TOTAL_INFLIGHT and accepts wait in the listen backlog, before any pool's admission gate. Raise the bound if memory allows, else add gateway instances."
+              dashboard: "LoxiLB / AI Gateway"
+              panel: "Accept valve: contexts vs bound"
+
+  # ── a bookkeeping anomaly ────────────────────────────────────────────────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_ai_admission_anomalies_total{instance="gw",kind="underflow"}'
+        values: '0x10 1x50'
+    alert_rule_test:
+      - alertname: LoxilbAIAdmissionAnomaly
+        eval_time: 10m
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: gw, kind: underflow }
+            exp_annotations:
+              summary: "AI admission gate bookkeeping anomaly (underflow)"
+              description: "A capacity unit was released that was never taken (underflow) or an executing request had no pool (unknown_permit). This is a defect, not load: report it with the gateway log."
+              dashboard: "LoxiLB / AI Gateway"
+              panel: "Gate accounting anomalies"

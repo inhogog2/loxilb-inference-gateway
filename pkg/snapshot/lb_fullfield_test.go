@@ -124,6 +124,9 @@ func fullFieldLbRule() cmn.LbRuleMod {
 			FcPrefillMaxInflight: 2,
 			FcDecodeMaxInflight:  6,
 			FcTelemetryStaleMs:   60000,
+			FcAdaptive:           "on",
+			FcWarmupMs:           20000,
+			FcTtftTargetMs:       800,
 			MTLSFrontend: &cmn.MTLSFrontendConfig{
 				ClientCertMode:   "require",
 				ClientCAPath:     "/etc/loxilb/certs/frontend-ca.pem",

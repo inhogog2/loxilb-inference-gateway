@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-09-27T11:49:07+00:00",
-  "source_revision": "aa6c72eb2154b25d2b554a14707f22fc6d6fbe9b",
+  "generated_at": "2026-09-28T13:01:07+00:00",
+  "source_revision": "a1f8a6365c8558a8185c82f0254220c097c062df",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 278,
+  "gateway_families": 286,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 243,
+  "absent": 251,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -601,6 +601,51 @@
    }
   },
   {
+   "name": "loxilb_ai_admission_adapt_moves_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "direction",
+     "pool",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_admission_adapt_reason",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": [
+     "pool",
+     "reason",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_admission_adapt_state",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": [
+     "pool",
+     "service",
+     "state"
+    ]
+   }
+  },
+  {
    "name": "loxilb_ai_admission_anomalies_total",
    "owner": "loxilb",
    "class": "default",
@@ -624,6 +669,20 @@
     "labels": [
      "pool",
      "reason",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_admission_effective_limit",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": [
+     "pool",
      "service"
     ]
    }
@@ -688,6 +747,20 @@
   },
   {
    "name": "loxilb_ai_admission_queued",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": [
+     "pool",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_admission_warming_endpoints",
    "owner": "loxilb",
    "class": "default",
    "parity": "absent",
@@ -2829,6 +2902,28 @@
    }
   },
   {
+   "name": "loxilb_proxy_accept_blocked_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_proxy_accept_bound",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": []
+   }
+  },
+  {
    "name": "loxilb_proxy_active_connections",
    "owner": "loxilb",
    "class": "default",
@@ -2924,6 +3019,17 @@
    "present_upstream": false,
    "gateway": {
     "type": "counter",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_proxy_context_inflight",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
     "labels": []
    }
   },

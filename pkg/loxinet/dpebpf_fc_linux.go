@@ -78,17 +78,24 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 		mode = fcModeNames[st.mode]
 	}
 	return cmn.FcEffectiveArg{
-		Mode:                mode,
-		MaxOutstanding:      uint32(st.max_outstanding),
-		EpMaxInflight:       uint32(st.ep_cap[0]),
-		PrefillMaxInflight:  uint32(st.ep_cap[1]),
-		DecodeMaxInflight:   uint32(st.ep_cap[2]),
-		QueueDepth:          uint32(st.max_queue_depth),
-		QueueWaitMs:         uint32(st.max_queue_wait_ms),
-		Inflight:            uint32(st.inflight),
-		Queued:              uint32(st.queued),
-		QueueMemoryBoundMib: uint64(st.max_queue_depth),
-		TelemetryStaleMs:    uint32(st.telemetry_stale_ms),
+		Mode:                    mode,
+		MaxOutstanding:          uint32(st.max_outstanding),
+		EpMaxInflight:           uint32(st.ep_cap[0]),
+		PrefillMaxInflight:      uint32(st.ep_cap[1]),
+		DecodeMaxInflight:       uint32(st.ep_cap[2]),
+		QueueDepth:              uint32(st.max_queue_depth),
+		QueueWaitMs:             uint32(st.max_queue_wait_ms),
+		Inflight:                uint32(st.inflight),
+		Queued:                  uint32(st.queued),
+		QueueMemoryBoundMib:     uint64(st.max_queue_depth),
+		TelemetryStaleMs:        uint32(st.telemetry_stale_ms),
+		Adaptive:                fcOnOff(st.adaptive),
+		WarmupMs:                uint32(st.warmup_ms),
+		TtftTargetMs:            uint32(st.ttft_target_ms),
+		EffectiveMaxOutstanding: uint32(st.effective_max_outstanding),
+		AdaptState:              fcNameOf(fcAdaptStateNames, uint8(st.adapt_state)),
+		AdaptReason:             fcNameOf(fcAdaptReasonNames, uint8(st.adapt_reason)),
+		WarmingEndpoints:        uint32(st.warming_eps),
 		Source: cmn.FcEffectiveSource{
 			Mode:               fcSourceName(st.src[0]),
 			MaxOutstanding:     fcSourceName(st.src[1]),
@@ -98,8 +105,33 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 			QueueDepth:         fcSourceName(st.src[5]),
 			QueueWaitMs:        fcSourceName(st.src[6]),
 			TelemetryStaleMs:   fcSourceName(st.src[7]),
+			Adaptive:           fcSourceName(st.src_adapt[0]),
+			WarmupMs:           fcSourceName(st.src_adapt[1]),
+			TtftTargetMs:       fcSourceName(st.src_adapt[2]),
 		},
 	}, true
+}
+
+// The data plane's enum fc_adapt_state and enum fc_adapt_reason, spelled
+// as sockproxy_fc.c spells them.
+var (
+	fcAdaptStateNames  = []string{"off", "open", "tightened", "frozen"}
+	fcAdaptReasonNames = []string{"none", "queued", "ttft", "clear", "stale"}
+)
+
+func fcNameOf(names []string, v uint8) string {
+	if int(v) < len(names) {
+		return names[v]
+	}
+	return "unknown"
+}
+
+// fcOnOff names the adaptive switch in force.
+func fcOnOff(v C.uint8_t) string {
+	if v != 0 {
+		return "on"
+	}
+	return "off"
 }
 
 // fcSourceName names enum fc_src: where a value in force came from.

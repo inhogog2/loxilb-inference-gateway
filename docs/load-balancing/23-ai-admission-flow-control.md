@@ -170,6 +170,66 @@ at most 3600000. The scraper stamps whole seconds, so the window is
 effectively rounded to them. The window in force is
 `fc_effective.telemetry_stale_ms`.
 
+The same window decides what the adaptive ceiling below may act on.
+
+## The adaptive service ceiling
+
+With `fc_adaptive` `on` (or `LLB_FC_ADAPTIVE=on` and the rule declaring
+nothing), the pool-wide ceiling in force follows what the pool's engines
+report, between a quarter of the configured `fc_max_outstanding` (at least
+one) and all of it. Once a second, per pool:
+
+| The pool's endpoints, within the telemetry window | The ceiling in force |
+|---|---|
+| an endpoint reports requests waiting in its engine (`vllm:num_requests_waiting` above 0) | four fifths of what it was, never below the quarter (reason `queued`) |
+| an endpoint's time to first token is above `fc_ttft_target_ms` | the same (reason `ttft`) |
+| fresh reports, no backpressure | one unit more, up to the configured ceiling; the request waiting longest is woken for it (reason `clear`) |
+| nothing fresh (the scrapes fail, or stopped) | unchanged: it is held, never widened (state `frozen`, reason `stale`) |
+
+Only fresh evidence moves it, and only fresh evidence without backpressure
+widens it: a gateway that has lost sight of its engines keeps the tighter
+bound it last had reason for. The configured ceiling stays the hard bound;
+the adaptive one is never above it, and a pool without a service ceiling
+(`fc_max_outstanding` `0` in force) has nothing to adapt.
+
+The waiting requests come from the engine's own `/metrics`, which the
+gateway scrapes every 10 s for every rule that adapts (and for P/D rules,
+whose scorers read the same values). A service with several model pools on
+one VIP and port gets the depth on its first pool only; the others adapt on
+the time to first token alone.
+
+The time to first token is measured on streamed responses: from the moment
+a request is admitted (a wait at the gate is not the engine's) to its first
+data event, and credited to the endpoint that holds its unit (the decode
+endpoint of a disaggregated request). Each endpoint keeps an average that
+weights a new sample one eighth, so an endpoint that was twice over the
+target needs about eight fast samples to come back under it. One endpoint
+over the target is enough to tighten the pool, and the ceiling climbs again
+only while no endpoint is. An average older than the telemetry window is
+not used: with nothing fresh the ceiling freezes where it is, and the next
+sample starts that endpoint's average over. A buffered response is not measured: its
+headers come when the whole completion is done, so its first byte says how
+long the answer was, not how soon the engine started. `fc_ttft_target_ms`
+`0` in force leaves the time to first token out.
+
+`fc_effective` reads back `adaptive`, `effective_max_outstanding` (the
+ceiling in force now), `adapt_state` (`off`, `open` at the ceiling,
+`tightened`, `frozen`) and `adapt_reason`. Turning `fc_adaptive` off by a
+replace gives the configured ceiling back at once; a replace that lowers
+the ceiling takes the adaptive one down with it, and one that raises it
+lets a tightened pool climb on, one unit a second.
+
+## Warm-up after a return to service
+
+An endpoint that comes back (its circuit breaker closes, its health probe
+or host state turns it active again, or a replace adds it) takes a full
+share of a burst at once; a cold engine then answers slowly or fails. With
+`fc_warmup_ms` on the rule (or `LLB_FC_WARMUP_MS`), its per-endpoint
+ceilings ramp instead: a quarter of each (at least one) at the moment it
+returns, rising in a straight line to all of it at the end of the window.
+An unlimited role stays unlimited. The service ceiling is not ramped.
+`fc_effective.warming_endpoints` counts the endpoints inside their window.
+
 ## What the client sees
 
 Every refusal carries `Retry-After` in seconds (`1` for a ceiling refusal;
@@ -217,11 +277,52 @@ pool key) and are emitted for every AI-gateway pool in every mode.
 | `loxilb_ai_admission_queued` | gauge | requests waiting right now |
 | `loxilb_ai_admission_queue_wait_seconds` | histogram | how long resumed requests waited (buckets 10 ms to 5 s) |
 | `loxilb_ai_admission_decisions_total{reason}` | counter | `admitted`, `capacity_shed`, `no_healthy_capacity`, `observe_would_shed`, `bypass_non_inference`, `queued`, `queue_full`, `queue_timeout`, `cancelled`, `drained`, `observe_would_queue`, `draining` |
+| `loxilb_ai_admission_effective_limit` | gauge | the service ceiling in force now: the adaptive one while the pool adapts, else the configured one |
+| `loxilb_ai_admission_adapt_state{state}` | gauge | state set, `1` for the current one: `off`, `open`, `tightened`, `frozen` |
+| `loxilb_ai_admission_adapt_reason{reason}` | gauge | state set: `none`, `queued`, `ttft`, `clear`, `stale` |
+| `loxilb_ai_admission_adapt_moves_total{direction}` | counter | steps of the adaptive ceiling, `down` and `up` |
+| `loxilb_ai_admission_warming_endpoints` | gauge | endpoints inside their warm-up window |
 | `loxilb_ai_admission_anomalies_total{kind}` | counter | process-wide bookkeeping faults (`underflow`, `unknown_permit`); any increase is a defect, not load |
+
+The process accept valve (`LLB_PD_MAX_TOTAL_INFLIGHT`) bounds connection
+contexts, not requests, before any pool sees them:
+
+| Family | Type | Meaning |
+|---|---|---|
+| `loxilb_proxy_context_inflight` | gauge | connection contexts held, client and backend legs alike; counted only while the valve is on, so `0` when unbounded |
+| `loxilb_proxy_accept_bound` | gauge | the bound; `0` when unbounded |
+| `loxilb_proxy_accept_blocked_total` | counter | times an accept was declined at the bound (the connection waits in the listen backlog); counted on every poll of the listener while at the bound, so it grows with the time spent there, not with the connections waiting |
+
+Known cost: while the node sits at the bound, the notifier thread that
+serves the listener polls it continuously (the listener stays readable
+with connections waiting in its backlog), so that thread uses a full CPU
+core for as long as the bound holds; measured on a test bed at the bound,
+about 330,000 declined accepts a second on one core. Below the bound, and
+with `LLB_PD_MAX_TOTAL_INFLIGHT` unset, there is no cost. Size the bound
+so that it is reached only in overload, and treat a sustained
+`loxilb_proxy_accept_blocked_total` rate as a capacity alarm.
 
 The AI dashboard's "AI admission gate" row plots in flight against the
 ceiling, queued against the depth, the queue wait p50/p95 and the decisions
 by reason.
+
+## Runbook
+
+| What you see | What it means | What to do |
+|---|---|---|
+| `decisions_total{reason="capacity_shed"}` rising while `effective_limit` equals `limit{role="service"}` | the pool is at its configured ceiling | raise `fc_max_outstanding` if the engines have headroom (their own `num_requests_waiting` stays at 0), else add endpoints |
+| the same while `effective_limit` is below the configured one, `adapt_reason` `queued` or `ttft` | the engines report backpressure and the gateway is shedding in front of them, as intended | add capacity; a target (`fc_ttft_target_ms`) far below what the model can do keeps the ceiling at its floor |
+| `adapt_state{state="frozen"}` | the scrapes stopped (engine `/metrics` down or blocked) while the ceiling was tightened: it holds | check the engines' `/metrics` and `loxilb_ai_worker_scrape_total`; turn `fc_adaptive` off by a replace to return to the configured ceiling at once |
+| `decisions_total{reason="queue_timeout"}` rising | requests wait a whole `fc_max_queue_wait_ms` | the queue only delays refusals at this load: shorten the wait or add capacity |
+| `queued` near `limit{role="queue"}` for minutes | the queue absorbs a sustained, not a burst, overload | add capacity; a deeper queue parks more client memory (depth × 1 MiB) |
+| `warming_endpoints` above 0 after every health flap | an endpoint flaps between down and up | fix the endpoint; its ramp restarts on every return |
+| `proxy_accept_blocked_total` rising | the node is at its connection-context bound; new connections wait in the listen backlog | raise `LLB_PD_MAX_TOTAL_INFLIGHT` if memory allows, else add gateway instances |
+| `anomalies_total` above 0 | a bookkeeping defect | report it with the gateway log |
+
+The shipped alert rules (`deploy/monitoring/prometheus/rules/loxilb-alerts.yml`,
+group `loxilb-ai-admission`) fire on sustained shedding, queue timeouts, a
+queue held near its depth, a frozen adaptive ceiling, the accept valve
+holding connections back, and any anomaly.
 
 ## Limits
 

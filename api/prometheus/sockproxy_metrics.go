@@ -122,6 +122,9 @@ typedef struct proxy_metrics_snapshot {
     // loxilb-ebpf/common/sockproxy_metrics.h and proxy_metrics_stub.c;
     // keep ALL THREE in lockstep, same commit.
     uint64_t hdr_deadline_drops;
+    uint64_t proxy_context_inflight;
+    uint64_t proxy_accept_blocked;
+    uint64_t proxy_accept_bound;
 } proxy_metrics_snapshot_t;
 
 // C function from sockproxy.c
@@ -609,7 +612,8 @@ var (
 	// docker-log grep. These belong to the PER-EP admission layer (:
 	// LLB_PD_MAX_INFLIGHT_PER_EP cap + LLB_PD_QUEUE_DEPTH_PER_EP FIFO) — a
 	// DIFFERENT mechanism from global valve
-	// (pd_admission_total_inflight/pd_admission_total_blocked, sockproxy.h).
+	// (pd_admission_total_inflight/pd_admission_total_blocked, sockproxy.h),
+	// exported as loxilb_proxy_context_inflight / loxilb_proxy_accept_blocked_total.
 
 	// Metric #26: P/D per-EP admission sheds (Counter)
 	pdAdmissionShedTotal = promauto.NewCounter(
@@ -644,6 +648,27 @@ var (
 		prometheus.CounterOpts{
 			Name: "loxilb_proxy_header_deadline_drops_total",
 			Help: "Client connections closed because the request headers did not complete within the listener's header-completion deadline (timeout_tcp_inspect_ms, default 10 s). A steady trickle is slow or half-open clients being shed; a burst alongside a p99 rise is a slowloris hold being cut.",
+		},
+	)
+
+	// The process accept valve (LLB_PD_MAX_TOTAL_INFLIGHT): what it holds,
+	// what it held back, and its bound.
+	proxyContextInflight = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "loxilb_proxy_context_inflight",
+			Help: "Proxy connection contexts held right now, client and backend legs alike: the quantity the process accept valve (LLB_PD_MAX_TOTAL_INFLIGHT) bounds. It counts contexts, not requests. Maintained only while the valve is on (LLB_PD_MAX_TOTAL_INFLIGHT > 0): with no bound the proxy does not count, and this reads 0.",
+		},
+	)
+	proxyAcceptBlockedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "loxilb_proxy_accept_blocked_total",
+			Help: "Times the process valve declined to accept because loxilb_proxy_context_inflight had reached loxilb_proxy_accept_bound; the connection waits in the listen backlog. Counted on every poll of the listener while at the bound, so it measures how long the node sat there, not how many connections waited. Any sustained rate is the node at its connection footprint bound.",
+		},
+	)
+	proxyAcceptBound = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "loxilb_proxy_accept_bound",
+			Help: "The process accept valve's bound on connection contexts (LLB_PD_MAX_TOTAL_INFLIGHT); 0 when unbounded.",
 		},
 	)
 
@@ -967,6 +992,8 @@ func RunSockproxyMetrics(ctx context.Context) {
 		proxyCacheBytes.Set(float64(current.cache_bytes_total))
 		proxyCacheBytesMaxConn.Set(float64(current.cache_bytes_max_conn))
 		proxyCacheConnsQueued.Set(float64(current.cache_conns_queued))
+		proxyContextInflight.Set(float64(current.proxy_context_inflight))
+		proxyAcceptBound.Set(float64(current.proxy_accept_bound))
 
 		// 3. Update COUNTERS (delta from cumulative C atomics with overflow protection)
 		if current.conversation_hits >= prevSockproxyMetrics.conversation_hits {
@@ -1126,6 +1153,10 @@ func RunSockproxyMetrics(ctx context.Context) {
 		if current.hdr_deadline_drops >= prevSockproxyMetrics.hdr_deadline_drops {
 			delta := current.hdr_deadline_drops - prevSockproxyMetrics.hdr_deadline_drops
 			proxyHeaderDeadlineDropsTotal.Add(float64(delta))
+		}
+		if current.proxy_accept_blocked >= prevSockproxyMetrics.proxy_accept_blocked {
+			delta := current.proxy_accept_blocked - prevSockproxyMetrics.proxy_accept_blocked
+			proxyAcceptBlockedTotal.Add(float64(delta))
 		}
 		if current.pd_cb_proactive_heal >= prevSockproxyMetrics.pd_cb_proactive_heal {
 			delta := current.pd_cb_proactive_heal - prevSockproxyMetrics.pd_cb_proactive_heal

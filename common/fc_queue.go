@@ -35,6 +35,49 @@ const FcCapMax = 100000
 // FcTelemetryStaleMsMax bounds a rule's telemetry window (an hour).
 const FcTelemetryStaleMsMax = 3600000
 
+// FcWarmupMsMax bounds a rule's endpoint warm-up window (an hour).
+const FcWarmupMsMax = 3600000
+
+// FcTtftTargetMsMax bounds a rule's TTFT target (an hour).
+const FcTtftTargetMsMax = 3600000
+
+// The data plane's encoding of a rule's adaptive switch (enum
+// fc_rule_adaptive), shifted like the mode so a rule can say "off" under an
+// environment that has it on.
+const (
+	FcRuleAdaptiveInherit uint8 = iota
+	FcRuleAdaptiveOff
+	FcRuleAdaptiveOn
+)
+
+// FcAdaptiveToRule maps a rule's fc_adaptive to the data plane's encoding.
+// Empty and "inherit" both mean the process default; anything else is
+// refused.
+func FcAdaptiveToRule(v string) (uint8, error) {
+	switch v {
+	case "", "inherit":
+		return FcRuleAdaptiveInherit, nil
+	case "off":
+		return FcRuleAdaptiveOff, nil
+	case "on":
+		return FcRuleAdaptiveOn, nil
+	}
+	return 0, NewValidationError("fc_adaptive",
+		"fc_adaptive must be one of on, off or inherit")
+}
+
+// FcAdaptiveFromRule is FcAdaptiveToRule's inverse for the read-back: the
+// process default reads as empty, so it is omitted.
+func FcAdaptiveFromRule(a uint8) string {
+	switch a {
+	case FcRuleAdaptiveOff:
+		return "off"
+	case FcRuleAdaptiveOn:
+		return "on"
+	}
+	return ""
+}
+
 // The data plane's encoding of a rule's gate mode (enum fc_rule_mode): 0
 // runs on the process default, the others are shifted by one so a rule can
 // say "off" under an enforcing environment.

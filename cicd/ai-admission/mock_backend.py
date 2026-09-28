@@ -21,13 +21,19 @@ Endpoints:
                               nonce, in the order they arrived
   GET  /__release/<nonce>     let every held request with that nonce answer
   GET  /__release_all         let every held request answer
+  GET  /metrics               the engine's own metrics, as the gateway's
+                              scraper reads them: vllm:num_requests_waiting
+  GET  /__waiting/<n>         report <n> requests waiting from now on (every port)
+  GET  /__metrics/off|on      stop answering /metrics (503) or answer again,
+                              so the gateway's view of the engine goes stale
 
 Request headers that shape the answer:
   X-Test-Nonce: <n>       counted as a receipt and tracked for its peak
   X-Test-Hold: 1          the request is read in full, counted, then held
                           until released (or 90 s), so a caller can look at
                           the gateway while the request is executing
-  X-Test-Delay-Ms: <ms>   time to first byte
+  X-Test-Delay-Ms: <ms>   time to first byte (for a stream: to its first
+                          event, the time to first token)
   X-Test-Fail: <status>   answer with that status and an error body
   X-Test-Reset: 1         drop the connection with a TCP RST, no answer
   X-Test-Forever: 1       with "stream": true, keep sending SSE chunks until
@@ -63,6 +69,8 @@ ORDER = {}           # nonce -> request ids in arrival order
 RELEASED = set()     # nonces whose holds were released
 RELEASE_ALL = 0      # generation: bumped by /__release_all
 COND = threading.Condition(LOCK)
+WAITING = 0          # vllm:num_requests_waiting reported by /metrics
+METRICS_ON = True    # /metrics answers; off: 503, the scrape fails
 
 
 class Server(ThreadingMixIn, HTTPServer):
@@ -144,10 +152,36 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── routes ─────────────────────────────────────────────────────────────
     def do_GET(self):
+        global WAITING, METRICS_ON
         path = urlparse(self.path).path
         nonce = self.headers.get("X-Test-Nonce", "")
         if path == "/health":
             self._send_json({"status": "ok"})
+            return
+        if path == "/metrics":
+            with LOCK:
+                on, waiting = METRICS_ON, WAITING
+            if not on:
+                self.send_error(503)
+                return
+            payload = ("# TYPE vllm:num_requests_waiting gauge\n"
+                       "vllm:num_requests_waiting{model_name=\"cap-model\"} %d\n"
+                       % waiting).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if path.startswith("/__waiting/"):
+            with LOCK:
+                WAITING = int(path[len("/__waiting/"):] or 0)
+            self._send_json({"waiting": WAITING})
+            return
+        if path in ("/__metrics/off", "/__metrics/on"):
+            with LOCK:
+                METRICS_ON = path.endswith("/on")
+            self._send_json({"metrics": METRICS_ON})
             return
         if path == "/v1/models":
             # A non-inference request: counted like any other arrival so a
