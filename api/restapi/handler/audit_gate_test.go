@@ -26,6 +26,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -498,6 +499,146 @@ func TestAuditGateResultLossIsCounted(t *testing.T) {
 	}
 	if AuditResultDrops() != before+1 {
 		t.Fatalf("result loss not counted: %d -> %d", before, AuditResultDrops())
+	}
+}
+
+// doPanicking sends a request through the fixture and returns what the
+// gate let escape: a handler's panic has to reach the server unchanged.
+func (f *gateFixture) doPanicking(method, path, body string) (escaped any) {
+	f.t.Helper()
+	defer func() { escaped = recover() }()
+	f.do(method, path, body)
+	return nil
+}
+
+// A handler that panics was admitted: its intent is durable, so the trail
+// must carry its result, and the panic must still reach the server.
+func TestAuditGateRecordsTheResultWhenTheHandlerPanics(t *testing.T) {
+	f := newGateFixture(t)
+	f.inside = func(*http.Request) { panic("handler fault") }
+	if got := f.doPanicking(http.MethodPost, "/netlox/v1/config/loadbalancer", `{"a":1}`); got != "handler fault" {
+		t.Fatalf("the gate did not pass the handler's panic on unchanged: %v", got)
+	}
+	pairs := f.pairs()
+	if len(pairs) != 1 || pairs[0].intent == nil || pairs[0].result == nil {
+		t.Fatalf("want one complete pair, got %+v", pairs)
+	}
+	if o := pairs[0].result["outcome"].(map[string]any); o["status"] != float64(500) || o["ok"] != false || o["reason"] != "upstream_error" {
+		t.Fatalf("a handler that answered nothing is recorded as %v", o)
+	}
+}
+
+// The status a handler had already sent is the one the client saw, and is
+// the one recorded.
+func TestAuditGateRecordsTheStatusAPanickingHandlerAlreadySent(t *testing.T) {
+	f := newGateFixture(t)
+	f.h = AuditGateMiddleware(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		rw.WriteHeader(http.StatusCreated)
+		panic("fault after answering")
+	}))
+	if got := f.doPanicking(http.MethodPost, "/netlox/v1/config/loadbalancer", `{"a":1}`); got == nil {
+		t.Fatal("the panic did not reach the server")
+	}
+	pairs := f.pairs()
+	if len(pairs) != 1 || pairs[0].result == nil {
+		t.Fatalf("want one complete pair, got %+v", pairs)
+	}
+	if o := pairs[0].result["outcome"].(map[string]any); o["status"] != float64(201) {
+		t.Fatalf("recorded %v, the client was sent 201", o)
+	}
+}
+
+// A flush answers the client with the implicit 200 even when no status was
+// written, so a handler that flushes and then panics is recorded as 200.
+func TestAuditGateRecordsAFlushedAnswerAsSent(t *testing.T) {
+	f := newGateFixture(t)
+	f.h = AuditGateMiddleware(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		rw.(http.Flusher).Flush()
+		panic("fault after flushing")
+	}))
+	if got := f.doPanicking(http.MethodPost, "/netlox/v1/config/loadbalancer", `{"a":1}`); got == nil {
+		t.Fatal("the panic did not reach the server")
+	}
+	pairs := f.pairs()
+	if len(pairs) != 1 || pairs[0].result == nil {
+		t.Fatalf("want one complete pair, got %+v", pairs)
+	}
+	if o := pairs[0].result["outcome"].(map[string]any); o["status"] != float64(200) {
+		t.Fatalf("recorded %v, the client was sent 200 by the flush", o)
+	}
+}
+
+// runtime.Goexit ends the handler without a panic recover can see; the
+// result is recorded all the same.
+func TestAuditGateRecordsTheResultWhenTheHandlerExitsItsGoroutine(t *testing.T) {
+	f := newGateFixture(t)
+	f.inside = func(*http.Request) { goruntime.Goexit() }
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.do(http.MethodPost, "/netlox/v1/config/loadbalancer", `{"a":1}`)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never finished")
+	}
+	pairs := f.pairs()
+	if len(pairs) != 1 || pairs[0].result == nil {
+		t.Fatalf("want one complete pair, got %+v", pairs)
+	}
+	if o := pairs[0].result["outcome"].(map[string]any); o["status"] != float64(500) {
+		t.Fatalf("recorded %v", o)
+	}
+}
+
+// A listing read that panics still leaves its one result-only record.
+func TestAuditGateListReadRecordsAPanickingHandler(t *testing.T) {
+	f := newGateFixture(t)
+	f.inside = func(*http.Request) { panic("listing fault") }
+	if got := f.doPanicking(http.MethodGet, "/netlox/v1/auth/users", ""); got != "listing fault" {
+		t.Fatalf("the panic did not reach the server unchanged: %v", got)
+	}
+	recs := f.records()
+	if len(recs) != 1 || recs[0]["phase"] != "result" || recs[0]["event_type"] != "read.credential.list" {
+		t.Fatalf("want the listing's result record, got %v", recs)
+	}
+	if o := recs[0]["outcome"].(map[string]any); o["status"] != float64(500) {
+		t.Fatalf("recorded %v", o)
+	}
+}
+
+// A detail callback that panics costs neither the record nor the other
+// callbacks' detail, and does not leave the request's trail locked.
+func TestAuditGateDetailCallbackPanicKeepsTheRecord(t *testing.T) {
+	f := newGateFixture(t)
+	f.inside = func(r *http.Request) {
+		AuditDetail(r, func(*audit.MgmtDetail) { panic("callback fault") })
+		AuditDetail(r, func(d *audit.MgmtDetail) { d.Username = "bob" })
+	}
+	done := make(chan any, 1)
+	go func() {
+		defer func() {
+			if p := recover(); p != nil {
+				done <- p
+			}
+		}()
+		done <- f.do(http.MethodPost, "/netlox/v1/config/loadbalancer", `{"a":1}`).Code
+	}()
+	select {
+	case got := <-done:
+		if got != http.StatusOK {
+			t.Fatalf("the request ended with %v, want 200", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request hung after a detail callback panicked")
+	}
+	pairs := f.pairs()
+	if len(pairs) != 1 || pairs[0].result == nil {
+		t.Fatalf("want one complete pair, got %+v", pairs)
+	}
+	if u := detailOf(pairs[0].result)["username"]; u != "bob" {
+		t.Fatalf("the detail after the faulting callback was lost: %v", u)
 	}
 }
 

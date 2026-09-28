@@ -5341,8 +5341,8 @@
      "symbol": "AutoPersistMiddleware",
      "kind": "func",
      "file": "api/restapi/handler/snapshot.go",
-     "def_line": 732,
-     "call_line": 741,
+     "def_line": 744,
+     "call_line": 753,
      "calls": "MarkConfigMutated",
      "entry_point": "http-handler",
      "note": "called on every 2xx eligible mutation, including when auto-persist is off -- there the gauge staying at 1 is the operational signal"

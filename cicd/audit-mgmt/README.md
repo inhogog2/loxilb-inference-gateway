@@ -20,6 +20,7 @@ an event type is covered.
 | T3 | the gate fails closed with the authoritative state unchanged | the audit directory sits on a 1 MiB tmpfs that is filled to the last byte; a generated route, a raw route and a named route answer 503 `audit_unavailable` and the rule table, the key and the account list are unchanged; freed, the same calls leave a pair sharing one `event_id`, intent before result by `seq` |
 | T-GW-2 | the audit policy, the remote sink and sealing on demand are management changes like any other | a policy replace and an unsatisfiable one; a sink refused for a missing, out-of-range or unreadable argument and one accepted; `POST /audit/rotate` seals the segment the status named and the next record lands in the new one |
 | T-GW-5 | `loxicmd` drives the three audit paths against a live gateway, and its refusals stay local | `get audit-status` on a running writer and on a boot whose audit directory is unusable; `get audit-sink` unconfigured and configured; a set, a replace that proves the endpoint replaces rather than patches, and `--disable`; five locally refused invocations that leave the audited `mgmt.audit.sink` count untouched, against one the gateway refuses that does not; `-o json` compared key for key with the gateway's own body |
+| T-GW-6 | no admitted management call is left without an answer or a result | every boot's settle probe (`POST /config/loadbalancer` with an empty body) gets an HTTP answer, including on the boots where it reaches the handler because management authentication is off; every probe intent in the trail has its result, with a floor on how many there are; and, once boot 6 has scanned boot 4, the only `sys.intent.orphaned` in the trail is the one T20 makes on purpose |
 | T19 | the writer is not the only witness to its own failure | `loxilb_audit_write_failures_total` rises, `loxilb_audit_last_write_timestamp_seconds` stands still across a heartbeat interval, the operational log carries the fallback line; after recovery one `sys.writer.write_failed` names the interval and count, and every line of the segment still parses |
 
 ## Layout
@@ -126,6 +127,20 @@ boot's segment is sealed at recovery and compressed, never removed.
   only the logout's own record.
 - The operational log runs at debug here. A canary found there is printed,
   not scored; none was found in the reference run.
+- **T3's wedge is not airtight.** Filling the 1 MiB tmpfs uses up its free
+  pages, but the active segment's last page keeps whatever it had not yet
+  filled, and appends that fit there still succeed on a filesystem `df`
+  reports as 100% full. How much room that is depends on the segment's
+  length when the fill runs, which varies from run to run, so the first
+  calls T3 expects to be refused can be accepted and recorded instead.
+  Seen once, in the `noguard` twin below: T3-1a–1d and T3-2a–2c went red
+  with `write_failures_total` already at 5, and T3-4a answered 409 because
+  the "refused" rule had in fact been created. The same `dd` fill followed
+  by 600-byte appends to a file with 3,192 bytes of last-page room took five
+  appends before `ENOSPC`, exactly at the page boundary. The gate was right
+  each time -- the intent it answered for had been written; it is the
+  scenario's assumption that a full filesystem takes no append that does
+  not hold.
 
 ## Red twins
 
@@ -160,6 +175,16 @@ The mutations they need, with the rows each one must redden and nothing else:
 | `llbigw-2-twin-2-cli-nocheck-r1` | the CLI stops refusing anything itself | the five `return invalid(...)` guards removed from loxicmd's `auditSinkRequest` | the whole local-refusal block: `T-GW-5-5a`–`T-GW-5-5k`. The exit-code rows go first (the gateway's answer, not a local 2), the "names its flag" rows follow because there is no local refusal left to name one, and `5k` — the point of the block — sees the audited `mgmt.audit.sink` count move |
 | `llbigw-2-twin-2-sink-patch-r1` | the sink endpoint patches rather than replaces | `AuditPostSink` builds its config from `auditSink.cfg` and lets only non-zero incoming fields overwrite it | `T-GW-5-8c`, `T-GW-5-8d` — the omitted server name and frame cap survive the replace |
 | `llbigw-2-twin-2-sink-noendpoint-r1` | the sink record stops naming the receiver | `d.Endpoint` no longer set in the sink path's `AuditDetail` | `T-GW-5-7k`, `T-GW-5-7l`, `T-GW-5-8f`, `T-GW-5-8g`, `T-GW-5-9f`, and `T-GW-2-7d`, which selects its record the same way and breaks for the same reason |
+| `llbigw-2-twin-6-main-r1` | neither fix: the image of main's tree | none; the image built for T-GW-5 from main, run with this `validation.sh` | `T-GW-6-1` (two probes, boots 4 and 6, got no answer), `T-GW-6-3` (their two intents have no result), `T-GW-6-4` (two orphans in the trail), `T-GW-6-5` (the second names boot 4's probe; boot 6's is never scanned). `6-2`'s floor stays green |
+| `llbigw-2-twin-6-noguard-r1` | the create handler reads through a missing `serviceArguments` again | the nil check removed from `ConfigPostLoadbalancer`; the gate's fix kept | `T-GW-6-1` only among T-GW-6: the probes panic again and go unanswered, but their results are recorded with status 500, so `6-3`, `6-4` and `6-5` stay green -- the gate's panic path proving itself on a live gateway. `T3-1a`–`1d`, `2a`–`2c` and `4a` also went red for an unrelated reason: see *T3's wedge is not airtight* above |
+
+T-GW-6 was run against a reference of **264 OK / 0 FAILED** -- the
+259-assertion baseline unchanged plus its five rows -- where the probe
+results were two 400s (the boots with management authentication off), three
+401s and seven 503s from the freeze. A twin that removes only the gate's
+fix leaves T-GW-6 green: once the handler no longer panics, nothing on a
+live gateway reaches that path, so it is proven by the unit tests' own twins
+instead.
 
 Run 2026-09-27 against a reference of **259 OK / 0 FAILED** — the
 193-assertion baseline unchanged plus 66 `T-GW-5` rows. All three images are
