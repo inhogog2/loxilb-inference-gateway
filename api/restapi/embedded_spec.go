@@ -4613,8 +4613,17 @@ func init() {
               "type": "string",
               "x-nullable": true
             },
+            "fc_decode_max_inflight": {
+              "default": 0,
+              "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "format": "int32",
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
             "fc_effective": {
-              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB).",
+              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default).",
               "properties": {
                 "decode_max_inflight": {
                   "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
@@ -4664,10 +4673,103 @@ func init() {
                   "description": "Inference requests waiting for a unit right now.",
                   "format": "int32",
                   "type": "integer"
+                },
+                "source": {
+                  "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
+                  "properties": {
+                    "decode_max_inflight": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "ep_max_inflight": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "max_outstanding": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "prefill_max_inflight": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "queue_depth": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "queue_wait_ms": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "telemetry_stale_ms": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "telemetry_stale_ms": {
+                  "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+                  "format": "int32",
+                  "type": "integer"
                 }
               },
               "readOnly": true,
               "type": "object"
+            },
+            "fc_ep_max_inflight": {
+              "default": 0,
+              "description": "The per-endpoint ceiling on executing inference requests for the normal (non P/D) role. 0 or omitted leaves the process default (LLB_FC_EP_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "format": "int32",
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
+            "fc_max_outstanding": {
+              "default": 0,
+              "description": "The pool-wide ceiling on executing inference requests of the service's model pool. 0 or omitted leaves the process default (LLB_FC_MAX_OUTSTANDING) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "format": "int32",
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
             },
             "fc_max_queue_depth": {
               "default": 0,
@@ -4681,6 +4783,35 @@ func init() {
             "fc_max_queue_wait_ms": {
               "default": 0,
               "description": "The longest a request may wait in the capacity admission queue, in milliseconds, before it is answered 504 admission_queue_timeout with the wait it spent (queued_ms). Required, greater than 0, whenever fc_max_queue_depth is set; 0 or omitted with no depth leaves the process default (LLB_FC_MAX_QUEUE_WAIT_MS) in force. Replace and null semantics as fc_max_queue_depth.",
+              "format": "int32",
+              "maximum": 3600000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
+            "fc_mode": {
+              "description": "The service's capacity admission gate: enforce refuses (or queues) a request over a ceiling, observe counts what it would have done and changes nothing, off bypasses the gate. inherit, or omitted on create, runs on the process default (LLB_FC_MODE); a rule may switch the gate off under an enforcing environment. On a replace POST an omitted fc_mode keeps the stored one and inherit returns the rule to the process default. Explicit JSON null is rejected. Read back only when declared; the mode in force is fc_effective.mode.",
+              "enum": [
+                "off",
+                "observe",
+                "enforce",
+                "inherit"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_prefill_max_inflight": {
+              "default": 0,
+              "description": "The per-endpoint ceiling on prefill legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_PREFILL_MAX_INFLIGHT, else LLB_PD_MAX_INFLIGHT_PER_EP) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "format": "int32",
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
+            "fc_telemetry_stale_ms": {
+              "default": 0,
+              "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
               "format": "int32",
               "maximum": 3600000,
               "minimum": 0,
@@ -38399,8 +38530,17 @@ func init() {
               "type": "string",
               "x-nullable": true
             },
+            "fc_decode_max_inflight": {
+              "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 100000,
+              "minimum": 0,
+              "x-nullable": false
+            },
             "fc_effective": {
-              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB).",
+              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default).",
               "type": "object",
               "properties": {
                 "decode_max_inflight": {
@@ -38451,9 +38591,102 @@ func init() {
                   "description": "Inference requests waiting for a unit right now.",
                   "type": "integer",
                   "format": "int32"
+                },
+                "source": {
+                  "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
+                  "type": "object",
+                  "properties": {
+                    "decode_max_inflight": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "ep_max_inflight": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "max_outstanding": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "prefill_max_inflight": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "queue_depth": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "queue_wait_ms": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "telemetry_stale_ms": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    }
+                  }
+                },
+                "telemetry_stale_ms": {
+                  "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+                  "type": "integer",
+                  "format": "int32"
                 }
               },
               "readOnly": true
+            },
+            "fc_ep_max_inflight": {
+              "description": "The per-endpoint ceiling on executing inference requests for the normal (non P/D) role. 0 or omitted leaves the process default (LLB_FC_EP_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 100000,
+              "minimum": 0,
+              "x-nullable": false
+            },
+            "fc_max_outstanding": {
+              "description": "The pool-wide ceiling on executing inference requests of the service's model pool. 0 or omitted leaves the process default (LLB_FC_MAX_OUTSTANDING) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 100000,
+              "minimum": 0,
+              "x-nullable": false
             },
             "fc_max_queue_depth": {
               "description": "Capacity admission queue of the service's model pool: how many inference requests may wait for a capacity unit instead of being refused with 429 when the pool's ceilings are reached. 0 or omitted leaves the process default (LLB_FC_MAX_QUEUE_DEPTH) in force; the ceiling is 65536. HTTP/1.1 requests wait; HTTP/2 streams are refused on their stream and never wait. Every waiting request parks its client connection, which holds about one MiB of receive buffer, so a depth is a memory bound as much as a queue bound: depth x 1 MiB when the queue is full (65536 is about 64 GiB). The gateway logs a WARNING at rule apply when that bound exceeds half of the node's memory and still applies it; bound the connections themselves with connectionLimit or the process valve LLB_PD_MAX_TOTAL_INFLIGHT. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default); PATCH does not reach FullProxy rules. Explicit JSON null is rejected. The resolved values are read back in fc_effective.",
@@ -38466,6 +38699,35 @@ func init() {
             },
             "fc_max_queue_wait_ms": {
               "description": "The longest a request may wait in the capacity admission queue, in milliseconds, before it is answered 504 admission_queue_timeout with the wait it spent (queued_ms). Required, greater than 0, whenever fc_max_queue_depth is set; 0 or omitted with no depth leaves the process default (LLB_FC_MAX_QUEUE_WAIT_MS) in force. Replace and null semantics as fc_max_queue_depth.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 3600000,
+              "minimum": 0,
+              "x-nullable": false
+            },
+            "fc_mode": {
+              "description": "The service's capacity admission gate: enforce refuses (or queues) a request over a ceiling, observe counts what it would have done and changes nothing, off bypasses the gate. inherit, or omitted on create, runs on the process default (LLB_FC_MODE); a rule may switch the gate off under an enforcing environment. On a replace POST an omitted fc_mode keeps the stored one and inherit returns the rule to the process default. Explicit JSON null is rejected. Read back only when declared; the mode in force is fc_effective.mode.",
+              "type": "string",
+              "enum": [
+                "off",
+                "observe",
+                "enforce",
+                "inherit"
+              ],
+              "x-nullable": false
+            },
+            "fc_prefill_max_inflight": {
+              "description": "The per-endpoint ceiling on prefill legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_PREFILL_MAX_INFLIGHT, else LLB_PD_MAX_INFLIGHT_PER_EP) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 100000,
+              "minimum": 0,
+              "x-nullable": false
+            },
+            "fc_telemetry_stale_ms": {
+              "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
               "type": "integer",
               "format": "int32",
               "default": 0,
@@ -39164,8 +39426,17 @@ func init() {
           "type": "string",
           "x-nullable": true
         },
+        "fc_decode_max_inflight": {
+          "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0,
+          "x-nullable": false
+        },
         "fc_effective": {
-          "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB).",
+          "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default).",
           "type": "object",
           "properties": {
             "decode_max_inflight": {
@@ -39216,9 +39487,102 @@ func init() {
               "description": "Inference requests waiting for a unit right now.",
               "type": "integer",
               "format": "int32"
+            },
+            "source": {
+              "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
+              "type": "object",
+              "properties": {
+                "decode_max_inflight": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "ep_max_inflight": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "max_outstanding": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "prefill_max_inflight": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "queue_depth": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "queue_wait_ms": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "telemetry_stale_ms": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                }
+              }
+            },
+            "telemetry_stale_ms": {
+              "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+              "type": "integer",
+              "format": "int32"
             }
           },
           "readOnly": true
+        },
+        "fc_ep_max_inflight": {
+          "description": "The per-endpoint ceiling on executing inference requests for the normal (non P/D) role. 0 or omitted leaves the process default (LLB_FC_EP_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0,
+          "x-nullable": false
+        },
+        "fc_max_outstanding": {
+          "description": "The pool-wide ceiling on executing inference requests of the service's model pool. 0 or omitted leaves the process default (LLB_FC_MAX_OUTSTANDING) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0,
+          "x-nullable": false
         },
         "fc_max_queue_depth": {
           "description": "Capacity admission queue of the service's model pool: how many inference requests may wait for a capacity unit instead of being refused with 429 when the pool's ceilings are reached. 0 or omitted leaves the process default (LLB_FC_MAX_QUEUE_DEPTH) in force; the ceiling is 65536. HTTP/1.1 requests wait; HTTP/2 streams are refused on their stream and never wait. Every waiting request parks its client connection, which holds about one MiB of receive buffer, so a depth is a memory bound as much as a queue bound: depth x 1 MiB when the queue is full (65536 is about 64 GiB). The gateway logs a WARNING at rule apply when that bound exceeds half of the node's memory and still applies it; bound the connections themselves with connectionLimit or the process valve LLB_PD_MAX_TOTAL_INFLIGHT. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default); PATCH does not reach FullProxy rules. Explicit JSON null is rejected. The resolved values are read back in fc_effective.",
@@ -39231,6 +39595,35 @@ func init() {
         },
         "fc_max_queue_wait_ms": {
           "description": "The longest a request may wait in the capacity admission queue, in milliseconds, before it is answered 504 admission_queue_timeout with the wait it spent (queued_ms). Required, greater than 0, whenever fc_max_queue_depth is set; 0 or omitted with no depth leaves the process default (LLB_FC_MAX_QUEUE_WAIT_MS) in force. Replace and null semantics as fc_max_queue_depth.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 3600000,
+          "minimum": 0,
+          "x-nullable": false
+        },
+        "fc_mode": {
+          "description": "The service's capacity admission gate: enforce refuses (or queues) a request over a ceiling, observe counts what it would have done and changes nothing, off bypasses the gate. inherit, or omitted on create, runs on the process default (LLB_FC_MODE); a rule may switch the gate off under an enforcing environment. On a replace POST an omitted fc_mode keeps the stored one and inherit returns the rule to the process default. Explicit JSON null is rejected. Read back only when declared; the mode in force is fc_effective.mode.",
+          "type": "string",
+          "enum": [
+            "off",
+            "observe",
+            "enforce",
+            "inherit"
+          ],
+          "x-nullable": false
+        },
+        "fc_prefill_max_inflight": {
+          "description": "The per-endpoint ceiling on prefill legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_PREFILL_MAX_INFLIGHT, else LLB_PD_MAX_INFLIGHT_PER_EP) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0,
+          "x-nullable": false
+        },
+        "fc_telemetry_stale_ms": {
+          "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
           "type": "integer",
           "format": "int32",
           "default": 0,
@@ -39688,7 +40081,7 @@ func init() {
       }
     },
     "LoadbalanceEntryServiceArgumentsFcEffective": {
-      "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB).",
+      "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default).",
       "type": "object",
       "properties": {
         "decode_max_inflight": {
@@ -39739,9 +40132,154 @@ func init() {
           "description": "Inference requests waiting for a unit right now.",
           "type": "integer",
           "format": "int32"
+        },
+        "source": {
+          "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
+          "type": "object",
+          "properties": {
+            "decode_max_inflight": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "ep_max_inflight": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "max_outstanding": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "prefill_max_inflight": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "queue_depth": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "queue_wait_ms": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "telemetry_stale_ms": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            }
+          }
+        },
+        "telemetry_stale_ms": {
+          "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+          "type": "integer",
+          "format": "int32"
         }
       },
       "readOnly": true
+    },
+    "LoadbalanceEntryServiceArgumentsFcEffectiveSource": {
+      "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
+      "type": "object",
+      "properties": {
+        "decode_max_inflight": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "ep_max_inflight": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "max_outstanding": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "prefill_max_inflight": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "queue_depth": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "queue_wait_ms": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "telemetry_stale_ms": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        }
+      }
     },
     "LoadbalanceEntryServiceArgumentsMtlsBackend": {
       "description": "Requested backend verification and client-certificate settings for FullProxy re-encryption (mode=4, security=2) with mTLS support. Implementation warning: REST stores and returns this object, but the active create encoder does not wire its verification flag or legacy path/inline material into the backend TLS configuration. The separate configuration bridge has no caller in the reviewed path. These fields therefore do not establish backend authentication, even after a successful POST. Backend cert-ID fields have separate C consumers; their existence does not repair this missing verification wiring. Requested-security fail-closed behavior and material precedence remain pending policy decisions, not supported fallback guarantees.",

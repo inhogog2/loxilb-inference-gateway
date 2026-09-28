@@ -220,6 +220,76 @@ func (p *loadbalancerRequestPresence) applyFcQueue(
 	}
 }
 
+// fcGateKeys are the admission gate's rule fields beyond the queue pair.
+var fcGateKeys = []string{"fc_mode", "fc_max_outstanding", "fc_ep_max_inflight",
+	"fc_prefill_max_inflight", "fc_decode_max_inflight", "fc_telemetry_stale_ms"}
+
+// validateFcGateFields checks the admission gate's rule fields on their
+// own, like validateFcQueueFields: null is refused, each ceiling is bounded
+// and fc_mode is one of its words (the generated model checks the enum as
+// well; the rule layer checks again for callers without it).
+func (p *loadbalancerRequestPresence) validateFcGateFields(
+	src *models.LoadbalanceEntryServiceArguments,
+) error {
+	for _, key := range fcGateKeys {
+		if p.svcIsNull(key) {
+			return fmt.Errorf("%s must not be null", key)
+		}
+	}
+	if src == nil {
+		return nil
+	}
+	if _, err := cmn.FcModeToRule(src.FcMode); err != nil {
+		return err
+	}
+	for _, c := range []struct {
+		name string
+		v    int32
+	}{
+		{"fc_max_outstanding", src.FcMaxOutstanding},
+		{"fc_ep_max_inflight", src.FcEpMaxInflight},
+		{"fc_prefill_max_inflight", src.FcPrefillMaxInflight},
+		{"fc_decode_max_inflight", src.FcDecodeMaxInflight},
+	} {
+		if c.v < 0 || c.v > cmn.FcCapMax {
+			return fmt.Errorf("%s must be within 0..%d", c.name, cmn.FcCapMax)
+		}
+	}
+	if src.FcTelemetryStaleMs < 0 || src.FcTelemetryStaleMs > cmn.FcTelemetryStaleMsMax {
+		return fmt.Errorf("fc_telemetry_stale_ms must be within 0..%d", cmn.FcTelemetryStaleMsMax)
+	}
+	return nil
+}
+
+// applyFcGate copies the admission gate's rule fields with their presence
+// bits, as applyFcQueue does for the queue pair.
+func (p *loadbalancerRequestPresence) applyFcGate(
+	dst *cmn.LbServiceArg,
+	src *models.LoadbalanceEntryServiceArguments,
+) {
+	if p.svcPresent("fc_mode") || src.FcMode != "" {
+		dst.FcMode = src.FcMode
+		dst.FcModePresent = p.svcPresent("fc_mode")
+	}
+	for _, f := range []struct {
+		key     string
+		v       int32
+		dst     *uint32
+		present *bool
+	}{
+		{"fc_max_outstanding", src.FcMaxOutstanding, &dst.FcMaxOutstanding, &dst.FcMaxOutstandingPresent},
+		{"fc_ep_max_inflight", src.FcEpMaxInflight, &dst.FcEpMaxInflight, &dst.FcEpMaxInflightPresent},
+		{"fc_prefill_max_inflight", src.FcPrefillMaxInflight, &dst.FcPrefillMaxInflight, &dst.FcPrefillMaxInflightPresent},
+		{"fc_decode_max_inflight", src.FcDecodeMaxInflight, &dst.FcDecodeMaxInflight, &dst.FcDecodeMaxInflightPresent},
+		{"fc_telemetry_stale_ms", src.FcTelemetryStaleMs, &dst.FcTelemetryStaleMs, &dst.FcTelemetryStaleMsPresent},
+	} {
+		if p.svcPresent(f.key) || f.v != 0 {
+			*f.dst = uint32(f.v)
+			*f.present = p.svcPresent(f.key)
+		}
+	}
+}
+
 // validateConnectionLimit rejects an explicit null. The generated model
 // declares connectionLimit as uint32, so a negative or oversized number never
 // reaches the handler; null is the one value the binding decodes to the zero

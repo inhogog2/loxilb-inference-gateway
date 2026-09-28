@@ -385,7 +385,7 @@ echo "J: the gate's accounting stayed consistent"
 chk J1 "no accounting anomaly (underflow)"      0 "$(msum loxilb_ai_admission_anomalies_total 'kind="underflow"')"
 chk J2 "no accounting anomaly (unknown permit)" 0 "$(msum loxilb_ai_admission_anomalies_total 'kind="unknown_permit"')"
 chk J3 "no request was refused for no capacity" 0 "$(msum loxilb_ai_admission_decisions_total 'reason="no_healthy_capacity"')"
-chk J4 "every pool is exported"                 6 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
+chk J4 "every pool is exported"                 8 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
 
 # ── Q: the bounded queue, FIFO ──────────────────────────────────────────────
 echo ""
@@ -506,6 +506,109 @@ chk R18 "and the stored rule is untouched"             "2 $FC_Q_WAIT_MS" "$(lb_g
 gw_add_rule $PORT_Q "$(gw_queue_json $FC_Q_DEPTH $FC_Q_WAIT_MS)" 8080 8081 >/dev/null
 chk R19 "restored to $FC_Q_DEPTH"                      "$FC_Q_DEPTH" "$(wait_lb_field $PORT_Q .serviceArguments.fc_effective.queue_depth "$FC_Q_DEPTH" 10)"
 
+# ── S: a rule's own gate settings over the environment, with their sources ──
+echo ""
+echo "S: the :$PORT_P rule's ceiling ($FC_P_MAX) replaces the environment's ($FC_MAX_OUT); each value names its source"
+P_URL="http://$VIP:$PORT_P/v1/chat/completions"
+L=$(lb_get $PORT_P)
+eff() { printf '%s' "$L" | jq -r ".serviceArguments.fc_effective.$1 // \"unreadable\""; }
+chk S1 "fc_max_outstanding read back"                  "$FC_P_MAX" "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_max_outstanding')"
+chk S2 "fc_telemetry_stale_ms read back"               "$FC_P_STALE_MS" "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_telemetry_stale_ms')"
+chk S3 "the ceiling in force is the rule's"            "$FC_P_MAX rule" "$(eff max_outstanding) $(eff source.max_outstanding)"
+chk S4 "the endpoint ceiling is the environment's"     "$FC_EP_CAP env" "$(eff ep_max_inflight) $(eff source.ep_max_inflight)"
+chk S5 "the mode is the environment's"                 "enforce env" "$(eff mode) $(eff source.mode)"
+chk S6 "no queue anywhere: the product default"        "0 default" "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_effective | "\(.queue_depth // 0) \(.source.queue_depth)"')"
+chk S7 "the telemetry window is the rule's"            "$FC_P_STALE_MS rule" "$(eff telemetry_stale_ms) $(eff source.telemetry_stale_ms)"
+chk S8 "an undeclared mode is not read back"           null "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_mode')"
+DP=$(mktemp -d)
+hold_burst "$DP" 6 capP "$P_URL"
+chk S9 "four reached the backend, not eight"           "$FC_P_MAX" "$(wait_receipts capP $FC_P_MAX 15)"
+chk S10 "the other two were refused 429"               2 "$(wait_codes "$DP" 429 2 15)"
+chk S11 "and never reached it"                         "$FC_P_MAX" "$(receipts capP)"
+release_all; wait
+chk S12 "the four answered 200"                        "$FC_P_MAX" "$(count_codes "$DP" 200)"
+gw_add_rule $PORT_P ", \"fc_max_outstanding\": 0, \"fc_telemetry_stale_ms\": $FC_P_STALE_MS" 8080 8081 >/dev/null
+chk S13 "an explicit 0 returns the ceiling to the environment" "env" "$(wait_lb_field $PORT_P .serviceArguments.fc_effective.source.max_outstanding env 10)"
+chk S14 "whose value is in force"                      "$FC_MAX_OUT" "$(lb_get $PORT_P | jq -r '.serviceArguments.fc_effective.max_outstanding')"
+gw_add_rule $PORT_P "$(gw_p_json)" 8080 8081 >/dev/null
+chk S15 "restored to the rule's $FC_P_MAX"             "$FC_P_MAX" "$(wait_lb_field $PORT_P .serviceArguments.fc_effective.max_outstanding "$FC_P_MAX" 10)"
+n=16
+for bad in '"fc_max_outstanding": 100001' '"fc_mode": "yes"' '"fc_telemetry_stale_ms": 3600001' '"fc_ep_max_inflight": null'; do
+  r=$(gw_add_rule $PORT_P ", $bad" 8080 8081 2>&1)
+  case "$r" in *Success*) got=accepted ;; *) got=refused ;; esac
+  chk "S$n" "a replace with $bad is refused"           refused "$got"
+  n=$((n+1))
+done
+chk S20 "and the stored rule is untouched"             "$FC_P_MAX $FC_P_STALE_MS" "$(lb_get $PORT_P | jq -r '.serviceArguments | "\(.fc_max_outstanding) \(.fc_telemetry_stale_ms)"')"
+
+# ── O: a rule switches the gate off under an enforcing environment ──────────
+echo ""
+echo "O: fc_mode off on the :$PORT_P rule admits past its ceiling; inherit returns it to the environment"
+gw_add_rule $PORT_P "$(gw_p_json ', "fc_mode": "off"')" 8080 8081 >/dev/null
+chk O1 "the mode in force is the rule's off"           "off" "$(wait_lb_field $PORT_P .serviceArguments.fc_effective.mode off 10)"
+chk O2 "and says so"                                   "off rule" "$(lb_get $PORT_P | jq -r '.serviceArguments | "\(.fc_mode) \(.fc_effective.source.mode)"')"
+DO=$(mktemp -d)
+hold_burst "$DO" 6 capO "$P_URL"
+chk O3 "all six reached the backend"                   6 "$(wait_receipts capO 6 15)"
+release_all; wait
+chk O4 "none was refused"                              0 "$(count_codes "$DO" 429)"
+gw_add_rule $PORT_P "$(gw_p_json ', "fc_mode": "inherit"')" 8080 8081 >/dev/null
+chk O5 "inherit returns the mode to the environment"   "enforce env" "$(wait_lb_field $PORT_P '.serviceArguments.fc_effective | "\(.mode) \(.source.mode)"' 'enforce env' 10)"
+chk O6 "and is not read back as a declaration"         null "$(lb_get $PORT_P | jq -r '.serviceArguments.fc_mode')"
+
+# ── U: a change that frees units wakes the waiters at once ──────────────────
+echo ""
+echo "U: four wait behind the :$PORT_U rule's ceiling of $FC_U_MAX; raising it to 6 admits all four at once"
+U_URL="http://$VIP:$PORT_U/v1/chat/completions"
+chk U1 "the ceiling in force is the rule's"            "$FC_U_MAX rule" "$(lb_get $PORT_U | jq -r '.serviceArguments.fc_effective | "\(.max_outstanding) \(.source.max_outstanding)"')"
+DU=$(mktemp -d)
+hold_burst "$DU" 6 capU "$U_URL"
+chk U2 "two reached the backend"                       "$FC_U_MAX" "$(wait_receipts capU $FC_U_MAX 15)"
+chk U3 "four wait"                                     4 "$(wait_effective_queued $PORT_U 4 15)"
+gw_add_rule $PORT_U "$(gw_u_json 6)" 8080 8081 >/dev/null
+chk U4 "the data plane holds the new ceiling"          6 "$(wait_lb_field $PORT_U .serviceArguments.fc_effective.max_outstanding 6 10)"
+# Without the wake on reconfigure the once-a-second pass admits one waiter
+# per second (three seconds or more for four); with it they go together.
+t0=$(date +%s%3N); got=""
+for i in $(seq 1 100); do got=$(receipts capU); [ "$got" == 6 ] && break; sleep 0.1; done
+dt=$(( $(date +%s%3N) - t0 ))
+chk U5 "all four waiters reached the backend"          6 "$got"
+chk_le U6 "within 1500 ms of the new ceiling (ms)"     1500 "$dt"
+chk U7 "the queue is empty"                            0 "$(wait_effective_queued $PORT_U 0 5)"
+release_all; wait
+chk U8 "all six answered 200"                          6 "$(count_codes "$DU" 200)"
+chk U9 "none was drained by the replace"               0 "$(count_codes "$DU" 503)"
+chk_ge U10 "the replace was applied in place"           1 "$(gw_log | grep -c "$VIP:$PORT_U .*updated")"
+gw_add_rule $PORT_U "$(gw_u_json $FC_U_MAX)" 8080 8081 >/dev/null
+chk U11 "restored to $FC_U_MAX"                         "$FC_U_MAX" "$(wait_lb_field $PORT_U .serviceArguments.fc_effective.max_outstanding "$FC_U_MAX" 10)"
+
+# ── UE: going back to wait does not restart the clock ───────────────────────
+# The endpoint ceiling is the binding one here: the service has units, so the
+# once-a-second pass wakes the waiter every second, it meets the ceiling and
+# goes back. Its wait stays bounded by the window it was first given.
+echo ""
+echo "UE: one waits behind the :$PORT_U endpoints' ceiling of 1 with a 3 s window; woken and sent back each second, it still ends at 3 s"
+gw_add_rule $PORT_U ", \"fc_max_outstanding\": 8, \"fc_ep_max_inflight\": 1$(gw_queue_json $FC_Q_DEPTH 3000)" 8080 8081 >/dev/null
+chk UE1 "the data plane holds ceiling 1, window 3 s"   "1 3000" "$(wait_lb_field $PORT_U '.serviceArguments.fc_effective | "\(.ep_max_inflight) \(.queue_wait_ms)"' '1 3000' 10)"
+DUE=$(mktemp -d)
+hold_burst "$DUE" 2 capUEh "$U_URL"
+chk UE2 "each endpoint holds one"                     2 "$(wait_receipts capUEh 2 15)"
+$hexec l3h1 curl -s -o "$DUE/w.body" -D "$DUE/w.hdr" -w '%{http_code}' --max-time 60 \
+  "${HDRS[@]}" -H "X-Test-Nonce: capUEw" -H "X-Request-Id: capUEw-1" \
+  -d "$BODY" "$U_URL" > "$DUE/w.code" 2>/dev/null &
+chk UE3 "one waits"                                   1 "$(wait_effective_queued $PORT_U 1 5)"
+t0=$(date +%s%3N); got=""
+for i in $(seq 1 100); do got=$(cat "$DUE/w.code" 2>/dev/null); [ -n "$got" ] && break; sleep 0.1; done
+dt=$(( $(date +%s%3N) - t0 ))
+chk UE4 "it was ended with 504"                       504 "$got"
+chk_has UE5 "the body names the timeout"              admission_queue_timeout "$(cat "$DUE/w.body" 2>/dev/null)"
+chk_le UE6 "within its window and one reaper pass (ms)" 5000 "$dt"
+chk UE7 "it never reached a backend"                  0 "$(receipts capUEw)"
+release_all; wait
+chk UE8 "both holders answered 200"                   2 "$(count_codes "$DUE" 200)"
+gw_add_rule $PORT_U "$(gw_u_json $FC_U_MAX), \"fc_ep_max_inflight\": 0" 8080 8081 >/dev/null
+chk UE9 "restored: the endpoint ceiling is the environment's" "$FC_EP_CAP env" "$(wait_lb_field $PORT_U '.serviceArguments.fc_effective | "\(.ep_max_inflight) \(.source.ep_max_inflight)"' "$FC_EP_CAP env" 10)"
+
 # ── KA: a refusal keeps the connection ──────────────────────────────────────
 echo ""
 echo "KA: a 429 on a buffered request keeps the connection; the next request on it is admitted"
@@ -599,11 +702,17 @@ if gw_restart observe; then
   chk H8 "no capacity_shed decision"          0  "$(decisions $PORT_H1 capacity_shed)"
   chk H9 "gauge back to zero"                 0  "$(wait_metric loxilb_ai_admission_inflight 0 25 "$(svc $PORT_H1)" 'role="service"')"
   chk H10 "no anomaly"                        0  "$(msum loxilb_ai_admission_anomalies_total)"
+  # The rules are configuration each instance is given: the new process,
+  # given the same rules, resolves the rule's own values the same way, and
+  # what the rule left to the environment follows the new environment.
+  chk HA1 "the :$PORT_P ceiling is still the rule's"   "$FC_P_MAX rule" "$(wait_lb_field $PORT_P '.serviceArguments.fc_effective | "\(.max_outstanding) \(.source.max_outstanding)"' "$FC_P_MAX rule" 10)"
+  chk HA2 "and its telemetry window"                   "$FC_P_STALE_MS rule" "$(lb_get $PORT_P | jq -r '.serviceArguments.fc_effective | "\(.telemetry_stale_ms) \(.source.telemetry_stale_ms)"')"
+  chk HA3 "while its mode follows the new environment" "observe env" "$(lb_get $PORT_P | jq -r '.serviceArguments.fc_effective | "\(.mode) \(.source.mode)"')"
 else
   echo "  [FAIL] H0 the gateway did not come back in observe mode"; nfail=$((nfail+1)); code=1
 fi
 
-rm -rf "$DB" "$DN" "$DC" "$E" "$DG" "$DL" "$DQ" "$DT" "$DX" "$DK" "$DD" "$DM" "${DH:-/nonexistent}" 2>/dev/null
+rm -rf "$DB" "$DN" "$DC" "$E" "$DG" "$DL" "$DQ" "$DT" "$DX" "$DK" "$DD" "$DM" "$DP" "$DO" "$DU" "${DH:-/nonexistent}" 2>/dev/null
 
 echo ""
 if [ "$code" -eq 0 ]; then

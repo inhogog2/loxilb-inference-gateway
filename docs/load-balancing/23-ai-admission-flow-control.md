@@ -7,17 +7,19 @@ policy) after the policy checks (credential, quota, rate limit) and before
 any byte reaches a backend. A refused request never opens a backend
 connection; a queued request holds no backend resource while it waits.
 
-This page covers the gate's modes and ceilings, the bounded queue and the
-two rule fields that configure it, what the client sees, the maintenance
-drain, and the metrics. The REST fields are also listed in the
+This page covers the gate's modes and ceilings, the bounded queue, the rule
+fields that configure each of them over the process defaults, what the
+client sees, the maintenance drain, and the metrics. The REST fields are also listed in the
 [REST reference](05-rest-api-reference.md).
 
 ## Modes
 
-The gate reads its mode from the process environment when a pool is
-created:
+A rule sets its mode with `fc_mode` (`off`, `observe`, `enforce`); a rule
+that declares none, or declares `inherit`, runs on the process default
+`LLB_FC_MODE`. A rule may switch the gate off under an enforcing
+environment.
 
-| `LLB_FC_MODE` | Behaviour |
+| Mode | Behaviour |
 |---|---|
 | unset / `off` | The dispatch path is unchanged. Every pool still exports its state with mode `0`, so a scrape can tell an ungated AI pool from a non-AI service. |
 | `observe` | Every decision is computed and counted; everything is admitted. The `observe_would_shed` and `observe_would_queue` counters say what `enforce` would have done, at each ceiling that would have refused the request. |
@@ -25,15 +27,49 @@ created:
 
 ## Ceilings
 
-A ceiling of `0` means unlimited at that level. The process defaults come
-from the environment; the rule fields below override the queue's two.
+A ceiling of `0` in force means unlimited at that level.
 
-| Level | Environment default | Counts |
-|---|---|---|
-| service (pool-wide) | `LLB_FC_MAX_OUTSTANDING` | one unit per executing inference request, however many backend legs it opens |
-| endpoint, normal role | `LLB_FC_EP_MAX_INFLIGHT` | one unit per executing request on that endpoint |
-| endpoint, prefill role | `LLB_FC_PREFILL_MAX_INFLIGHT` (falls back to `LLB_PD_MAX_INFLIGHT_PER_EP`) | one unit per prefill leg |
-| endpoint, decode role | `LLB_FC_DECODE_MAX_INFLIGHT` | one unit per decode leg |
+| Level | Field (`serviceArguments`) | Environment default | Counts |
+|---|---|---|---|
+| service (pool-wide) | `fc_max_outstanding` | `LLB_FC_MAX_OUTSTANDING` | one unit per executing inference request, however many backend legs it opens |
+| endpoint, normal role | `fc_ep_max_inflight` | `LLB_FC_EP_MAX_INFLIGHT` | one unit per executing request on that endpoint |
+| endpoint, prefill role | `fc_prefill_max_inflight` | `LLB_FC_PREFILL_MAX_INFLIGHT` (falls back to `LLB_PD_MAX_INFLIGHT_PER_EP`) | one unit per prefill leg |
+| endpoint, decode role | `fc_decode_max_inflight` | `LLB_FC_DECODE_MAX_INFLIGHT` | one unit per decode leg |
+
+Each field is at most 100000.
+
+### Where a value comes from
+
+Every setting on this page resolves the same way, per rule: the rule's own
+value when it declares one, else the process environment, else the product
+default. A rule field of `0` (or `fc_mode` `inherit`) declares nothing: it
+inherits, so a rule cannot ask for "unlimited" under an environment that
+sets a ceiling. GET on the rule returns what was declared, and
+`fc_effective` returns what is in force on the pool together with
+`fc_effective.source`, which names for each value whether it came from the
+`rule`, the `env` or the `default`.
+
+All the fields are runtime settings. A replace `POST` with the same key
+applies the new values to the live pool without touching executing
+requests: an omitted field keeps its stored value, an explicit `0` (or
+`inherit`) returns it to the environment or default, and JSON `null` is
+refused. When a change lets waiting requests through (a higher ceiling, or
+a mode that no longer enforces), they are woken at once, oldest first, one
+per free unit, or all of them when the pool no longer enforces, instead of
+one per second. PATCH does not reach FullProxy rules; on an AI service the
+runtime change is a replace `POST`.
+
+A replace that changes only these fields (and the queue's two) is applied
+in place. A replace that also changes anything else re-creates the
+service's data-plane entry: requests waiting in its queue are then ended
+with `503 admission_drained`, as on a rule delete, and the pool's counts
+start again. Change the gate on its own when requests may be waiting.
+
+These are rule configuration, like every other `serviceArguments` field:
+nothing replicates them between gateway instances. Each instance holds the
+rules its controller (or its snapshot) gave it, so two instances given the
+same rule resolve the same values, and an instance given a rule without
+them runs on its own environment.
 
 A unit is taken once per request: an HTTP/1.1 request (each request on a
 keep-alive connection is gated again), or an HTTP/2 stream. It is released
@@ -52,7 +88,11 @@ waiter, oldest first; a newcomer never jumps a non-empty queue. A woken
 request that loses the race for the unit goes back to the head, even when
 newcomers filled the queue to its depth meanwhile; one that fails an
 endpoint ceiling goes back without waking anyone, since the next waiter
-would meet the same ceiling. A turn is never lost: when a woken client has
+would meet the same ceiling. Going back does not restart the clock: the
+request keeps the deadline it was first parked with, so
+`fc_max_queue_wait_ms` bounds its whole wait however often it is woken, and
+several woken requests that go back keep the order they arrived in. A turn
+is never lost: when a woken client has
 gone before it resumed, or its wake could not be delivered, the turn passes
 to the next waiter, and a once-a-second pass wakes the head of any pool that
 has a free unit and requests still waiting.
@@ -66,10 +106,11 @@ Rules of the two fields:
 
 - A rule value wins over the environment; the environment is the process
   default for rules that declare nothing.
-- Both are runtime settings: a replace `POST` with the same key applies the
-  new values to the live pool without touching the executing requests.
-  Waiters already in the queue keep their place; a smaller depth applies to
-  newcomers. `PATCH` does not reach FullProxy (mode 4) rules, which every
+- Both are runtime settings: a replace `POST` with the same key that
+  changes only the admission fields applies the new values to the live pool
+  without touching the executing requests. Waiters already in the queue keep
+  their place; a smaller depth applies to newcomers (see "Where a value
+  comes from" for a replace that changes other fields too). `PATCH` does not reach FullProxy (mode 4) rules, which every
   AI-gateway service is, so the replace `POST` is the way to change them.
 - Omitting a field on a replace keeps the stored value; an explicit `0`
   resets it to the process default; JSON `null` is rejected.
@@ -81,7 +122,8 @@ Rules of the two fields:
   `fc_effective` object with what the data plane holds: `mode`,
   `max_outstanding`, `ep_max_inflight`, `prefill_max_inflight`,
   `decode_max_inflight`, `queue_depth`, `queue_wait_ms`, the live
-  `inflight` and `queued`, and `queue_memory_bound_mib`.
+  `inflight` and `queued`, `queue_memory_bound_mib`, `telemetry_stale_ms`,
+  and `source` (where each value came from: `rule`, `env` or `default`).
 
 ### What a queue costs
 
@@ -115,6 +157,18 @@ connection). Size the depth from the memory you can spend, and read
 | HTTP/1.1, streamed body (large or chunked) | queued when the pool has a depth; the connection closes after the answer either way |
 | HTTP/2 stream | refused on its own stream with `429`; streams never wait |
 | the prefill or decode leg of a P/D request | refused; role legs never wait, the request is answered once |
+
+## Scraped queue depth: how long it is trusted
+
+The P/D scorers weigh each endpoint by its scraped queue depth. A depth that
+has not been refreshed for longer than the pool's telemetry window is no
+longer trusted: the scorer uses the candidates' average in its place, so a
+dead endpoint whose last report was an empty queue is not favoured forever.
+The window is `fc_telemetry_stale_ms` on the rule, else
+`LLB_FC_TELEMETRY_STALE_MS`, else 30000 (three default scrape intervals);
+at most 3600000. The scraper stamps whole seconds, so the window is
+effectively rounded to them. The window in force is
+`fc_effective.telemetry_stale_ms`.
 
 ## What the client sees
 

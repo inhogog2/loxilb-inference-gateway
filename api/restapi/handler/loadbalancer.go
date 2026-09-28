@@ -78,6 +78,9 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if err := pres.validateFcQueueFields(params.Attr.ServiceArguments); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
+	if err := pres.validateFcGateFields(params.Attr.ServiceArguments); err != nil {
+		return errorResponseWithCode(http.StatusBadRequest, err.Error())
+	}
 
 	var lbRules cmn.LbRuleMod
 
@@ -170,6 +173,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	// The capacity admission queue of the service's pool, with presence so a
 	// replace can reset a depth to the process default with an explicit 0.
 	pres.applyFcQueue(&lbRules.Serv, params.Attr.ServiceArguments)
+	pres.applyFcGate(&lbRules.Serv, params.Attr.ServiceArguments)
 
 	// Per-endpoint circuit breaker. Resolved HERE, in exactly one place, so
 	// create and update behave identically. An omitted field on a P/D rule
@@ -677,6 +681,13 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	if lb.Serv.FcMaxQueueWaitMs != 0 {
 		tmpSvc.FcMaxQueueWaitMs = int32(lb.Serv.FcMaxQueueWaitMs)
 	}
+	// The rest of the gate as declared: an inherited mode reads as absent.
+	tmpSvc.FcMode = lb.Serv.FcMode
+	tmpSvc.FcMaxOutstanding = int32(lb.Serv.FcMaxOutstanding)
+	tmpSvc.FcEpMaxInflight = int32(lb.Serv.FcEpMaxInflight)
+	tmpSvc.FcPrefillMaxInflight = int32(lb.Serv.FcPrefillMaxInflight)
+	tmpSvc.FcDecodeMaxInflight = int32(lb.Serv.FcDecodeMaxInflight)
+	tmpSvc.FcTelemetryStaleMs = int32(lb.Serv.FcTelemetryStaleMs)
 	if eff := lb.Serv.FcEffective; eff != nil {
 		tmpSvc.FcEffective = &models.LoadbalanceEntryServiceArgumentsFcEffective{
 			Mode:                eff.Mode,
@@ -689,6 +700,17 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 			Inflight:            int32(eff.Inflight),
 			Queued:              int32(eff.Queued),
 			QueueMemoryBoundMib: int64(eff.QueueMemoryBoundMib),
+			TelemetryStaleMs:    int32(eff.TelemetryStaleMs),
+			Source: &models.LoadbalanceEntryServiceArgumentsFcEffectiveSource{
+				Mode:               eff.Source.Mode,
+				MaxOutstanding:     eff.Source.MaxOutstanding,
+				EpMaxInflight:      eff.Source.EpMaxInflight,
+				PrefillMaxInflight: eff.Source.PrefillMaxInflight,
+				DecodeMaxInflight:  eff.Source.DecodeMaxInflight,
+				QueueDepth:         eff.Source.QueueDepth,
+				QueueWaitMs:        eff.Source.QueueWaitMs,
+				TelemetryStaleMs:   eff.Source.TelemetryStaleMs,
+			},
 		}
 	}
 

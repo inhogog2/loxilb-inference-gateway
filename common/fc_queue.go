@@ -28,3 +28,50 @@ func FcQueuePairError(depth, waitMs uint32) error {
 	}
 	return nil
 }
+
+// FcCapMax bounds a rule's service and per-endpoint admission ceilings.
+const FcCapMax = 100000
+
+// FcTelemetryStaleMsMax bounds a rule's telemetry window (an hour).
+const FcTelemetryStaleMsMax = 3600000
+
+// The data plane's encoding of a rule's gate mode (enum fc_rule_mode): 0
+// runs on the process default, the others are shifted by one so a rule can
+// say "off" under an enforcing environment.
+const (
+	FcRuleModeInherit uint8 = iota
+	FcRuleModeOff
+	FcRuleModeObserve
+	FcRuleModeEnforce
+)
+
+// FcModeToRule maps a rule's fc_mode to the data plane's encoding. Empty
+// and "inherit" both mean the process default; anything else is refused.
+func FcModeToRule(mode string) (uint8, error) {
+	switch mode {
+	case "", "inherit":
+		return FcRuleModeInherit, nil
+	case "off":
+		return FcRuleModeOff, nil
+	case "observe":
+		return FcRuleModeObserve, nil
+	case "enforce":
+		return FcRuleModeEnforce, nil
+	}
+	return 0, NewValidationError("fc_mode",
+		"fc_mode must be one of off, observe, enforce or inherit")
+}
+
+// FcModeFromRule is FcModeToRule's inverse for the read-back: the process
+// default reads as empty, so it is omitted.
+func FcModeFromRule(m uint8) string {
+	switch m {
+	case FcRuleModeOff:
+		return "off"
+	case FcRuleModeObserve:
+		return "observe"
+	case FcRuleModeEnforce:
+		return "enforce"
+	}
+	return ""
+}

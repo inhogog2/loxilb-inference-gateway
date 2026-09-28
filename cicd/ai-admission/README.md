@@ -24,6 +24,8 @@ l3h1 (10.10.10.1) ---- llb1 (VIP 10.10.10.254) ---- l3ep1 (31.31.31.1)
 :2024  HTTP/1.1   -> l3ep1:8080          one endpoint, so its ceiling (5) binds
 :2025  HTTP/1.1   -> l3ep1:8080, :8081   fc_max_queue_depth 4, fc_max_queue_wait_ms 30000
 :2026  HTTP/1.1   -> l3ep1:8080          fc_max_queue_depth 65536: the memory warning at apply
+:2028  HTTP/1.1   -> l3ep1:8080, :8081   fc_max_outstanding 4 (under the env's 8), fc_telemetry_stale_ms 45000
+:2029  HTTP/1.1   -> l3ep1:8080, :8081   fc_max_outstanding 2, fc_max_queue_depth 4: raised at runtime
 ```
 
 The gateway runs with `--audit-dir --audit-required`, so every refusal the
@@ -51,10 +53,14 @@ gate makes must also be a `sec.ai.deny` record with stage `capacity`.
 | X | 8 held, 2 waiters reset their connections after 3 s | cancelled +2, queued gauge 0, 0 receipts then or later, gauge back to 0 |
 | W | the `:2026` rule with depth 65536 | the gateway log (read through the `loxilb*.log` glob, asserted non-empty) carries the memory warning naming that rule and both guards; no warning for the `:2025` rule; the pool is gated with queue limit 65536 |
 | R | GET and a replace POST on the `:2025` rule | `fc_max_queue_depth`/`fc_max_queue_wait_ms` read back; `fc_effective` reports mode, ceiling, depth, wait, `queue_memory_bound_mib` = depth, live `queued`; a replace POST with depth 2 is read back, held by the data plane and exported, then restored; a depth without a wait window is refused 400; a replace carrying only a depth is accepted and keeps the stored wait, one carrying only a zero wait is refused 400 with the stored rule untouched (the pair is judged on the merged rule) |
+| S | GET on `:2028`, 6 held, replace POSTs | the declared fields read back; `fc_effective` holds the rule's ceiling 4 (source `rule`), the env's endpoint ceiling and mode (source `env`), no queue (source `default`) and the rule's telemetry window; an undeclared `fc_mode` is not read back; 4 reach the backend, 2 get 429; an explicit `0` returns the ceiling to the env's 8 (source `env`), then restored; replaces with a ceiling over 100000, an unknown mode, a window over an hour or a `null` ceiling are refused and the stored rule is untouched |
+| O | `:2028` replaced with `fc_mode: off`, 6 held, then `inherit` | mode `off` with source `rule`; all 6 reach the backend, none refused; `inherit` returns the mode to the env's `enforce` and is not read back |
+| U | 6 held on `:2029` (ceiling 2, depth 4), the ceiling replaced with 6 | 2 reach the backend, 4 wait; once the data plane holds 6, all 4 waiters reach the backend within 1500 ms (the once-a-second pass alone would take three seconds or more), the queue empties, 6 × 200, none drained with 503 and the gateway logs an in-place update (a replace that changes only the gate never re-creates the entry); restored |
+| UE | on `:2029` the gate replaced in place with endpoint ceiling 1, window 3 s; 2 held (one per endpoint), 1 more sent | the waiter parks behind the endpoint ceiling while the service has units, so the once-a-second pass wakes it every second and it goes back; it is still ended at its first window: 504 `admission_queue_timeout` within 5000 ms, never reaching a backend; both holders 200; restored, the endpoint ceiling read back from the environment |
 | KA | pool full, one connection sends a buffered request, then another on the same socket after the pool empties | 429 with `Connection: keep-alive`, socket open; the second request on the SAME socket is 200; receipts 0 then 1 |
 | DL | 8 held on `:2025`, 2 waiting, the rule is deleted by its full key (host, path prefix, match mode, model name) and the GET no longer lists it | both 503 `admission_drained`, 0 receipts then or later, 2 `sec.ai.deny` records with decision `admission_drained`; the rule re-created reports enforce with nothing in flight |
 | M | 8 held on `:2025`, 2 waiting, `PUT /maintenance {enabled:true}` | GET maintenance says `refusing_new_inference: true` and `in_flight_requests: 8`; the 2 waiters get 503 `admission_drained` (drained +2); a new request gets 503 `gateway_draining` with `Connection: close` and `Retry-After: 5` and 0 receipts (draining +1); the 8 executing finish 200; `enabled:false` ⇒ `refusing_new_inference: false` and the next request is admitted |
-| H | reboot in observe mode, 12 held | 12 receipts, gauge 12, nothing refused, observe_would_shed 6 (4 over the service ceiling, 1 over each endpoint's), admitted 12 |
+| H | reboot in observe mode, 12 held | 12 receipts, gauge 12, nothing refused, observe_would_shed 6 (4 over the service ceiling, 1 over each endpoint's), admitted 12; after the reboot the `:2028` rule's ceiling and telemetry window still resolve to the rule's values (source `rule`) while its mode follows the new environment (`observe`, source `env`) |
 
 ## Files
 
