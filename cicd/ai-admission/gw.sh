@@ -13,6 +13,12 @@ PORT_TLS=2023         # TLS listener, the same two HTTP/1.1 backends, SSE cap 3 
 PORT_ONE=2024         # one backend: the endpoint ceiling is the binding one
 PORT_Q=2025           # the same two backends with a queue: depth 4, wait 30 s
 PORT_W=2026           # one backend, depth 65536: the memory warning fires at apply
+# (2027 is the port row R13's refused create names; it never exists.)
+PORT_P=2028           # the same two backends, the rule's own ceiling (4) under the env's 8
+PORT_U=2029           # the same two backends, rule ceiling 2 and a queue: raised at runtime
+FC_P_MAX=4
+FC_P_STALE_MS=45000
+FC_U_MAX=2
 FC_Q_DEPTH=4
 # The pool's wait is long enough that a waiter outlives the 10 s metric
 # republish the rows poll between parking it and releasing a unit; row T
@@ -102,6 +108,10 @@ gw_add_rule() {
 
 # gw_queue_json <depth> <wait-ms>: the two queue fields as rule JSON
 gw_queue_json() { echo ", \"fc_max_queue_depth\": $1, \"fc_max_queue_wait_ms\": $2"; }
+# gw_p_json [<extra>]: the :PORT_P rule's own gate fields, plus <extra>
+gw_p_json() { echo ", \"fc_max_outstanding\": $FC_P_MAX, \"fc_telemetry_stale_ms\": $FC_P_STALE_MS${1:-}"; }
+# gw_u_json <ceiling>: the :PORT_U rule's ceiling and queue
+gw_u_json() { echo ", \"fc_max_outstanding\": $1$(gw_queue_json $FC_Q_DEPTH $FC_Q_WAIT_MS)"; }
 
 gw_add_rules() {
   gw_add_rule $PORT_H1  ""                                                       8080 8081 || return 1
@@ -110,6 +120,8 @@ gw_add_rules() {
   gw_add_rule $PORT_ONE ""                                                       8080      || return 1
   gw_add_rule $PORT_Q   "$(gw_queue_json $FC_Q_DEPTH $FC_Q_WAIT_MS)"             8080 8081 || return 1
   gw_add_rule $PORT_W   "$(gw_queue_json 65536 $FC_Q_WAIT_MS)"                   8080      || return 1
+  gw_add_rule $PORT_P   "$(gw_p_json)"                                           8080 8081 || return 1
+  gw_add_rule $PORT_U   "$(gw_u_json $FC_U_MAX)"                                 8080 8081 || return 1
   sleep 2
 }
 

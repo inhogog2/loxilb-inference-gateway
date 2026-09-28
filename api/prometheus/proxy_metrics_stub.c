@@ -169,6 +169,7 @@ int proxy_get_qos_stats(proxy_qos_svc_stat_t *out, int max) {
 #define PROXY_FC_REASONS 12
 #define PROXY_FC_POOL_LEN 64
 #define PROXY_FC_QWAIT_BUCKETS 8
+#define PROXY_FC_LIMITS 8
 
 typedef struct proxy_fc_svc_stat {
     uint32_t xip;
@@ -188,14 +189,19 @@ typedef struct proxy_fc_svc_stat {
     uint64_t qwait_bucket[PROXY_FC_QWAIT_BUCKETS];
     uint64_t qwait_sum_ms;
     uint64_t qwait_count;
+    uint32_t telemetry_stale_ms;
+    uint8_t  src[PROXY_FC_LIMITS];
+    uint32_t pad2;
 } proxy_fc_svc_stat_t;
 /* Pinned to the layout in sockproxy_metrics.h. */
-_Static_assert(sizeof(proxy_fc_svc_stat_t) == 296, "proxy_fc_svc_stat_t size");
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 312, "proxy_fc_svc_stat_t size");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 136, "pool offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 200, "queued offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 216, "qwait_bucket offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 288, "qwait_count offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, telemetry_stale_ms) == 296, "telemetry_stale_ms offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, src) == 300, "src offset");
 
 __attribute__((weak))
 int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max) {

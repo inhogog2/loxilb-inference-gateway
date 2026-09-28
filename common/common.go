@@ -1015,6 +1015,43 @@ type LbServiceArg struct {
 	FcMaxQueueWaitMs uint32 `json:"fc_max_queue_wait_ms,omitempty"`
 	// FcMaxQueueWaitMsPresent is the presence bit for replace semantics.
 	FcMaxQueueWaitMsPresent bool `json:"-"`
+	// FcMode - the service's capacity admission gate: "off", "observe" or
+	// "enforce". Empty (or "inherit" on input) runs on the process default
+	// (LLB_FC_MODE); a rule may switch the gate off under an enforcing
+	// environment.
+	FcMode string `json:"fc_mode,omitempty"`
+	// FcModePresent is the presence bit for replace semantics.
+	FcModePresent bool `json:"-"`
+	// FcMaxOutstanding - the service ceiling on executing inference
+	// requests of the rule's pool. 0 (or omitted) leaves the process default
+	// (LLB_FC_MAX_OUTSTANDING) in force; at most 100000.
+	FcMaxOutstanding uint32 `json:"fc_max_outstanding,omitempty"`
+	// FcMaxOutstandingPresent is the presence bit for replace semantics.
+	FcMaxOutstandingPresent bool `json:"-"`
+	// FcEpMaxInflight - the per-endpoint ceiling for normal (non-P/D)
+	// requests. 0 leaves LLB_FC_EP_MAX_INFLIGHT in force; at most 100000.
+	FcEpMaxInflight uint32 `json:"fc_ep_max_inflight,omitempty"`
+	// FcEpMaxInflightPresent is the presence bit for replace semantics.
+	FcEpMaxInflightPresent bool `json:"-"`
+	// FcPrefillMaxInflight - the per-endpoint ceiling for prefill legs. 0
+	// leaves LLB_FC_PREFILL_MAX_INFLIGHT (or LLB_PD_MAX_INFLIGHT_PER_EP) in
+	// force; at most 100000.
+	FcPrefillMaxInflight uint32 `json:"fc_prefill_max_inflight,omitempty"`
+	// FcPrefillMaxInflightPresent is the presence bit for replace semantics.
+	FcPrefillMaxInflightPresent bool `json:"-"`
+	// FcDecodeMaxInflight - the per-endpoint ceiling for decode legs. 0
+	// leaves LLB_FC_DECODE_MAX_INFLIGHT in force; at most 100000.
+	FcDecodeMaxInflight uint32 `json:"fc_decode_max_inflight,omitempty"`
+	// FcDecodeMaxInflightPresent is the presence bit for replace semantics.
+	FcDecodeMaxInflightPresent bool `json:"-"`
+	// FcTelemetryStaleMs - how long an endpoint's scraped queue depth is
+	// trusted by the P/D scorers without a refresh. 0 leaves
+	// LLB_FC_TELEMETRY_STALE_MS, else 30000, in force; at most 3600000. The
+	// scraper stamps whole seconds, so the window is effectively rounded to
+	// them.
+	FcTelemetryStaleMs uint32 `json:"fc_telemetry_stale_ms,omitempty"`
+	// FcTelemetryStaleMsPresent is the presence bit for replace semantics.
+	FcTelemetryStaleMsPresent bool `json:"-"`
 	// FcEffective - the capacity gate's resolved state on the rule's pool,
 	// read from the data plane for GET only. Never persisted, never read
 	// on input.
@@ -1504,6 +1541,22 @@ type FcEffectiveArg struct {
 	Inflight            uint32 `json:"inflight"`
 	Queued              uint32 `json:"queued"`
 	QueueMemoryBoundMib uint64 `json:"queue_memory_bound_mib"`
+	TelemetryStaleMs    uint32 `json:"telemetry_stale_ms"`
+	// Source names where each value in force came from: "rule", "env" or
+	// "default".
+	Source FcEffectiveSource `json:"source"`
+}
+
+// FcEffectiveSource - the origin of each value in FcEffectiveArg.
+type FcEffectiveSource struct {
+	Mode               string `json:"mode"`
+	MaxOutstanding     string `json:"max_outstanding"`
+	EpMaxInflight      string `json:"ep_max_inflight"`
+	PrefillMaxInflight string `json:"prefill_max_inflight"`
+	DecodeMaxInflight  string `json:"decode_max_inflight"`
+	QueueDepth         string `json:"queue_depth"`
+	QueueWaitMs        string `json:"queue_wait_ms"`
+	TelemetryStaleMs   string `json:"telemetry_stale_ms"`
 }
 
 // LbRuleMod - Info related to a load-balancer entry

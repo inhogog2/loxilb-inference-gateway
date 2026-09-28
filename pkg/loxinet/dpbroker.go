@@ -387,6 +387,12 @@ type LBDpWorkQ struct {
 	PDBalanceAbsThreshold       uint8                   // Load imbalance threshold
 	FcMaxQueueDepth             uint32                  // capacity admission queue depth (0 = process default)
 	FcMaxQueueWaitMs            uint32                  // capacity admission queue wait window in ms
+	FcMode                      uint8                   // admission gate mode, enum fc_rule_mode (0 = process default)
+	FcMaxOutstanding            uint32                  // service ceiling (0 = process default)
+	FcEpMaxInflight             uint32                  // per-endpoint ceiling, normal role (0 = process default)
+	FcPrefillMaxInflight        uint32                  // per-endpoint ceiling, prefill role (0 = process default)
+	FcDecodeMaxInflight         uint32                  // per-endpoint ceiling, decode role (0 = process default)
+	FcTelemetryStaleMs          uint32                  // scraped queue depth trust window (0 = process default)
 	CbEnable                    bool                    // per-endpoint circuit breaker for full-proxy rules
 	KvExactMode                 uint8                   // KV-cache exact routing: 0=off, 1=zmq
 	KvBlockSize                 uint32                  // Token block size for KV hash computation

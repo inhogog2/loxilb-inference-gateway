@@ -721,8 +721,23 @@ type LoadbalanceEntryServiceArguments struct {
 	// External service IP used in the LB rule key. The domain validates the address. Create callers must provide it; shared PATCH-compatible schema optionality does not make an omitted create address usable.
 	ExternalIP *string `json:"externalIP,omitempty"`
 
+	// The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.
+	// Maximum: 100000
+	// Minimum: 0
+	FcDecodeMaxInflight int32 `json:"fc_decode_max_inflight,omitempty"`
+
 	// fc effective
 	FcEffective *LoadbalanceEntryServiceArgumentsFcEffective `json:"fc_effective,omitempty"`
+
+	// The per-endpoint ceiling on executing inference requests for the normal (non P/D) role. 0 or omitted leaves the process default (LLB_FC_EP_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.
+	// Maximum: 100000
+	// Minimum: 0
+	FcEpMaxInflight int32 `json:"fc_ep_max_inflight,omitempty"`
+
+	// The pool-wide ceiling on executing inference requests of the service's model pool. 0 or omitted leaves the process default (LLB_FC_MAX_OUTSTANDING) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.
+	// Maximum: 100000
+	// Minimum: 0
+	FcMaxOutstanding int32 `json:"fc_max_outstanding,omitempty"`
 
 	// Capacity admission queue of the service's model pool: how many inference requests may wait for a capacity unit instead of being refused with 429 when the pool's ceilings are reached. 0 or omitted leaves the process default (LLB_FC_MAX_QUEUE_DEPTH) in force; the ceiling is 65536. HTTP/1.1 requests wait; HTTP/2 streams are refused on their stream and never wait. Every waiting request parks its client connection, which holds about one MiB of receive buffer, so a depth is a memory bound as much as a queue bound: depth x 1 MiB when the queue is full (65536 is about 64 GiB). The gateway logs a WARNING at rule apply when that bound exceeds half of the node's memory and still applies it; bound the connections themselves with connectionLimit or the process valve LLB_PD_MAX_TOTAL_INFLIGHT. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default); PATCH does not reach FullProxy rules. Explicit JSON null is rejected. The resolved values are read back in fc_effective.
 	// Maximum: 65536
@@ -733,6 +748,20 @@ type LoadbalanceEntryServiceArguments struct {
 	// Maximum: 3.6e+06
 	// Minimum: 0
 	FcMaxQueueWaitMs int32 `json:"fc_max_queue_wait_ms,omitempty"`
+
+	// The service's capacity admission gate: enforce refuses (or queues) a request over a ceiling, observe counts what it would have done and changes nothing, off bypasses the gate. inherit, or omitted on create, runs on the process default (LLB_FC_MODE); a rule may switch the gate off under an enforcing environment. On a replace POST an omitted fc_mode keeps the stored one and inherit returns the rule to the process default. Explicit JSON null is rejected. Read back only when declared; the mode in force is fc_effective.mode.
+	// Enum: [off observe enforce inherit]
+	FcMode string `json:"fc_mode,omitempty"`
+
+	// The per-endpoint ceiling on prefill legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_PREFILL_MAX_INFLIGHT, else LLB_PD_MAX_INFLIGHT_PER_EP) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.
+	// Maximum: 100000
+	// Minimum: 0
+	FcPrefillMaxInflight int32 `json:"fc_prefill_max_inflight,omitempty"`
+
+	// How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.
+	// Maximum: 3.6e+06
+	// Minimum: 0
+	FcTelemetryStaleMs int32 `json:"fc_telemetry_stale_ms,omitempty"`
 
 	// Host routing key for the proxy pool, distinct from path_prefix. It participates in the LB rule key, but L7 policy attachment is currently keyed only by listener VIP/port/protocol. The server accepts at most 255 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 256-byte data-plane field; UI validation must count encoded bytes rather than characters. Together with path_prefix and model_name, the conditional host, host|path, host||model or host|path|model key must not exceed 511 UTF-8 bytes including separators.
 	Host string `json:"host,omitempty"`
@@ -971,7 +1000,19 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 		res = append(res, err)
 	}
 
+	if err := m.validateFcDecodeMaxInflight(formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.validateFcEffective(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateFcEpMaxInflight(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateFcMaxOutstanding(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -980,6 +1021,18 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	}
 
 	if err := m.validateFcMaxQueueWaitMs(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateFcMode(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateFcPrefillMaxInflight(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateFcTelemetryStaleMs(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -1271,6 +1324,22 @@ func (m *LoadbalanceEntryServiceArguments) validateChwblReplication(formats strf
 	return nil
 }
 
+func (m *LoadbalanceEntryServiceArguments) validateFcDecodeMaxInflight(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcDecodeMaxInflight) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"fc_decode_max_inflight", "body", int64(m.FcDecodeMaxInflight), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"fc_decode_max_inflight", "body", int64(m.FcDecodeMaxInflight), 100000, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (m *LoadbalanceEntryServiceArguments) validateFcEffective(formats strfmt.Registry) error {
 	if swag.IsZero(m.FcEffective) { // not required
 		return nil
@@ -1285,6 +1354,38 @@ func (m *LoadbalanceEntryServiceArguments) validateFcEffective(formats strfmt.Re
 			}
 			return err
 		}
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcEpMaxInflight(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcEpMaxInflight) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"fc_ep_max_inflight", "body", int64(m.FcEpMaxInflight), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"fc_ep_max_inflight", "body", int64(m.FcEpMaxInflight), 100000, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcMaxOutstanding(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcMaxOutstanding) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"fc_max_outstanding", "body", int64(m.FcMaxOutstanding), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"fc_max_outstanding", "body", int64(m.FcMaxOutstanding), 100000, false); err != nil {
+		return err
 	}
 
 	return nil
@@ -1316,6 +1417,86 @@ func (m *LoadbalanceEntryServiceArguments) validateFcMaxQueueWaitMs(formats strf
 	}
 
 	if err := validate.MaximumInt("serviceArguments"+"."+"fc_max_queue_wait_ms", "body", int64(m.FcMaxQueueWaitMs), 3.6e+06, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsTypeFcModePropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["off","observe","enforce","inherit"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsTypeFcModePropEnum = append(loadbalanceEntryServiceArgumentsTypeFcModePropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcModeOff captures enum value "off"
+	LoadbalanceEntryServiceArgumentsFcModeOff string = "off"
+
+	// LoadbalanceEntryServiceArgumentsFcModeObserve captures enum value "observe"
+	LoadbalanceEntryServiceArgumentsFcModeObserve string = "observe"
+
+	// LoadbalanceEntryServiceArgumentsFcModeEnforce captures enum value "enforce"
+	LoadbalanceEntryServiceArgumentsFcModeEnforce string = "enforce"
+
+	// LoadbalanceEntryServiceArgumentsFcModeInherit captures enum value "inherit"
+	LoadbalanceEntryServiceArgumentsFcModeInherit string = "inherit"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArguments) validateFcModeEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsTypeFcModePropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcMode(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcMode) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateFcModeEnum("serviceArguments"+"."+"fc_mode", "body", m.FcMode); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcPrefillMaxInflight(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcPrefillMaxInflight) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"fc_prefill_max_inflight", "body", int64(m.FcPrefillMaxInflight), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"fc_prefill_max_inflight", "body", int64(m.FcPrefillMaxInflight), 100000, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcTelemetryStaleMs(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcTelemetryStaleMs) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"fc_telemetry_stale_ms", "body", int64(m.FcTelemetryStaleMs), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"fc_telemetry_stale_ms", "body", int64(m.FcTelemetryStaleMs), 3.6e+06, false); err != nil {
 		return err
 	}
 
@@ -2083,7 +2264,7 @@ func (m *LoadbalanceEntryServiceArguments) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-// LoadbalanceEntryServiceArgumentsFcEffective The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB).
+// LoadbalanceEntryServiceArgumentsFcEffective The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default).
 //
 // swagger:model LoadbalanceEntryServiceArgumentsFcEffective
 type LoadbalanceEntryServiceArgumentsFcEffective struct {
@@ -2117,10 +2298,44 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 
 	// Inference requests waiting for a unit right now.
 	Queued int32 `json:"queued,omitempty"`
+
+	// source
+	Source *LoadbalanceEntryServiceArgumentsFcEffectiveSource `json:"source,omitempty"`
+
+	// The P/D scorers' trust window for scraped queue depth, in milliseconds.
+	TelemetryStaleMs int32 `json:"telemetry_stale_ms,omitempty"`
 }
 
 // Validate validates this loadbalance entry service arguments fc effective
 func (m *LoadbalanceEntryServiceArgumentsFcEffective) Validate(formats strfmt.Registry) error {
+	var res []error
+
+	if err := m.validateSource(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if len(res) > 0 {
+		return errors.CompositeValidationError(res...)
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateSource(formats strfmt.Registry) error {
+	if swag.IsZero(m.Source) { // not required
+		return nil
+	}
+
+	if m.Source != nil {
+		if err := m.Source.Validate(formats); err != nil {
+			if ve, ok := err.(*errors.Validation); ok {
+				return ve.ValidateName("serviceArguments" + "." + "fc_effective" + "." + "source")
+			} else if ce, ok := err.(*errors.CompositeError); ok {
+				return ce.ValidateName("serviceArguments" + "." + "fc_effective" + "." + "source")
+			}
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -2128,9 +2343,29 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) Validate(formats strfmt.Re
 func (m *LoadbalanceEntryServiceArgumentsFcEffective) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
 	var res []error
 
+	if err := m.contextValidateSource(ctx, formats); err != nil {
+		res = append(res, err)
+	}
+
 	if len(res) > 0 {
 		return errors.CompositeValidationError(res...)
 	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) contextValidateSource(ctx context.Context, formats strfmt.Registry) error {
+
+	if m.Source != nil {
+		if err := m.Source.ContextValidate(ctx, formats); err != nil {
+			if ve, ok := err.(*errors.Validation); ok {
+				return ve.ValidateName("serviceArguments" + "." + "fc_effective" + "." + "source")
+			} else if ce, ok := err.(*errors.CompositeError); ok {
+				return ce.ValidateName("serviceArguments" + "." + "fc_effective" + "." + "source")
+			}
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -2145,6 +2380,469 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) MarshalBinary() ([]byte, e
 // UnmarshalBinary interface implementation
 func (m *LoadbalanceEntryServiceArgumentsFcEffective) UnmarshalBinary(b []byte) error {
 	var res LoadbalanceEntryServiceArgumentsFcEffective
+	if err := swag.ReadJSON(b, &res); err != nil {
+		return err
+	}
+	*m = res
+	return nil
+}
+
+// LoadbalanceEntryServiceArgumentsFcEffectiveSource Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).
+//
+// swagger:model LoadbalanceEntryServiceArgumentsFcEffectiveSource
+type LoadbalanceEntryServiceArgumentsFcEffectiveSource struct {
+
+	// decode max inflight
+	// Enum: [rule env default]
+	DecodeMaxInflight string `json:"decode_max_inflight,omitempty"`
+
+	// ep max inflight
+	// Enum: [rule env default]
+	EpMaxInflight string `json:"ep_max_inflight,omitempty"`
+
+	// max outstanding
+	// Enum: [rule env default]
+	MaxOutstanding string `json:"max_outstanding,omitempty"`
+
+	// mode
+	// Enum: [rule env default]
+	Mode string `json:"mode,omitempty"`
+
+	// prefill max inflight
+	// Enum: [rule env default]
+	PrefillMaxInflight string `json:"prefill_max_inflight,omitempty"`
+
+	// queue depth
+	// Enum: [rule env default]
+	QueueDepth string `json:"queue_depth,omitempty"`
+
+	// queue wait ms
+	// Enum: [rule env default]
+	QueueWaitMs string `json:"queue_wait_ms,omitempty"`
+
+	// telemetry stale ms
+	// Enum: [rule env default]
+	TelemetryStaleMs string `json:"telemetry_stale_ms,omitempty"`
+}
+
+// Validate validates this loadbalance entry service arguments fc effective source
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) Validate(formats strfmt.Registry) error {
+	var res []error
+
+	if err := m.validateDecodeMaxInflight(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateEpMaxInflight(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateMaxOutstanding(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateMode(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validatePrefillMaxInflight(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateQueueDepth(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateQueueWaitMs(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateTelemetryStaleMs(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if len(res) > 0 {
+		return errors.CompositeValidationError(res...)
+	}
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDecodeMaxInflightPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDecodeMaxInflightPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDecodeMaxInflightPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDecodeMaxInflightRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDecodeMaxInflightRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDecodeMaxInflightEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDecodeMaxInflightEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDecodeMaxInflightDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDecodeMaxInflightDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateDecodeMaxInflightEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDecodeMaxInflightPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateDecodeMaxInflight(formats strfmt.Registry) error {
+	if swag.IsZero(m.DecodeMaxInflight) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateDecodeMaxInflightEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"decode_max_inflight", "body", m.DecodeMaxInflight); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeEpMaxInflightPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeEpMaxInflightPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeEpMaxInflightPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceEpMaxInflightRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceEpMaxInflightRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceEpMaxInflightEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceEpMaxInflightEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceEpMaxInflightDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceEpMaxInflightDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateEpMaxInflightEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeEpMaxInflightPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateEpMaxInflight(formats strfmt.Registry) error {
+	if swag.IsZero(m.EpMaxInflight) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateEpMaxInflightEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"ep_max_inflight", "body", m.EpMaxInflight); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeMaxOutstandingPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeMaxOutstandingPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeMaxOutstandingPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceMaxOutstandingRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceMaxOutstandingRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceMaxOutstandingEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceMaxOutstandingEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceMaxOutstandingDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceMaxOutstandingDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateMaxOutstandingEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeMaxOutstandingPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateMaxOutstanding(formats strfmt.Registry) error {
+	if swag.IsZero(m.MaxOutstanding) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateMaxOutstandingEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"max_outstanding", "body", m.MaxOutstanding); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeModePropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeModePropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeModePropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceModeRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceModeRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceModeEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceModeEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceModeDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceModeDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateModeEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeModePropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateMode(formats strfmt.Registry) error {
+	if swag.IsZero(m.Mode) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateModeEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"mode", "body", m.Mode); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypePrefillMaxInflightPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypePrefillMaxInflightPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypePrefillMaxInflightPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourcePrefillMaxInflightRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourcePrefillMaxInflightRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourcePrefillMaxInflightEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourcePrefillMaxInflightEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourcePrefillMaxInflightDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourcePrefillMaxInflightDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validatePrefillMaxInflightEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypePrefillMaxInflightPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validatePrefillMaxInflight(formats strfmt.Registry) error {
+	if swag.IsZero(m.PrefillMaxInflight) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validatePrefillMaxInflightEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"prefill_max_inflight", "body", m.PrefillMaxInflight); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeQueueDepthPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeQueueDepthPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeQueueDepthPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueDepthRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueDepthRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueDepthEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueDepthEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueDepthDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueDepthDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateQueueDepthEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeQueueDepthPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateQueueDepth(formats strfmt.Registry) error {
+	if swag.IsZero(m.QueueDepth) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateQueueDepthEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"queue_depth", "body", m.QueueDepth); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeQueueWaitMsPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeQueueWaitMsPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeQueueWaitMsPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueWaitMsRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueWaitMsRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueWaitMsEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueWaitMsEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueWaitMsDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceQueueWaitMsDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateQueueWaitMsEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeQueueWaitMsPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateQueueWaitMs(formats strfmt.Registry) error {
+	if swag.IsZero(m.QueueWaitMs) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateQueueWaitMsEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"queue_wait_ms", "body", m.QueueWaitMs); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTelemetryStaleMsPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTelemetryStaleMsPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTelemetryStaleMsPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceTelemetryStaleMsRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceTelemetryStaleMsRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceTelemetryStaleMsEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceTelemetryStaleMsEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceTelemetryStaleMsDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceTelemetryStaleMsDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateTelemetryStaleMsEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTelemetryStaleMsPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateTelemetryStaleMs(formats strfmt.Registry) error {
+	if swag.IsZero(m.TelemetryStaleMs) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateTelemetryStaleMsEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"telemetry_stale_ms", "body", m.TelemetryStaleMs); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ContextValidate validates this loadbalance entry service arguments fc effective source based on context it is used
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
+	return nil
+}
+
+// MarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) MarshalBinary() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return swag.WriteJSON(m)
+}
+
+// UnmarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) UnmarshalBinary(b []byte) error {
+	var res LoadbalanceEntryServiceArgumentsFcEffectiveSource
 	if err := swag.ReadJSON(b, &res); err != nil {
 		return err
 	}

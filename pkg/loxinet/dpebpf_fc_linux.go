@@ -88,7 +88,29 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 		Inflight:            uint32(st.inflight),
 		Queued:              uint32(st.queued),
 		QueueMemoryBoundMib: uint64(st.max_queue_depth),
+		TelemetryStaleMs:    uint32(st.telemetry_stale_ms),
+		Source: cmn.FcEffectiveSource{
+			Mode:               fcSourceName(st.src[0]),
+			MaxOutstanding:     fcSourceName(st.src[1]),
+			EpMaxInflight:      fcSourceName(st.src[2]),
+			PrefillMaxInflight: fcSourceName(st.src[3]),
+			DecodeMaxInflight:  fcSourceName(st.src[4]),
+			QueueDepth:         fcSourceName(st.src[5]),
+			QueueWaitMs:        fcSourceName(st.src[6]),
+			TelemetryStaleMs:   fcSourceName(st.src[7]),
+		},
 	}, true
+}
+
+// fcSourceName names enum fc_src: where a value in force came from.
+func fcSourceName(src C.uint8_t) string {
+	switch src {
+	case 1:
+		return "env"
+	case 2:
+		return "rule"
+	}
+	return "default"
 }
 
 // DpFcInflightTotal - inference requests executing under the gate, summed

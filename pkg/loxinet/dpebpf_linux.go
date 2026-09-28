@@ -1843,6 +1843,14 @@ func DpLBRuleMod(w *LBDpWorkQ) int {
 	// process default from the environment applies in the data plane).
 	dat.fc_max_queue_depth = C.uint32_t(w.FcMaxQueueDepth)
 	dat.fc_max_queue_wait_ms = C.uint32_t(w.FcMaxQueueWaitMs)
+	// The rest of the rule's admission gate, as declared (0 = the process
+	// default; the data plane resolves the precedence and keeps the source).
+	dat.fc_mode = C.uint8_t(w.FcMode)
+	dat.fc_max_outstanding = C.uint32_t(w.FcMaxOutstanding)
+	dat.fc_ep_max_inflight = C.uint32_t(w.FcEpMaxInflight)
+	dat.fc_prefill_max_inflight = C.uint32_t(w.FcPrefillMaxInflight)
+	dat.fc_decode_max_inflight = C.uint32_t(w.FcDecodeMaxInflight)
+	dat.fc_telemetry_stale_ms = C.uint32_t(w.FcTelemetryStaleMs)
 
 	// Per-endpoint circuit breaker (opt-in per rule)
 	if w.CbEnable {
