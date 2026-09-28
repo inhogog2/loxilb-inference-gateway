@@ -16,7 +16,12 @@
 package loxinet
 
 import (
+	"fmt"
+	"os"
+	"strings"
+
 	cmn "github.com/loxilb-io/loxilb/common"
+	tk "github.com/loxilb-io/loxilib"
 )
 
 // fcRuleCfg is a rule's declared admission gate beyond the queue pair, as
@@ -29,6 +34,9 @@ type fcRuleCfg struct {
 	prefillMaxInflight uint32
 	decodeMaxInflight  uint32
 	telemetryStaleMs   uint32
+	adaptive           uint8 // cmn.FcRuleAdaptive*
+	warmupMs           uint32
+	ttftTargetMs       uint32
 }
 
 // fcRuleResolve returns the gate declaration a rule will store: on create
@@ -40,6 +48,10 @@ func fcRuleResolve(eRule *ruleEnt, serv *cmn.LbServiceArg) (fcRuleCfg, error) {
 	if err != nil {
 		return fcRuleCfg{}, err
 	}
+	adaptive, err := cmn.FcAdaptiveToRule(serv.FcAdaptive)
+	if err != nil {
+		return fcRuleCfg{}, err
+	}
 	next := fcRuleCfg{
 		mode:               mode,
 		maxOutstanding:     serv.FcMaxOutstanding,
@@ -47,6 +59,9 @@ func fcRuleResolve(eRule *ruleEnt, serv *cmn.LbServiceArg) (fcRuleCfg, error) {
 		prefillMaxInflight: serv.FcPrefillMaxInflight,
 		decodeMaxInflight:  serv.FcDecodeMaxInflight,
 		telemetryStaleMs:   serv.FcTelemetryStaleMs,
+		adaptive:           adaptive,
+		warmupMs:           serv.FcWarmupMs,
+		ttftTargetMs:       serv.FcTtftTargetMs,
 	}
 	if eRule != nil {
 		cur := eRule.fcCfg
@@ -58,6 +73,11 @@ func fcRuleResolve(eRule *ruleEnt, serv *cmn.LbServiceArg) (fcRuleCfg, error) {
 		next.prefillMaxInflight = u32OnReplace(cur.prefillMaxInflight, serv.FcPrefillMaxInflight, serv.FcPrefillMaxInflightPresent)
 		next.decodeMaxInflight = u32OnReplace(cur.decodeMaxInflight, serv.FcDecodeMaxInflight, serv.FcDecodeMaxInflightPresent)
 		next.telemetryStaleMs = u32OnReplace(cur.telemetryStaleMs, serv.FcTelemetryStaleMs, serv.FcTelemetryStaleMsPresent)
+		if !serv.FcAdaptivePresent && serv.FcAdaptive == "" {
+			next.adaptive = cur.adaptive
+		}
+		next.warmupMs = u32OnReplace(cur.warmupMs, serv.FcWarmupMs, serv.FcWarmupMsPresent)
+		next.ttftTargetMs = u32OnReplace(cur.ttftTargetMs, serv.FcTtftTargetMs, serv.FcTtftTargetMsPresent)
 	}
 	for _, c := range []struct {
 		name string
@@ -77,6 +97,14 @@ func fcRuleResolve(eRule *ruleEnt, serv *cmn.LbServiceArg) (fcRuleCfg, error) {
 		return fcRuleCfg{}, cmn.NewValidationError("fc_telemetry_stale_ms",
 			"fc_telemetry_stale_ms must be within 0..%d", cmn.FcTelemetryStaleMsMax)
 	}
+	if next.warmupMs > cmn.FcWarmupMsMax {
+		return fcRuleCfg{}, cmn.NewValidationError("fc_warmup_ms",
+			"fc_warmup_ms must be within 0..%d", cmn.FcWarmupMsMax)
+	}
+	if next.ttftTargetMs > cmn.FcTtftTargetMsMax {
+		return fcRuleCfg{}, cmn.NewValidationError("fc_ttft_target_ms",
+			"fc_ttft_target_ms must be within 0..%d", cmn.FcTtftTargetMsMax)
+	}
 	return next, nil
 }
 
@@ -89,4 +117,62 @@ func (c fcRuleCfg) toServ(s *cmn.LbServiceArg) {
 	s.FcPrefillMaxInflight = c.prefillMaxInflight
 	s.FcDecodeMaxInflight = c.decodeMaxInflight
 	s.FcTelemetryStaleMs = c.telemetryStaleMs
+	s.FcAdaptive = cmn.FcAdaptiveFromRule(c.adaptive)
+	s.FcWarmupMs = c.warmupMs
+	s.FcTtftTargetMs = c.ttftTargetMs
+}
+
+// adaptiveInForce reports whether the rule's pool adapts its service
+// ceiling: its own switch, or the process default when it declares none.
+func (c fcRuleCfg) adaptiveInForce() bool {
+	switch c.adaptive {
+	case cmn.FcRuleAdaptiveOn:
+		return true
+	case cmn.FcRuleAdaptiveOff:
+		return false
+	}
+	return strings.EqualFold(os.Getenv("LLB_FC_ADAPTIVE"), "on")
+}
+
+// syncVllmScraper runs the rule's vLLM metrics scraper while something
+// reads what it scrapes: the P/D scorers, or the adaptive admission ceiling
+// of an AI-gateway rule. The scraper addresses endpoints by their index in
+// the rule, so a rule whose endpoints changed gets a fresh one.
+func (r *ruleEnt) syncVllmScraper() {
+	lbActs, ok := r.act.action.(*ruleLBActs)
+	if !ok {
+		return
+	}
+	want := r.pdDisaggMode || (r.aiGwMode() && r.fcCfg.adaptiveInForce())
+	endpoints := make(map[int]string, len(lbActs.endPoints))
+	if want {
+		for i, ep := range lbActs.endPoints {
+			endpoints[i] = fmt.Sprintf("%s:%d", ep.xIP.String(), ep.xPort)
+		}
+	}
+	if r.vllmScraper != nil {
+		if want && r.vllmScraper.sameEndpoints(endpoints) {
+			return
+		}
+		r.vllmScraper.Stop()
+		r.vllmScraper = nil
+	}
+	if !want {
+		return
+	}
+	svcIP := tk.IPtonl(r.tuples.l3Dst.addr.IP)
+	svcPort := r.tuples.l4Dst.valMin
+	// updateFn mirrors samples into the Go-side worker-metrics cache so
+	// the REST introspection/staleness APIs see the built-in scraper
+	// (cache only — the data plane's queue-depth push happens inside the
+	// sink).
+	r.vllmScraper = NewVllmScraper(endpoints, svcIP, svcPort, 0,
+		func(epIP string, m WorkerMetrics) {
+			if mh.dpEbpf != nil {
+				mh.dpEbpf.StoreWorkerMetricsCache(m.EndpointIP, m)
+			}
+		})
+	// thread the mh-owned shutdown ctx so the scraper exits when the
+	// workers stage cancels.
+	go r.vllmScraper.Run(mh.shutdownCtx)
 }

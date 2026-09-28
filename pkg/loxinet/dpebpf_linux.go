@@ -1851,6 +1851,9 @@ func DpLBRuleMod(w *LBDpWorkQ) int {
 	dat.fc_prefill_max_inflight = C.uint32_t(w.FcPrefillMaxInflight)
 	dat.fc_decode_max_inflight = C.uint32_t(w.FcDecodeMaxInflight)
 	dat.fc_telemetry_stale_ms = C.uint32_t(w.FcTelemetryStaleMs)
+	dat.fc_adaptive = C.uint8_t(w.FcAdaptive)
+	dat.fc_warmup_ms = C.uint32_t(w.FcWarmupMs)
+	dat.fc_ttft_target_ms = C.uint32_t(w.FcTtftTargetMs)
 
 	// Per-endpoint circuit breaker (opt-in per rule)
 	if w.CbEnable {

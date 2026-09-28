@@ -4613,6 +4613,16 @@ func init() {
               "type": "string",
               "x-nullable": true
             },
+            "fc_adaptive": {
+              "description": "on lets the service ceiling (fc_max_outstanding in force) tighten while the rule's endpoints report backpressure (scraped waiting requests, or a time to first token over fc_ttft_target_ms): to four fifths each second, never below a quarter of the ceiling, and back up by one each second the fresh signals are clear. With no fresh signal it holds where it is: stale telemetry never widens it. off keeps the ceiling fixed; inherit, or omitted on create, runs on the process default (LLB_FC_ADAPTIVE). Replace and null semantics as fc_mode. The ceiling in force and its state are read back in fc_effective.",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
             "fc_decode_max_inflight": {
               "default": 0,
               "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
@@ -4623,10 +4633,43 @@ func init() {
               "x-nullable": false
             },
             "fc_effective": {
-              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default).",
+              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
               "properties": {
+                "adapt_reason": {
+                  "description": "Why the adaptive ceiling last moved, or why it holds.",
+                  "enum": [
+                    "none",
+                    "queued",
+                    "ttft",
+                    "clear",
+                    "stale"
+                  ],
+                  "type": "string"
+                },
+                "adapt_state": {
+                  "description": "off (not adaptive, or no service ceiling), open (at the ceiling), tightened (below it, following fresh signals) or frozen (below it, no fresh signal: held).",
+                  "enum": [
+                    "off",
+                    "open",
+                    "tightened",
+                    "frozen"
+                  ],
+                  "type": "string"
+                },
+                "adaptive": {
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "type": "string"
+                },
                 "decode_max_inflight": {
                   "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "effective_max_outstanding": {
+                  "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
                   "format": "int32",
                   "type": "integer"
                 },
@@ -4677,6 +4720,14 @@ func init() {
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
                   "properties": {
+                    "adaptive": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
                     "decode_max_inflight": {
                       "enum": [
                         "rule",
@@ -4740,12 +4791,41 @@ func init() {
                         "default"
                       ],
                       "type": "string"
+                    },
+                    "ttft_target_ms": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "warmup_ms": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
                     }
                   },
                   "type": "object"
                 },
                 "telemetry_stale_ms": {
                   "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "ttft_target_ms": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "warming_endpoints": {
+                  "description": "Endpoints inside their warm-up window.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "warmup_ms": {
                   "format": "int32",
                   "type": "integer"
                 }
@@ -4812,6 +4892,24 @@ func init() {
             "fc_telemetry_stale_ms": {
               "default": 0,
               "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
+              "format": "int32",
+              "maximum": 3600000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
+            "fc_ttft_target_ms": {
+              "default": 0,
+              "description": "With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.",
+              "format": "int32",
+              "maximum": 3600000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
+            "fc_warmup_ms": {
+              "default": 0,
+              "description": "An endpoint back in service (its circuit breaker closed, or a replace added or re-enabled it) ramps its per-endpoint ceilings from a quarter to all of them over this window, in milliseconds, instead of taking a full share of a burst cold. 0 or omitted leaves the process default (LLB_FC_WARMUP_MS, else no ramp) in force. Replace and null semantics as fc_max_outstanding.",
               "format": "int32",
               "maximum": 3600000,
               "minimum": 0,
@@ -38530,6 +38628,16 @@ func init() {
               "type": "string",
               "x-nullable": true
             },
+            "fc_adaptive": {
+              "description": "on lets the service ceiling (fc_max_outstanding in force) tighten while the rule's endpoints report backpressure (scraped waiting requests, or a time to first token over fc_ttft_target_ms): to four fifths each second, never below a quarter of the ceiling, and back up by one each second the fresh signals are clear. With no fresh signal it holds where it is: stale telemetry never widens it. off keeps the ceiling fixed; inherit, or omitted on create, runs on the process default (LLB_FC_ADAPTIVE). Replace and null semantics as fc_mode. The ceiling in force and its state are read back in fc_effective.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "x-nullable": false
+            },
             "fc_decode_max_inflight": {
               "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
               "type": "integer",
@@ -38540,11 +38648,44 @@ func init() {
               "x-nullable": false
             },
             "fc_effective": {
-              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default).",
+              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
               "type": "object",
               "properties": {
+                "adapt_reason": {
+                  "description": "Why the adaptive ceiling last moved, or why it holds.",
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "queued",
+                    "ttft",
+                    "clear",
+                    "stale"
+                  ]
+                },
+                "adapt_state": {
+                  "description": "off (not adaptive, or no service ceiling), open (at the ceiling), tightened (below it, following fresh signals) or frozen (below it, no fresh signal: held).",
+                  "type": "string",
+                  "enum": [
+                    "off",
+                    "open",
+                    "tightened",
+                    "frozen"
+                  ]
+                },
+                "adaptive": {
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ]
+                },
                 "decode_max_inflight": {
                   "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "effective_max_outstanding": {
+                  "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
                   "type": "integer",
                   "format": "int32"
                 },
@@ -38596,6 +38737,14 @@ func init() {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
                   "type": "object",
                   "properties": {
+                    "adaptive": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
                     "decode_max_inflight": {
                       "type": "string",
                       "enum": [
@@ -38659,11 +38808,40 @@ func init() {
                         "env",
                         "default"
                       ]
+                    },
+                    "ttft_target_ms": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "warmup_ms": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
                     }
                   }
                 },
                 "telemetry_stale_ms": {
                   "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "ttft_target_ms": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "warming_endpoints": {
+                  "description": "Endpoints inside their warm-up window.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "warmup_ms": {
                   "type": "integer",
                   "format": "int32"
                 }
@@ -38728,6 +38906,24 @@ func init() {
             },
             "fc_telemetry_stale_ms": {
               "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 3600000,
+              "minimum": 0,
+              "x-nullable": false
+            },
+            "fc_ttft_target_ms": {
+              "description": "With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 3600000,
+              "minimum": 0,
+              "x-nullable": false
+            },
+            "fc_warmup_ms": {
+              "description": "An endpoint back in service (its circuit breaker closed, or a replace added or re-enabled it) ramps its per-endpoint ceilings from a quarter to all of them over this window, in milliseconds, instead of taking a full share of a burst cold. 0 or omitted leaves the process default (LLB_FC_WARMUP_MS, else no ramp) in force. Replace and null semantics as fc_max_outstanding.",
               "type": "integer",
               "format": "int32",
               "default": 0,
@@ -39426,6 +39622,16 @@ func init() {
           "type": "string",
           "x-nullable": true
         },
+        "fc_adaptive": {
+          "description": "on lets the service ceiling (fc_max_outstanding in force) tighten while the rule's endpoints report backpressure (scraped waiting requests, or a time to first token over fc_ttft_target_ms): to four fifths each second, never below a quarter of the ceiling, and back up by one each second the fresh signals are clear. With no fresh signal it holds where it is: stale telemetry never widens it. off keeps the ceiling fixed; inherit, or omitted on create, runs on the process default (LLB_FC_ADAPTIVE). Replace and null semantics as fc_mode. The ceiling in force and its state are read back in fc_effective.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off",
+            "inherit"
+          ],
+          "x-nullable": false
+        },
         "fc_decode_max_inflight": {
           "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
           "type": "integer",
@@ -39436,11 +39642,44 @@ func init() {
           "x-nullable": false
         },
         "fc_effective": {
-          "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default).",
+          "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
           "type": "object",
           "properties": {
+            "adapt_reason": {
+              "description": "Why the adaptive ceiling last moved, or why it holds.",
+              "type": "string",
+              "enum": [
+                "none",
+                "queued",
+                "ttft",
+                "clear",
+                "stale"
+              ]
+            },
+            "adapt_state": {
+              "description": "off (not adaptive, or no service ceiling), open (at the ceiling), tightened (below it, following fresh signals) or frozen (below it, no fresh signal: held).",
+              "type": "string",
+              "enum": [
+                "off",
+                "open",
+                "tightened",
+                "frozen"
+              ]
+            },
+            "adaptive": {
+              "type": "string",
+              "enum": [
+                "on",
+                "off"
+              ]
+            },
             "decode_max_inflight": {
               "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "effective_max_outstanding": {
+              "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
               "type": "integer",
               "format": "int32"
             },
@@ -39492,6 +39731,14 @@ func init() {
               "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
               "type": "object",
               "properties": {
+                "adaptive": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
                 "decode_max_inflight": {
                   "type": "string",
                   "enum": [
@@ -39555,11 +39802,40 @@ func init() {
                     "env",
                     "default"
                   ]
+                },
+                "ttft_target_ms": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "warmup_ms": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
                 }
               }
             },
             "telemetry_stale_ms": {
               "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "ttft_target_ms": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "warming_endpoints": {
+              "description": "Endpoints inside their warm-up window.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "warmup_ms": {
               "type": "integer",
               "format": "int32"
             }
@@ -39624,6 +39900,24 @@ func init() {
         },
         "fc_telemetry_stale_ms": {
           "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 3600000,
+          "minimum": 0,
+          "x-nullable": false
+        },
+        "fc_ttft_target_ms": {
+          "description": "With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 3600000,
+          "minimum": 0,
+          "x-nullable": false
+        },
+        "fc_warmup_ms": {
+          "description": "An endpoint back in service (its circuit breaker closed, or a replace added or re-enabled it) ramps its per-endpoint ceilings from a quarter to all of them over this window, in milliseconds, instead of taking a full share of a burst cold. 0 or omitted leaves the process default (LLB_FC_WARMUP_MS, else no ramp) in force. Replace and null semantics as fc_max_outstanding.",
           "type": "integer",
           "format": "int32",
           "default": 0,
@@ -40081,11 +40375,44 @@ func init() {
       }
     },
     "LoadbalanceEntryServiceArgumentsFcEffective": {
-      "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default).",
+      "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
       "type": "object",
       "properties": {
+        "adapt_reason": {
+          "description": "Why the adaptive ceiling last moved, or why it holds.",
+          "type": "string",
+          "enum": [
+            "none",
+            "queued",
+            "ttft",
+            "clear",
+            "stale"
+          ]
+        },
+        "adapt_state": {
+          "description": "off (not adaptive, or no service ceiling), open (at the ceiling), tightened (below it, following fresh signals) or frozen (below it, no fresh signal: held).",
+          "type": "string",
+          "enum": [
+            "off",
+            "open",
+            "tightened",
+            "frozen"
+          ]
+        },
+        "adaptive": {
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
+        },
         "decode_max_inflight": {
           "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "effective_max_outstanding": {
+          "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
           "type": "integer",
           "format": "int32"
         },
@@ -40137,6 +40464,14 @@ func init() {
           "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
           "type": "object",
           "properties": {
+            "adaptive": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
             "decode_max_inflight": {
               "type": "string",
               "enum": [
@@ -40200,11 +40535,40 @@ func init() {
                 "env",
                 "default"
               ]
+            },
+            "ttft_target_ms": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "warmup_ms": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
             }
           }
         },
         "telemetry_stale_ms": {
           "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "ttft_target_ms": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "warming_endpoints": {
+          "description": "Endpoints inside their warm-up window.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "warmup_ms": {
           "type": "integer",
           "format": "int32"
         }
@@ -40215,6 +40579,14 @@ func init() {
       "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
       "type": "object",
       "properties": {
+        "adaptive": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
         "decode_max_inflight": {
           "type": "string",
           "enum": [
@@ -40272,6 +40644,22 @@ func init() {
           ]
         },
         "telemetry_stale_ms": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "ttft_target_ms": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "warmup_ms": {
           "type": "string",
           "enum": [
             "rule",

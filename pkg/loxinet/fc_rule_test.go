@@ -96,3 +96,83 @@ func TestFcRuleToServ(t *testing.T) {
 		t.Fatalf("an inherited declaration read back %+v", s)
 	}
 }
+
+// The adaptive switch, the warm-up window and the TTFT target follow the
+// replace rules of the rest of the gate: omitted keeps, present replaces.
+func TestFcRuleAdaptiveOnReplace(t *testing.T) {
+	stored := &ruleEnt{fcCfg: fcRuleCfg{maxOutstanding: 8, adaptive: cmn.FcRuleAdaptiveOn,
+		warmupMs: 20000, ttftTargetMs: 800}}
+	for _, c := range []struct {
+		name  string
+		eRule *ruleEnt
+		serv  cmn.LbServiceArg
+		want  fcRuleCfg
+	}{
+		{"create: declared", nil,
+			cmn.LbServiceArg{FcAdaptive: "on", FcWarmupMs: 5000, FcTtftTargetMs: 300},
+			fcRuleCfg{adaptive: cmn.FcRuleAdaptiveOn, warmupMs: 5000, ttftTargetMs: 300}},
+		{"replace: nothing present keeps all", stored, cmn.LbServiceArg{}, stored.fcCfg},
+		{"replace: switched off, windows kept", stored,
+			cmn.LbServiceArg{FcAdaptive: "off", FcAdaptivePresent: true},
+			fcRuleCfg{maxOutstanding: 8, adaptive: cmn.FcRuleAdaptiveOff, warmupMs: 20000, ttftTargetMs: 800}},
+		{"replace: inherit and explicit zeros reset", stored,
+			cmn.LbServiceArg{FcAdaptive: "inherit", FcAdaptivePresent: true,
+				FcWarmupMsPresent: true, FcTtftTargetMsPresent: true},
+			fcRuleCfg{maxOutstanding: 8}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := fcRuleResolve(c.eRule, &c.serv)
+			if err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if got != c.want {
+				t.Fatalf("resolved %+v, want %+v", got, c.want)
+			}
+		})
+	}
+	for _, c := range []struct {
+		name string
+		serv cmn.LbServiceArg
+	}{
+		{"an unknown switch", cmn.LbServiceArg{FcAdaptive: "yes"}},
+		{"a warm-up above an hour", cmn.LbServiceArg{FcWarmupMs: cmn.FcWarmupMsMax + 1}},
+		{"a TTFT target above an hour", cmn.LbServiceArg{FcTtftTargetMs: cmn.FcTtftTargetMsMax + 1}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := fcRuleResolve(nil, &c.serv)
+			var invalid *cmn.ValidationError
+			if !errors.As(err, &invalid) {
+				t.Fatalf("err=%v, want a validation refusal", err)
+			}
+		})
+	}
+
+	var s cmn.LbServiceArg
+	stored.fcCfg.toServ(&s)
+	if s.FcAdaptive != "on" || s.FcWarmupMs != 20000 || s.FcTtftTargetMs != 800 {
+		t.Fatalf("read back %+v", s)
+	}
+	fcRuleCfg{}.toServ(&s)
+	if s.FcAdaptive != "" {
+		t.Fatalf("an inherited switch read back %q", s.FcAdaptive)
+	}
+}
+
+// Whether the pool adapts, and so whether the rule needs its scraper: the
+// rule's own switch wins; with none, the process default decides.
+func TestFcRuleAdaptiveInForce(t *testing.T) {
+	t.Setenv("LLB_FC_ADAPTIVE", "on")
+	if !(fcRuleCfg{}).adaptiveInForce() {
+		t.Fatal("an inheriting rule under LLB_FC_ADAPTIVE=on does not adapt")
+	}
+	if (fcRuleCfg{adaptive: cmn.FcRuleAdaptiveOff}).adaptiveInForce() {
+		t.Fatal("a rule that switched it off adapts")
+	}
+	t.Setenv("LLB_FC_ADAPTIVE", "")
+	if (fcRuleCfg{}).adaptiveInForce() {
+		t.Fatal("an inheriting rule adapts with no process default")
+	}
+	if !(fcRuleCfg{adaptive: cmn.FcRuleAdaptiveOn}).adaptiveInForce() {
+		t.Fatal("a rule that switched it on does not adapt")
+	}
+}

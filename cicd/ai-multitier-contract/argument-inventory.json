@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "1b88d1b64d91c434cdf5033f004d3d7a50062682a7300df80ed3eab940406712"
+    "swagger.yml": "00009d33e5b9bfaf28ee66ffe26822646394240dc2995ef3beb9749facc3b8b3"
   },
   "fields": [
     {
@@ -504,6 +504,20 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_adaptive",
+      "required": false,
+      "contract": {
+        "description": "on lets the service ceiling (fc_max_outstanding in force) tighten while the rule's endpoints report backpressure (scraped waiting requests, or a time to first token over fc_ttft_target_ms): to four fifths each second, never below a quarter of the ceiling, and back up by one each second the fresh signals are clear. With no fresh signal it holds where it is: stale telemetry never widens it. off keeps the ceiling fixed; inherit, or omitted on create, runs on the process default (LLB_FC_ADAPTIVE). Replace and null semantics as fc_mode. The ceiling in force and its state are read back in fc_effective.",
+        "enum": [
+          "on",
+          "off",
+          "inherit"
+        ],
+        "type": "string",
+        "x-nullable": false
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_decode_max_inflight",
       "required": false,
       "contract": {
@@ -520,9 +534,49 @@
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective",
       "required": false,
       "contract": {
-        "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default).",
+        "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
         "readOnly": true,
         "type": "object"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/adapt_reason",
+      "required": false,
+      "contract": {
+        "description": "Why the adaptive ceiling last moved, or why it holds.",
+        "enum": [
+          "none",
+          "queued",
+          "ttft",
+          "clear",
+          "stale"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/adapt_state",
+      "required": false,
+      "contract": {
+        "description": "off (not adaptive, or no service ceiling), open (at the ceiling), tightened (below it, following fresh signals) or frozen (below it, no fresh signal: held).",
+        "enum": [
+          "off",
+          "open",
+          "tightened",
+          "frozen"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/adaptive",
+      "required": false,
+      "contract": {
+        "enum": [
+          "on",
+          "off"
+        ],
+        "type": "string"
       }
     },
     {
@@ -530,6 +584,15 @@
       "required": false,
       "contract": {
         "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/effective_max_outstanding",
+      "required": false,
+      "contract": {
+        "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
         "format": "int32",
         "type": "integer"
       }
@@ -620,6 +683,18 @@
       "contract": {
         "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
         "type": "object"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/adaptive",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
       }
     },
     {
@@ -719,10 +794,59 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/ttft_target_ms",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/warmup_ms",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/telemetry_stale_ms",
       "required": false,
       "contract": {
         "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/ttft_target_ms",
+      "required": false,
+      "contract": {
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/warming_endpoints",
+      "required": false,
+      "contract": {
+        "description": "Endpoints inside their warm-up window.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/warmup_ms",
+      "required": false,
+      "contract": {
         "format": "int32",
         "type": "integer"
       }
@@ -813,6 +937,32 @@
       "contract": {
         "default": 0,
         "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
+        "format": "int32",
+        "maximum": 3600000,
+        "minimum": 0,
+        "type": "integer",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_ttft_target_ms",
+      "required": false,
+      "contract": {
+        "default": 0,
+        "description": "With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.",
+        "format": "int32",
+        "maximum": 3600000,
+        "minimum": 0,
+        "type": "integer",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_warmup_ms",
+      "required": false,
+      "contract": {
+        "default": 0,
+        "description": "An endpoint back in service (its circuit breaker closed, or a replace added or re-enabled it) ramps its per-endpoint ceilings from a quarter to all of them over this window, in milliseconds, instead of taking a full share of a burst cold. 0 or omitted leaves the process default (LLB_FC_WARMUP_MS, else no ramp) in force. Replace and null semantics as fc_max_outstanding.",
         "format": "int32",
         "maximum": 3600000,
         "minimum": 0,

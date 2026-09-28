@@ -688,19 +688,29 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	tmpSvc.FcPrefillMaxInflight = int32(lb.Serv.FcPrefillMaxInflight)
 	tmpSvc.FcDecodeMaxInflight = int32(lb.Serv.FcDecodeMaxInflight)
 	tmpSvc.FcTelemetryStaleMs = int32(lb.Serv.FcTelemetryStaleMs)
+	tmpSvc.FcAdaptive = lb.Serv.FcAdaptive
+	tmpSvc.FcWarmupMs = int32(lb.Serv.FcWarmupMs)
+	tmpSvc.FcTtftTargetMs = int32(lb.Serv.FcTtftTargetMs)
 	if eff := lb.Serv.FcEffective; eff != nil {
 		tmpSvc.FcEffective = &models.LoadbalanceEntryServiceArgumentsFcEffective{
-			Mode:                eff.Mode,
-			MaxOutstanding:      int32(eff.MaxOutstanding),
-			EpMaxInflight:       int32(eff.EpMaxInflight),
-			PrefillMaxInflight:  int32(eff.PrefillMaxInflight),
-			DecodeMaxInflight:   int32(eff.DecodeMaxInflight),
-			QueueDepth:          int32(eff.QueueDepth),
-			QueueWaitMs:         int32(eff.QueueWaitMs),
-			Inflight:            int32(eff.Inflight),
-			Queued:              int32(eff.Queued),
-			QueueMemoryBoundMib: int64(eff.QueueMemoryBoundMib),
-			TelemetryStaleMs:    int32(eff.TelemetryStaleMs),
+			Mode:                    eff.Mode,
+			MaxOutstanding:          int32(eff.MaxOutstanding),
+			EpMaxInflight:           int32(eff.EpMaxInflight),
+			PrefillMaxInflight:      int32(eff.PrefillMaxInflight),
+			DecodeMaxInflight:       int32(eff.DecodeMaxInflight),
+			QueueDepth:              int32(eff.QueueDepth),
+			QueueWaitMs:             int32(eff.QueueWaitMs),
+			Inflight:                int32(eff.Inflight),
+			Queued:                  int32(eff.Queued),
+			QueueMemoryBoundMib:     int64(eff.QueueMemoryBoundMib),
+			TelemetryStaleMs:        int32(eff.TelemetryStaleMs),
+			Adaptive:                eff.Adaptive,
+			WarmupMs:                int32(eff.WarmupMs),
+			TtftTargetMs:            int32(eff.TtftTargetMs),
+			EffectiveMaxOutstanding: int32(eff.EffectiveMaxOutstanding),
+			AdaptState:              eff.AdaptState,
+			AdaptReason:             eff.AdaptReason,
+			WarmingEndpoints:        int32(eff.WarmingEndpoints),
 			Source: &models.LoadbalanceEntryServiceArgumentsFcEffectiveSource{
 				Mode:               eff.Source.Mode,
 				MaxOutstanding:     eff.Source.MaxOutstanding,
@@ -710,6 +720,9 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 				QueueDepth:         eff.Source.QueueDepth,
 				QueueWaitMs:        eff.Source.QueueWaitMs,
 				TelemetryStaleMs:   eff.Source.TelemetryStaleMs,
+				Adaptive:           eff.Source.Adaptive,
+				WarmupMs:           eff.Source.WarmupMs,
+				TtftTargetMs:       eff.Source.TtftTargetMs,
 			},
 		}
 	}

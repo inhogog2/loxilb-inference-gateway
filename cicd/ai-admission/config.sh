@@ -18,6 +18,11 @@
 #   :2024  HTTP/1.1  -> l3ep1:8080          one endpoint
 #   :2025  HTTP/1.1  -> l3ep1:8080, :8081   queue depth 4, wait 30 s
 #   :2026  HTTP/1.1  -> l3ep1:8080          queue depth 65536 (the warning)
+#   :2028  HTTP/1.1  -> l3ep1:8080, :8081   the rule's own ceiling 4 under the env's 8
+#   :2029  HTTP/1.1  -> l3ep1:8080, :8081   rule ceiling 2 and a queue, raised at runtime
+#   :2030  HTTP/1.1  -> l3ep1:8084, :8085   adaptive ceiling 10 on the scraped queue depth
+#   :2031  HTTP/1.1  -> l3ep1:8084, :8085   adaptive ceiling 8 on the time to first token
+#   :2032  HTTP/1.1  -> l3ep1:8082, :8083   per-endpoint ceiling 8, 20 s warm-up
 
 source ../common.sh
 source ./gw.sh
@@ -69,14 +74,14 @@ echo "Starting the backends"
 echo "#########################################"
 
 SDIR=$(pwd)
-$hexec l3ep1 python3 "$SDIR/mock_backend.py" 8080 8081 > /tmp/ai-admission-mock.log 2>&1 &
+$hexec l3ep1 python3 "$SDIR/mock_backend.py" 8080 8081 8082 8083 8084 8085 > /tmp/ai-admission-mock.log 2>&1 &
 track_helper
 $hexec l3ep1 python3 "$SDIR/h2c_backend.py" server-h2a 8090 > /tmp/ai-admission-h2a.log 2>&1 &
 track_helper
 $hexec l3ep1 python3 "$SDIR/h2c_backend.py" server-h2b 8091 > /tmp/ai-admission-h2b.log 2>&1 &
 track_helper
 
-for p in 8080 8081; do
+for p in 8080 8081 8082 8083 8084 8085; do
   for i in $(seq 1 20); do
     $hexec l3ep1 curl -sf --max-time 1 "http://127.0.0.1:$p/health" >/dev/null 2>&1 && break
     sleep 1

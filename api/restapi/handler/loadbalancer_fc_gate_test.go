@@ -94,6 +94,12 @@ func TestFcGateCreateRefusedBeforeRuleHook(t *testing.T) {
 		{"a prefill ceiling above 100000", `,"fc_prefill_max_inflight":100001`},
 		{"a decode ceiling above 100000", `,"fc_decode_max_inflight":100001`},
 		{"a telemetry window above an hour", `,"fc_telemetry_stale_ms":3600001`},
+		{"null adaptive switch", `,"fc_adaptive":null`},
+		{"an unknown adaptive switch", `,"fc_adaptive":"yes"`},
+		{"null warm-up window", `,"fc_warmup_ms":null`},
+		{"a warm-up window above an hour", `,"fc_warmup_ms":3600001`},
+		{"a negative TTFT target", `,"fc_ttft_target_ms":-1`},
+		{"a TTFT target above an hour", `,"fc_ttft_target_ms":3600001`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			stub := &stubLbAddHook{}
@@ -223,5 +229,40 @@ func TestFcGatePatchOverlay(t *testing.T) {
 	}
 	if stub.captured != nil {
 		t.Fatal("the refused value reached the rule layer")
+	}
+}
+
+// The adaptive switch, the warm-up window and the TTFT target reach the rule
+// layer as declared, each with its presence bit, like the rest of the gate.
+func TestFcAdaptCreateCopiesDeclaration(t *testing.T) {
+	prev := ApiHooks
+	defer func() { ApiHooks = prev }()
+
+	for _, c := range []struct {
+		name, field      string
+		adaptive         string
+		warmup, ttft     uint32
+		present, adPrsnt bool
+	}{
+		{"declared", `,"fc_adaptive":"on","fc_warmup_ms":20000,"fc_ttft_target_ms":800`, "on", 20000, 800, true, true},
+		{"omitted", ``, "", 0, 0, false, false},
+		{"explicit zero and inherit", `,"fc_adaptive":"inherit","fc_warmup_ms":0,"fc_ttft_target_ms":0`, "inherit", 0, 0, true, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stub := &stubLbAddHook{}
+			ApiHooks = stub
+			ConfigPostLoadbalancer(connectionLimitCreateParams(t, sprintfBody(connectionLimitCreateBody, c.field)), nil)
+			if stub.captured == nil {
+				t.Fatal("never reached the rule layer")
+			}
+			s := stub.captured.Serv
+			if s.FcAdaptive != c.adaptive || s.FcWarmupMs != c.warmup || s.FcTtftTargetMs != c.ttft {
+				t.Fatalf("reached the rule layer as %q/%d/%d", s.FcAdaptive, s.FcWarmupMs, s.FcTtftTargetMs)
+			}
+			if s.FcAdaptivePresent != c.adPrsnt || s.FcWarmupMsPresent != c.present ||
+				s.FcTtftTargetMsPresent != c.present {
+				t.Fatalf("presence %v/%v/%v", s.FcAdaptivePresent, s.FcWarmupMsPresent, s.FcTtftTargetMsPresent)
+			}
+		})
 	}
 }

@@ -2709,6 +2709,104 @@
             },
             "overrides": []
           }
+        },
+        {
+          "id": 62,
+          "type": "timeseries",
+          "title": "Adaptive ceiling vs configured",
+          "description": "The service ceiling in force against the configured one, for pools that adapt (fc_adaptive): below it while the engines report waiting requests or a time to first token over the target, back up one unit a second when fresh reports are clear, and held when the reports go stale (the frozen line at 1). A pool pinned at a quarter of its ceiling is the engines asking for less than the gateway could send.",
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 113
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (service, pool) (loxilb_ai_admission_effective_limit{instance=~\"$instance\"})",
+              "legendFormat": "{{service}} {{pool}} in force"
+            },
+            {
+              "refId": "B",
+              "expr": "max by (service, pool) (loxilb_ai_admission_limit{instance=~\"$instance\",role=\"service\"})",
+              "legendFormat": "{{service}} {{pool}} configured"
+            },
+            {
+              "refId": "C",
+              "expr": "max by (service, pool) (loxilb_ai_admission_adapt_state{instance=~\"$instance\",state=\"frozen\"} == 1)",
+              "legendFormat": "{{service}} {{pool}} frozen"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No adaptive pool"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 63,
+          "type": "timeseries",
+          "title": "Accept valve: contexts vs bound",
+          "description": "Connection contexts the proxy holds (client and backend legs alike) against the process accept valve's bound (LLB_PD_MAX_TOTAL_INFLIGHT; hidden when 0, unbounded; the contexts are counted only while the valve is on, so both read 0 without it), and how often per second it declined an accept (counted on every poll of the listener at the bound, so a rate of time spent there, not of connections). Declined connections wait in the listen backlog: a steady rate means the node is at its connection footprint bound, before any pool's admission gate sees the request.",
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 113
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(loxilb_proxy_context_inflight{instance=~\"$instance\"})",
+              "legendFormat": "contexts"
+            },
+            {
+              "refId": "B",
+              "expr": "max(loxilb_proxy_accept_bound{instance=~\"$instance\"} > 0)",
+              "legendFormat": "bound"
+            },
+            {
+              "refId": "C",
+              "expr": "sum(rate(loxilb_proxy_accept_blocked_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "legendFormat": "held back/s"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No proxy traffic"
+            },
+            "overrides": []
+          }
         }
       ]
     }

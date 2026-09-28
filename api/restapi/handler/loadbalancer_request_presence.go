@@ -222,7 +222,8 @@ func (p *loadbalancerRequestPresence) applyFcQueue(
 
 // fcGateKeys are the admission gate's rule fields beyond the queue pair.
 var fcGateKeys = []string{"fc_mode", "fc_max_outstanding", "fc_ep_max_inflight",
-	"fc_prefill_max_inflight", "fc_decode_max_inflight", "fc_telemetry_stale_ms"}
+	"fc_prefill_max_inflight", "fc_decode_max_inflight", "fc_telemetry_stale_ms",
+	"fc_adaptive", "fc_warmup_ms", "fc_ttft_target_ms"}
 
 // validateFcGateFields checks the admission gate's rule fields on their
 // own, like validateFcQueueFields: null is refused, each ceiling is bounded
@@ -242,6 +243,9 @@ func (p *loadbalancerRequestPresence) validateFcGateFields(
 	if _, err := cmn.FcModeToRule(src.FcMode); err != nil {
 		return err
 	}
+	if _, err := cmn.FcAdaptiveToRule(src.FcAdaptive); err != nil {
+		return err
+	}
 	for _, c := range []struct {
 		name string
 		v    int32
@@ -258,6 +262,12 @@ func (p *loadbalancerRequestPresence) validateFcGateFields(
 	if src.FcTelemetryStaleMs < 0 || src.FcTelemetryStaleMs > cmn.FcTelemetryStaleMsMax {
 		return fmt.Errorf("fc_telemetry_stale_ms must be within 0..%d", cmn.FcTelemetryStaleMsMax)
 	}
+	if src.FcWarmupMs < 0 || src.FcWarmupMs > cmn.FcWarmupMsMax {
+		return fmt.Errorf("fc_warmup_ms must be within 0..%d", cmn.FcWarmupMsMax)
+	}
+	if src.FcTtftTargetMs < 0 || src.FcTtftTargetMs > cmn.FcTtftTargetMsMax {
+		return fmt.Errorf("fc_ttft_target_ms must be within 0..%d", cmn.FcTtftTargetMsMax)
+	}
 	return nil
 }
 
@@ -271,6 +281,10 @@ func (p *loadbalancerRequestPresence) applyFcGate(
 		dst.FcMode = src.FcMode
 		dst.FcModePresent = p.svcPresent("fc_mode")
 	}
+	if p.svcPresent("fc_adaptive") || src.FcAdaptive != "" {
+		dst.FcAdaptive = src.FcAdaptive
+		dst.FcAdaptivePresent = p.svcPresent("fc_adaptive")
+	}
 	for _, f := range []struct {
 		key     string
 		v       int32
@@ -282,6 +296,8 @@ func (p *loadbalancerRequestPresence) applyFcGate(
 		{"fc_prefill_max_inflight", src.FcPrefillMaxInflight, &dst.FcPrefillMaxInflight, &dst.FcPrefillMaxInflightPresent},
 		{"fc_decode_max_inflight", src.FcDecodeMaxInflight, &dst.FcDecodeMaxInflight, &dst.FcDecodeMaxInflightPresent},
 		{"fc_telemetry_stale_ms", src.FcTelemetryStaleMs, &dst.FcTelemetryStaleMs, &dst.FcTelemetryStaleMsPresent},
+		{"fc_warmup_ms", src.FcWarmupMs, &dst.FcWarmupMs, &dst.FcWarmupMsPresent},
+		{"fc_ttft_target_ms", src.FcTtftTargetMs, &dst.FcTtftTargetMs, &dst.FcTtftTargetMsPresent},
 	} {
 		if p.svcPresent(f.key) || f.v != 0 {
 			*f.dst = uint32(f.v)

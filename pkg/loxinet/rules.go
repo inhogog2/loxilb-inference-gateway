@@ -4682,6 +4682,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			}
 		}
 
+		// A replace may turn adaptation on or off, or move the endpoints.
+		eRule.syncVllmScraper()
+
 		return 0, nil
 	} else if serv.Oper == cmn.LBOPDetach {
 		tk.LogIt(tk.LogInfo, "lb-rule %s-%v-%s does not exist\n", serv.ServIP, serv.ServPort, serv.Proto)
@@ -5099,27 +5102,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		go LlamacppAdmissionProbe(uint32(r.ruleNum), probeEps)
 	}
 
-	// COMP-01 : Start vLLM metrics scraper for queue-depth routing
-	if r.pdDisaggMode {
-		endpoints := make(map[int]string)
-		for i, ep := range lBActs.endPoints {
-			endpoints[i] = fmt.Sprintf("%s:%d", ep.xIP.String(), ep.xPort)
-		}
-		svcIP := tk.IPtonl(r.tuples.l3Dst.addr.IP)
-		svcPort := r.tuples.l4Dst.valMin
-		// updateFn mirrors samples into the Go-side worker-metrics cache so
-		// the REST introspection/staleness APIs see the built-in scraper
-		// (cache only — the eBPF queue-depth push happens inside the sink).
-		r.vllmScraper = NewVllmScraper(endpoints, svcIP, svcPort, 0,
-			func(epIP string, m WorkerMetrics) {
-				if mh.dpEbpf != nil {
-					mh.dpEbpf.StoreWorkerMetricsCache(m.EndpointIP, m)
-				}
-			})
-		// thread the mh-owned shutdown ctx so
-		// the scraper exits when the workers stage cancels.
-		go r.vllmScraper.Run(mh.shutdownCtx)
-	}
+	// COMP-01 : Start vLLM metrics scraper for queue-depth routing and the
+	// adaptive admission ceiling.
+	r.syncVllmScraper()
 
 	// For FullProxy mode with tracing, add service-to-catalog mapping to shared memory
 	// Sockproxy will look up the catalog_id when creating proxy entries
@@ -6644,6 +6629,9 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.FcPrefillMaxInflight = r.fcCfg.prefillMaxInflight
 	nWork.FcDecodeMaxInflight = r.fcCfg.decodeMaxInflight
 	nWork.FcTelemetryStaleMs = r.fcCfg.telemetryStaleMs
+	nWork.FcAdaptive = r.fcCfg.adaptive
+	nWork.FcWarmupMs = r.fcCfg.warmupMs
+	nWork.FcTtftTargetMs = r.fcCfg.ttftTargetMs
 	nWork.CbEnable = r.cbEnable
 	nWork.KvExactMode = r.kvExactMode // KV-cache exact routing
 	nWork.KvBlockSize = r.kvBlockSize

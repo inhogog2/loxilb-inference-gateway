@@ -10486,6 +10486,50 @@ definitions:
               default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper
               stamps whole seconds, so the window is effectively rounded to them.
               Replace and null semantics as fc_max_outstanding.
+          fc_adaptive:
+            type: string
+            x-nullable: false
+            enum: ["on", "off", "inherit"]
+            description: >-
+              on lets the service ceiling (fc_max_outstanding in force) tighten
+              while the rule's endpoints report backpressure (scraped waiting
+              requests, or a time to first token over fc_ttft_target_ms): to
+              four fifths each second, never below a quarter of the ceiling, and
+              back up by one each second the fresh signals are clear. With no
+              fresh signal it holds where it is: stale telemetry never widens it.
+              off keeps the ceiling fixed; inherit, or omitted on create, runs on
+              the process default (LLB_FC_ADAPTIVE). Replace and null semantics as
+              fc_mode. The ceiling in force and its state are read back in
+              fc_effective.
+          fc_warmup_ms:
+            type: integer
+            format: int32
+            x-nullable: false
+            minimum: 0
+            maximum: 3600000
+            default: 0
+            description: >-
+              An endpoint back in service (its circuit breaker closed, or a
+              replace added or re-enabled it) ramps its per-endpoint ceilings from
+              a quarter to all of them over this window, in milliseconds, instead
+              of taking a full share of a burst cold. 0 or omitted leaves the
+              process default (LLB_FC_WARMUP_MS, else no ramp) in force. Replace
+              and null semantics as fc_max_outstanding.
+          fc_ttft_target_ms:
+            type: integer
+            format: int32
+            x-nullable: false
+            minimum: 0
+            maximum: 3600000
+            default: 0
+            description: >-
+              With fc_adaptive on: an endpoint whose streamed responses take
+              longer than this from admission to their first data event (an
+              eighth-weighted average, trusted for fc_telemetry_stale_ms) is
+              backpressure. Only streamed responses are measured: a buffered
+              response's first byte comes with the whole completion. 0 or omitted
+              leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused)
+              in force. Replace and null semantics as fc_max_outstanding.
           fc_effective:
             type: object
             readOnly: true
@@ -10498,7 +10542,11 @@ definitions:
               inflight and queued are live counts; queue_memory_bound_mib is the
               memory the full queue may park (queue_depth x 1 MiB);
               telemetry_stale_ms is the P/D scorers' trust window; source names
-              where each value in force came from (rule, env or default).
+              where each value in force came from (rule, env or default);
+              effective_max_outstanding is the service ceiling in force now (the
+              adaptive one while the pool adapts), adapt_state and adapt_reason
+              say where it stands and why, warming_endpoints counts endpoints
+              inside their warm-up window.
             properties:
               mode:
                 type: string
@@ -10545,6 +10593,34 @@ definitions:
                 type: integer
                 format: int32
                 description: The P/D scorers' trust window for scraped queue depth, in milliseconds.
+              adaptive:
+                type: string
+                enum: ["on", "off"]
+              warmup_ms:
+                type: integer
+                format: int32
+              ttft_target_ms:
+                type: integer
+                format: int32
+              effective_max_outstanding:
+                type: integer
+                format: int32
+                description: The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.
+              adapt_state:
+                type: string
+                enum: ["off", "open", "tightened", "frozen"]
+                description: >-
+                  off (not adaptive, or no service ceiling), open (at the
+                  ceiling), tightened (below it, following fresh signals) or
+                  frozen (below it, no fresh signal: held).
+              adapt_reason:
+                type: string
+                enum: ["none", "queued", "ttft", "clear", "stale"]
+                description: Why the adaptive ceiling last moved, or why it holds.
+              warming_endpoints:
+                type: integer
+                format: int32
+                description: Endpoints inside their warm-up window.
               source:
                 type: object
                 description: >-
@@ -10574,6 +10650,15 @@ definitions:
                     type: string
                     enum: [rule, env, default]
                   telemetry_stale_ms:
+                    type: string
+                    enum: [rule, env, default]
+                  adaptive:
+                    type: string
+                    enum: [rule, env, default]
+                  warmup_ms:
+                    type: string
+                    enum: [rule, env, default]
+                  ttft_target_ms:
                     type: string
                     enum: [rule, env, default]
           kvExactMode:

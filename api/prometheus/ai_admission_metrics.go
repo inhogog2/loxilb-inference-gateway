@@ -26,6 +26,7 @@ package prometheus
 #define PROXY_FC_POOL_LEN 64
 #define PROXY_FC_QWAIT_BUCKETS 8
 #define PROXY_FC_LIMITS 8
+#define PROXY_FC_ADAPT_LIMITS 3
 
 typedef struct proxy_fc_svc_stat {
     uint32_t xip;
@@ -48,9 +49,19 @@ typedef struct proxy_fc_svc_stat {
     uint32_t telemetry_stale_ms;
     uint8_t  src[PROXY_FC_LIMITS];
     uint32_t pad2;
+    uint32_t effective_max_outstanding;
+    uint32_t warmup_ms;
+    uint32_t ttft_target_ms;
+    uint8_t  adaptive;
+    uint8_t  adapt_state;
+    uint8_t  adapt_reason;
+    uint8_t  src_adapt[PROXY_FC_ADAPT_LIMITS];
+    uint16_t warming_eps;
+    uint64_t adapt_down;
+    uint64_t adapt_up;
 } proxy_fc_svc_stat_t;
 // Pinned to the layout in sockproxy_metrics.h.
-_Static_assert(sizeof(proxy_fc_svc_stat_t) == 312, "proxy_fc_svc_stat_t size");
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 352, "proxy_fc_svc_stat_t size");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 136, "pool offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 200, "queued offset");
@@ -58,6 +69,10 @@ _Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 216, "qwait_bucket
 _Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 288, "qwait_count offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, telemetry_stale_ms) == 296, "telemetry_stale_ms offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, src) == 300, "src offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, effective_max_outstanding) == 312, "effective_max_outstanding offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 324, "adaptive offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 330, "warming_eps offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 336, "adapt_down offset");
 
 extern int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max);
 extern uint64_t proxy_get_fc_anomaly(int kind);
@@ -133,6 +148,11 @@ var admissionReasonLabels = [12]string{
 // does not exceed; Prometheus wants cumulative counts, so Collect sums them.
 var admissionQwaitBoundsSeconds = [8]float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
+// Adaptive ceiling states and reasons, indexed as the gate's enum
+// fc_adapt_state and enum fc_adapt_reason.
+var admissionAdaptStateLabels = [4]string{"off", "open", "tightened", "frozen"}
+var admissionAdaptReasonLabels = [5]string{"none", "queued", "ttft", "clear", "stale"}
+
 // Anomaly kinds, indexed as the gate's enum fc_anomaly.
 var admissionAnomalyLabels = [2]string{"underflow", "unknown_permit"}
 
@@ -154,6 +174,12 @@ type admissionSample struct {
 	qwaitBuckets [8]uint64
 	qwaitSumMs   uint64
 	qwaitCount   uint64
+
+	effectiveLimit float64
+	adaptState     uint8
+	adaptReason    uint8
+	adaptMoves     [2]float64 // down, up
+	warmingEps     float64
 }
 
 // admissionStore is the state shared between the collection loop (writer)
@@ -171,6 +197,9 @@ var admissionPoolLabels = []string{"service", "pool"}
 var admissionRoleLabelNames = []string{"service", "pool", "role"}
 var admissionReasonLabelNames = []string{"service", "pool", "reason"}
 var admissionAnomalyLabelNames = []string{"kind"}
+var admissionStateLabelNames = []string{"service", "pool", "state"}
+var admissionAdaptReasonLabelNames = []string{"service", "pool", "reason"}
+var admissionDirectionLabelNames = []string{"service", "pool", "direction"}
 
 var (
 	admissionModeDesc = prometheus.NewDesc(
@@ -203,6 +232,31 @@ var (
 		"Gate decisions per pool and reason: admitted, capacity_shed (429), no_healthy_capacity (503), observe_would_shed (admitted in observe mode where enforce would have refused, counted at each ceiling that would have refused it), bypass_non_inference (not an inference request, no unit taken), queued (parked to wait for a unit), queue_full (429, the queue at its depth), queue_timeout (504, waited the whole window), cancelled (the client left while waiting), drained (the pool or the process stopped taking work while it waited), observe_would_queue (admitted in observe mode where enforce would have parked it), draining (503, the process is draining for maintenance).",
 		admissionReasonLabelNames, nil,
 	)
+	admissionEffectiveLimitDesc = prometheus.NewDesc(
+		"loxilb_ai_admission_effective_limit",
+		"The pool-wide ceiling in force right now: the adaptive one while the pool adapts (at most the configured loxilb_ai_admission_limit{role=\"service\"}), else the configured one. 0 means unlimited.",
+		admissionPoolLabels, nil,
+	)
+	admissionAdaptStateDesc = prometheus.NewDesc(
+		"loxilb_ai_admission_adapt_state",
+		"Where the adaptive ceiling stands, 1 for the current state and 0 for the others: off (not adaptive, or no ceiling), open (at the configured ceiling), tightened (below it, following fresh backpressure signals), frozen (below it with no fresh signal: held, never widened on stale telemetry).",
+		admissionStateLabelNames, nil,
+	)
+	admissionAdaptReasonDesc = prometheus.NewDesc(
+		"loxilb_ai_admission_adapt_reason",
+		"Why the adaptive ceiling last moved or holds, 1 for the current reason: queued (an endpoint reported waiting requests), ttft (an endpoint's time to first token is over the target), clear (fresh signals without backpressure: widened), stale (no fresh signal: held), none.",
+		admissionAdaptReasonLabelNames, nil,
+	)
+	admissionAdaptMovesDesc = prometheus.NewDesc(
+		"loxilb_ai_admission_adapt_moves_total",
+		"Steps of the adaptive ceiling: direction=\"down\" to four fifths on fresh backpressure, direction=\"up\" by one on a fresh clear second.",
+		admissionDirectionLabelNames, nil,
+	)
+	admissionWarmingDesc = prometheus.NewDesc(
+		"loxilb_ai_admission_warming_endpoints",
+		"Endpoints of the pool inside their warm-up window, their ceilings ramping from a quarter to all of it after a return to service.",
+		admissionPoolLabels, nil,
+	)
 	admissionAnomaliesDesc = prometheus.NewDesc(
 		"loxilb_ai_admission_anomalies_total",
 		"Accounting anomalies in the capacity gate, process-wide: underflow (a release found its counter at zero) and unknown_permit (an executing permit with no pool). Any increment is a defect, not load.",
@@ -223,6 +277,11 @@ func (admissionCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- admissionQueuedDesc
 	ch <- admissionQueueWaitDesc
 	ch <- admissionDecisionsDesc
+	ch <- admissionEffectiveLimitDesc
+	ch <- admissionAdaptStateDesc
+	ch <- admissionAdaptReasonDesc
+	ch <- admissionAdaptMovesDesc
+	ch <- admissionWarmingDesc
 	ch <- admissionAnomaliesDesc
 }
 
@@ -249,6 +308,16 @@ func (admissionCollector) Collect(ch chan<- prometheus.Metric) {
 		for d, reason := range admissionReasonLabels {
 			ch <- prometheus.MustNewConstMetric(admissionDecisionsDesc, prometheus.CounterValue, s.decisions[d], s.service, s.pool, reason)
 		}
+		ch <- prometheus.MustNewConstMetric(admissionEffectiveLimitDesc, prometheus.GaugeValue, s.effectiveLimit, s.service, s.pool)
+		for i, st := range admissionAdaptStateLabels {
+			ch <- prometheus.MustNewConstMetric(admissionAdaptStateDesc, prometheus.GaugeValue, admissionOneHot(int(s.adaptState) == i), s.service, s.pool, st)
+		}
+		for i, r := range admissionAdaptReasonLabels {
+			ch <- prometheus.MustNewConstMetric(admissionAdaptReasonDesc, prometheus.GaugeValue, admissionOneHot(int(s.adaptReason) == i), s.service, s.pool, r)
+		}
+		ch <- prometheus.MustNewConstMetric(admissionAdaptMovesDesc, prometheus.CounterValue, s.adaptMoves[0], s.service, s.pool, "down")
+		ch <- prometheus.MustNewConstMetric(admissionAdaptMovesDesc, prometheus.CounterValue, s.adaptMoves[1], s.service, s.pool, "up")
+		ch <- prometheus.MustNewConstMetric(admissionWarmingDesc, prometheus.GaugeValue, s.warmingEps, s.service, s.pool)
 	}
 	for k, kind := range admissionAnomalyLabels {
 		ch <- prometheus.MustNewConstMetric(admissionAnomaliesDesc, prometheus.CounterValue, anomalies[k], kind)
@@ -259,6 +328,14 @@ func (admissionCollector) Collect(ch chan<- prometheus.Metric) {
 // same registry the promauto metrics use).
 func init() {
 	prometheus.MustRegister(admissionCollector{})
+}
+
+// admissionOneHot is a state-set member's value. Pure Go.
+func admissionOneHot(on bool) float64 {
+	if on {
+		return 1
+	}
+	return 0
 }
 
 // admissionQwaitCumulative turns the C side's per-bucket counts into the
@@ -369,6 +446,12 @@ func refreshAdmissionStore() {
 		}
 		s.qwaitSumMs = uint64(st.qwait_sum_ms)
 		s.qwaitCount = uint64(st.qwait_count)
+		s.effectiveLimit = float64(st.effective_max_outstanding)
+		s.adaptState = uint8(st.adapt_state)
+		s.adaptReason = uint8(st.adapt_reason)
+		s.adaptMoves[0] = float64(st.adapt_down)
+		s.adaptMoves[1] = float64(st.adapt_up)
+		s.warmingEps = float64(st.warming_eps)
 		samples = append(samples, s)
 	}
 	sortAdmissionSamples(samples)

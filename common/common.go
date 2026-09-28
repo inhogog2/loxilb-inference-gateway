@@ -1052,6 +1052,27 @@ type LbServiceArg struct {
 	FcTelemetryStaleMs uint32 `json:"fc_telemetry_stale_ms,omitempty"`
 	// FcTelemetryStaleMsPresent is the presence bit for replace semantics.
 	FcTelemetryStaleMsPresent bool `json:"-"`
+	// FcAdaptive - "on" lets the service ceiling tighten while the rule's
+	// endpoints report backpressure (waiting requests, or a time to first
+	// token over FcTtftTargetMs) and recover as they clear; "off" keeps it
+	// fixed. Empty (or "inherit" on input) runs on LLB_FC_ADAPTIVE.
+	FcAdaptive string `json:"fc_adaptive,omitempty"`
+	// FcAdaptivePresent is the presence bit for replace semantics.
+	FcAdaptivePresent bool `json:"-"`
+	// FcWarmupMs - an endpoint back in service (its breaker closed, or it
+	// was added or re-enabled) ramps from a quarter of its ceiling to all of
+	// it over this window. 0 leaves LLB_FC_WARMUP_MS (else no ramp) in
+	// force; at most 3600000.
+	FcWarmupMs uint32 `json:"fc_warmup_ms,omitempty"`
+	// FcWarmupMsPresent is the presence bit for replace semantics.
+	FcWarmupMsPresent bool `json:"-"`
+	// FcTtftTargetMs - an endpoint whose streamed responses take longer than
+	// this to their first token is backpressure for the adaptive ceiling. 0
+	// leaves LLB_FC_TTFT_TARGET_MS (else TTFT unused) in force; at most
+	// 3600000.
+	FcTtftTargetMs uint32 `json:"fc_ttft_target_ms,omitempty"`
+	// FcTtftTargetMsPresent is the presence bit for replace semantics.
+	FcTtftTargetMsPresent bool `json:"-"`
 	// FcEffective - the capacity gate's resolved state on the rule's pool,
 	// read from the data plane for GET only. Never persisted, never read
 	// on input.
@@ -1542,6 +1563,20 @@ type FcEffectiveArg struct {
 	Queued              uint32 `json:"queued"`
 	QueueMemoryBoundMib uint64 `json:"queue_memory_bound_mib"`
 	TelemetryStaleMs    uint32 `json:"telemetry_stale_ms"`
+	// Adaptive is "on" when the service ceiling adapts, else "off".
+	Adaptive     string `json:"adaptive"`
+	WarmupMs     uint32 `json:"warmup_ms"`
+	TtftTargetMs uint32 `json:"ttft_target_ms"`
+	// EffectiveMaxOutstanding is the service ceiling in force now: the
+	// adaptive one while the pool adapts, else MaxOutstanding.
+	EffectiveMaxOutstanding uint32 `json:"effective_max_outstanding"`
+	// AdaptState is "off", "open" (at the ceiling), "tightened" or "frozen"
+	// (below it, signals stale: held); AdaptReason why it last moved or
+	// holds: "none", "queued", "ttft", "clear" or "stale".
+	AdaptState  string `json:"adapt_state"`
+	AdaptReason string `json:"adapt_reason"`
+	// WarmingEndpoints counts endpoints inside their warm-up window.
+	WarmingEndpoints uint32 `json:"warming_endpoints"`
 	// Source names where each value in force came from: "rule", "env" or
 	// "default".
 	Source FcEffectiveSource `json:"source"`
@@ -1557,6 +1592,9 @@ type FcEffectiveSource struct {
 	QueueDepth         string `json:"queue_depth"`
 	QueueWaitMs        string `json:"queue_wait_ms"`
 	TelemetryStaleMs   string `json:"telemetry_stale_ms"`
+	Adaptive           string `json:"adaptive"`
+	WarmupMs           string `json:"warmup_ms"`
+	TtftTargetMs       string `json:"ttft_target_ms"`
 }
 
 // LbRuleMod - Info related to a load-balancer entry

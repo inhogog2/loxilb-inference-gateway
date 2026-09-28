@@ -393,6 +393,9 @@ type LBDpWorkQ struct {
 	FcPrefillMaxInflight        uint32                  // per-endpoint ceiling, prefill role (0 = process default)
 	FcDecodeMaxInflight         uint32                  // per-endpoint ceiling, decode role (0 = process default)
 	FcTelemetryStaleMs          uint32                  // scraped queue depth trust window (0 = process default)
+	FcAdaptive                  uint8                   // adaptive service ceiling, enum fc_rule_adaptive (0 = process default)
+	FcWarmupMs                  uint32                  // endpoint warm-up window (0 = process default)
+	FcTtftTargetMs              uint32                  // TTFT backpressure target (0 = process default)
 	CbEnable                    bool                    // per-endpoint circuit breaker for full-proxy rules
 	KvExactMode                 uint8                   // KV-cache exact routing: 0=off, 1=zmq
 	KvBlockSize                 uint32                  // Token block size for KV hash computation

@@ -92,7 +92,7 @@ func (tkScraperLogger) Debugf(format string, args ...interface{}) {
 //
 //	endpoints:   map of EP index to "ip:port" address
 //	serviceIP:   VIP for the LB service (network byte order)
-//	servicePort: port for the LB service
+//	servicePort: port for the LB service (host byte order)
 //	interval:    scrape interval (default 10s)
 //	updateFn:    callback to update WorkerMetrics in the Go-side sync.Map
 func NewVllmScraper(endpoints map[int]string, serviceIP uint32, servicePort uint16,
@@ -123,6 +123,19 @@ func NewVllmScraper(endpoints map[int]string, serviceIP uint32, servicePort uint
 	s.poller = aimetrics.NewPoller(eps, interval, (*vllmScraperSink)(s))
 	s.poller.SetLogger(tkScraperLogger{})
 	return s
+}
+
+// sameEndpoints reports whether the scraper polls exactly these endpoints.
+func (s *VllmScraper) sameEndpoints(eps map[int]string) bool {
+	if len(eps) != len(s.endpoints) {
+		return false
+	}
+	for i, a := range eps {
+		if s.endpoints[i] != a {
+			return false
+		}
+	}
+	return true
 }
 
 // Run starts the scraper loop. It blocks until ctx is cancelled.
@@ -164,15 +177,21 @@ func (k *vllmScraperSink) OnSample(epIdx int, smp aimetrics.WorkerSample) {
 		k.updateFn(epIP, metrics)
 	}
 
+	// The proxy key holds the service port in network byte order (every
+	// proxyKey.xport builder uses tk.Htons), while servicePort is kept in host
+	// order. Passing it unconverted matched no proxy entry, so neither store
+	// below ever landed.
+	svcPortNet := tk.Htons(k.servicePort)
+
 	// Update C-side queue depth for Tier 2 scoring.
-	C.llb_ai_update_ep_queue_depth(C.uint32_t(k.serviceIP), C.uint16_t(k.servicePort),
+	C.llb_ai_update_ep_queue_depth(C.uint32_t(k.serviceIP), C.uint16_t(svcPortNet),
 		C.int(epIdx), C.uint32_t(smp.NumRequestsWaiting))
 
 	// C2: update C-side advertised KV capacity (num_gpu_blocks) so the
 	// PROXY_SEL_GPU_AWARE prefill scorer can capacity-weight live load. Mirrors
 	// the queue-depth store; 0 (not advertised) is stored as-is and clamped to 1
 	// at read time (V5 — never divide-by-zero in the cap math).
-	C.llb_ai_update_ep_capacity(C.uint32_t(k.serviceIP), C.uint16_t(k.servicePort),
+	C.llb_ai_update_ep_capacity(C.uint32_t(k.serviceIP), C.uint16_t(svcPortNet),
 		C.int(epIdx), C.uint32_t(smp.NumGPUBlocks))
 }
 
