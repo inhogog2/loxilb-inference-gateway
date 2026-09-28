@@ -721,6 +721,19 @@ type LoadbalanceEntryServiceArguments struct {
 	// External service IP used in the LB rule key. The domain validates the address. Create callers must provide it; shared PATCH-compatible schema optionality does not make an omitted create address usable.
 	ExternalIP *string `json:"externalIP,omitempty"`
 
+	// fc effective
+	FcEffective *LoadbalanceEntryServiceArgumentsFcEffective `json:"fc_effective,omitempty"`
+
+	// Capacity admission queue of the service's model pool: how many inference requests may wait for a capacity unit instead of being refused with 429 when the pool's ceilings are reached. 0 or omitted leaves the process default (LLB_FC_MAX_QUEUE_DEPTH) in force; the ceiling is 65536. HTTP/1.1 requests wait; HTTP/2 streams are refused on their stream and never wait. Every waiting request parks its client connection, which holds about one MiB of receive buffer, so a depth is a memory bound as much as a queue bound: depth x 1 MiB when the queue is full (65536 is about 64 GiB). The gateway logs a WARNING at rule apply when that bound exceeds half of the node's memory and still applies it; bound the connections themselves with connectionLimit or the process valve LLB_PD_MAX_TOTAL_INFLIGHT. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default); PATCH does not reach FullProxy rules. Explicit JSON null is rejected. The resolved values are read back in fc_effective.
+	// Maximum: 65536
+	// Minimum: 0
+	FcMaxQueueDepth int32 `json:"fc_max_queue_depth,omitempty"`
+
+	// The longest a request may wait in the capacity admission queue, in milliseconds, before it is answered 504 admission_queue_timeout with the wait it spent (queued_ms). Required, greater than 0, whenever fc_max_queue_depth is set; 0 or omitted with no depth leaves the process default (LLB_FC_MAX_QUEUE_WAIT_MS) in force. Replace and null semantics as fc_max_queue_depth.
+	// Maximum: 3.6e+06
+	// Minimum: 0
+	FcMaxQueueWaitMs int32 `json:"fc_max_queue_wait_ms,omitempty"`
+
 	// Host routing key for the proxy pool, distinct from path_prefix. It participates in the LB rule key, but L7 policy attachment is currently keyed only by listener VIP/port/protocol. The server accepts at most 255 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 256-byte data-plane field; UI validation must count encoded bytes rather than characters. Together with path_prefix and model_name, the conditional host, host|path, host||model or host|path|model key must not exceed 511 UTF-8 bytes including separators.
 	Host string `json:"host,omitempty"`
 
@@ -955,6 +968,18 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	}
 
 	if err := m.validateChwblReplication(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateFcEffective(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateFcMaxQueueDepth(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateFcMaxQueueWaitMs(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -1240,6 +1265,57 @@ func (m *LoadbalanceEntryServiceArguments) validateChwblReplication(formats strf
 	}
 
 	if err := validate.MaximumInt("serviceArguments"+"."+"chwbl_replication", "body", m.ChwblReplication, 1024, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcEffective(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcEffective) { // not required
+		return nil
+	}
+
+	if m.FcEffective != nil {
+		if err := m.FcEffective.Validate(formats); err != nil {
+			if ve, ok := err.(*errors.Validation); ok {
+				return ve.ValidateName("serviceArguments" + "." + "fc_effective")
+			} else if ce, ok := err.(*errors.CompositeError); ok {
+				return ce.ValidateName("serviceArguments" + "." + "fc_effective")
+			}
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcMaxQueueDepth(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcMaxQueueDepth) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"fc_max_queue_depth", "body", int64(m.FcMaxQueueDepth), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"fc_max_queue_depth", "body", int64(m.FcMaxQueueDepth), 65536, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcMaxQueueWaitMs(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcMaxQueueWaitMs) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"fc_max_queue_wait_ms", "body", int64(m.FcMaxQueueWaitMs), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"fc_max_queue_wait_ms", "body", int64(m.FcMaxQueueWaitMs), 3.6e+06, false); err != nil {
 		return err
 	}
 
@@ -1923,6 +1999,10 @@ func (m *LoadbalanceEntryServiceArguments) validateSockMapMode(formats strfmt.Re
 func (m *LoadbalanceEntryServiceArguments) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
 	var res []error
 
+	if err := m.contextValidateFcEffective(ctx, formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.contextValidateMtlsBackend(ctx, formats); err != nil {
 		res = append(res, err)
 	}
@@ -1934,6 +2014,22 @@ func (m *LoadbalanceEntryServiceArguments) ContextValidate(ctx context.Context, 
 	if len(res) > 0 {
 		return errors.CompositeValidationError(res...)
 	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) contextValidateFcEffective(ctx context.Context, formats strfmt.Registry) error {
+
+	if m.FcEffective != nil {
+		if err := m.FcEffective.ContextValidate(ctx, formats); err != nil {
+			if ve, ok := err.(*errors.Validation); ok {
+				return ve.ValidateName("serviceArguments" + "." + "fc_effective")
+			} else if ce, ok := err.(*errors.CompositeError); ok {
+				return ce.ValidateName("serviceArguments" + "." + "fc_effective")
+			}
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -1980,6 +2076,75 @@ func (m *LoadbalanceEntryServiceArguments) MarshalBinary() ([]byte, error) {
 // UnmarshalBinary interface implementation
 func (m *LoadbalanceEntryServiceArguments) UnmarshalBinary(b []byte) error {
 	var res LoadbalanceEntryServiceArguments
+	if err := swag.ReadJSON(b, &res); err != nil {
+		return err
+	}
+	*m = res
+	return nil
+}
+
+// LoadbalanceEntryServiceArgumentsFcEffective The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB).
+//
+// swagger:model LoadbalanceEntryServiceArgumentsFcEffective
+type LoadbalanceEntryServiceArgumentsFcEffective struct {
+
+	// Per-endpoint ceiling for decode legs; 0 is unlimited.
+	DecodeMaxInflight int32 `json:"decode_max_inflight,omitempty"`
+
+	// Per-endpoint ceiling for the normal role; 0 is unlimited.
+	EpMaxInflight int32 `json:"ep_max_inflight,omitempty"`
+
+	// Inference requests executing on the pool right now.
+	Inflight int32 `json:"inflight,omitempty"`
+
+	// Pool-wide ceiling on executing inference requests; 0 is unlimited.
+	MaxOutstanding int32 `json:"max_outstanding,omitempty"`
+
+	// The gate mode in force on the pool (off, observe or enforce).
+	Mode string `json:"mode,omitempty"`
+
+	// Per-endpoint ceiling for prefill legs; 0 is unlimited.
+	PrefillMaxInflight int32 `json:"prefill_max_inflight,omitempty"`
+
+	// Requests that may wait for a unit; 0 means over a ceiling is refused.
+	QueueDepth int32 `json:"queue_depth,omitempty"`
+
+	// Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).
+	QueueMemoryBoundMib int64 `json:"queue_memory_bound_mib,omitempty"`
+
+	// The wait window in force for a queued request, in milliseconds.
+	QueueWaitMs int32 `json:"queue_wait_ms,omitempty"`
+
+	// Inference requests waiting for a unit right now.
+	Queued int32 `json:"queued,omitempty"`
+}
+
+// Validate validates this loadbalance entry service arguments fc effective
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) Validate(formats strfmt.Registry) error {
+	return nil
+}
+
+// ContextValidate validate this loadbalance entry service arguments fc effective based on the context it is used
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
+	var res []error
+
+	if len(res) > 0 {
+		return errors.CompositeValidationError(res...)
+	}
+	return nil
+}
+
+// MarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) MarshalBinary() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return swag.WriteJSON(m)
+}
+
+// UnmarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) UnmarshalBinary(b []byte) error {
+	var res LoadbalanceEntryServiceArgumentsFcEffective
 	if err := swag.ReadJSON(b, &res); err != nil {
 		return err
 	}

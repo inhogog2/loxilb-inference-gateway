@@ -52,6 +52,7 @@ import (
 	"github.com/loxilb-io/loxilb/pkg/llamafirewall"
 	"github.com/loxilb-io/loxilb/pkg/logrotate"
 	"github.com/loxilb-io/loxilb/pkg/loxilog"
+	"github.com/loxilb-io/loxilb/pkg/maintenance"
 	"github.com/loxilb-io/loxilb/pkg/presidio"
 	"github.com/loxilb-io/loxilb/pkg/snapshot"
 	"github.com/loxilb-io/loxilb/pkg/user"
@@ -559,6 +560,10 @@ func loxiNetInit() {
 
 		// Initialize the ebpf datapath subsystem
 		mh.dpEbpf = DpEbpfInit(clusterMode, mh.rssEn, mh.eHooks, mh.lSockPolicy, mh.sockMapEn, mh.ktlsEn, mh.self, mh.disBPF, logLevel, dpuMtraceEn)
+		// Operator maintenance reaches the data path: entering it makes the
+		// capacity admission gate refuse new inference requests and end the
+		// ones waiting for capacity; leaving it restores admission.
+		maintenance.SetDataPathDrain(func(on bool) { mh.dpEbpf.DpFcDrainSet(on) })
 		mh.dp = DpBrokerInit(mh.dpEbpf, rpcMode)
 
 		// Initialize DPU plugin manager (: resilient lifecycle)

@@ -84,6 +84,13 @@ func ConfigPatchLoadbalancer(params operations.PatchConfigLoadbalancerExternalip
 	if err := pres.validateConnectionLimit(); err != nil {
 		return patchErr(err.Error())
 	}
+	if pb0 := params.Attr; pb0 != nil {
+		// Each field on its own here; the rule that spans both fields runs
+		// on the merged rule below, since a patch may carry only one of them.
+		if err := pres.validateFcQueueFields(pb0.ServiceArguments); err != nil {
+			return patchErr(err.Error())
+		}
+	}
 
 	pb := params.Attr // the parsed patch body (may be nil for an empty body)
 
@@ -140,6 +147,10 @@ func ConfigPatchLoadbalancer(params operations.PatchConfigLoadbalancerExternalip
 	if pb != nil && pb.ServiceArguments != nil {
 		sa := pb.ServiceArguments
 		pres.applyPDThresholds(&merged.Serv, sa)
+		pres.applyFcQueue(&merged.Serv, sa)
+		if err := cmn.FcQueuePairError(merged.Serv.FcMaxQueueDepth, merged.Serv.FcMaxQueueWaitMs); err != nil {
+			return patchErr(err.Error())
+		}
 
 		// mutable scalars — overlay only when present in the body.
 		if pres.svcPresent("name") {

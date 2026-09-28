@@ -51,6 +51,7 @@ it*, *how to test it*, and *how to extend it*.
 | [`20-tensorrt-llm-kv-cache-aware-routing.md`](20-tensorrt-llm-kv-cache-aware-routing.md) | **TensorRT-LLM integration**: HTTP-drain KV event plane (sole-consumer rule), token re-hash strategy, `/server_info` admission guard (`tokens_per_block` enforcement), sequential `context_only`/`generation_only` P/D dialect with context early-exit, converged `kvExactMode=3`, validation status |
 | [`21-llamacpp-load-balancing.md`](21-llamacpp-load-balancing.md) | **llama.cpp integration**: converged-only typed plain-LB, CHWBL prefix affinity, `/props` advisory probe, engine-side slot/host-cache tuning, and explicit rejection of KV-exact/P/D fields |
 | [`22-multi-llm-platform-operations-guide.ko.md`](22-multi-llm-platform-operations-guide.ko.md) | **Beginner AI Infra operator manual (Korean)**: Mermaid mode diagrams, vLLM/SGLang/TensorRT-LLM/llama.cpp concepts, converged vs P/D comparison, engine-specific deployment recipes, REST rule examples, verification, and troubleshooting |
+| [`23-ai-admission-flow-control.md`](23-ai-admission-flow-control.md) | **AI admission flow control**: the capacity gate's modes and ceilings, the bounded per-pool queue (`fc_max_queue_depth`, `fc_max_queue_wait_ms`, the depth × 1 MiB memory bound and its guards), the refusal contract (`429`/`503`/`504`, `Retry-After`, admission headers), the maintenance drain, and the `loxilb_ai_admission_*` metrics |
 
 ---
 
@@ -89,6 +90,7 @@ it*, *how to test it*, and *how to extend it*.
 | llama.cpp converged CHWBL (`kvEngineType=llamacpp`, `sel=8`) | ✅ Live GPU and mock-CICD validated; KV-exact/P/D intentionally unsupported; see [doc 21](21-llamacpp-load-balancing.md) |
 | MCP proxying with session stickiness | ✅ See [doc 18](18-mcp-gateway.md) |
 | API keys / tenant rate limits / model routing / SSE quotas | ✅ See [doc 19](19-ai-gateway-controls.md) |
+| Capacity admission gate and bounded queue (`LLB_FC_MODE`, `fc_max_queue_depth`) | ✅ Mock-CICD validated (`cicd/ai-admission`); see [doc 23](23-ai-admission-flow-control.md) |
 
 ---
 

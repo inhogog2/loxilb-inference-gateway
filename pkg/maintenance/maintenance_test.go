@@ -193,3 +193,175 @@ func TestConcurrentEnterYieldsOneEpisode(t *testing.T) {
 		}
 	}
 }
+
+// withDrainHook installs a recording data-path drain for one test and
+// removes it afterwards so no other test sees a data path attached.
+func withDrainHook(t *testing.T) *[]bool {
+	t.Helper()
+	calls := &[]bool{}
+	SetDataPathDrain(func(on bool) { *calls = append(*calls, on) })
+	t.Cleanup(func() { SetDataPathDrain(nil) })
+	return calls
+}
+
+func TestNoDataPathNeverClaimsInferenceRefusal(t *testing.T) {
+	m, _ := newFixture()
+	m.Enter(0)
+	if st := m.Status(); st.RefusingInference {
+		t.Fatal("RefusingInference = true with no data path drain installed")
+	}
+}
+
+func TestDataPathDrainFollowsTheEpisode(t *testing.T) {
+	m, _ := newFixture()
+	calls := withDrainHook(t)
+
+	st := m.Enter(time.Minute)
+	if !st.RefusingInference {
+		t.Fatal("Enter with a drain installed reported RefusingInference = false")
+	}
+	if got := *calls; len(got) != 1 || !got[0] {
+		t.Fatalf("Enter drained %v, want [true]", got)
+	}
+	// A repeated Enter is the same episode: the data path is not drained
+	// twice.
+	m.Enter(time.Hour)
+	if got := *calls; len(got) != 1 {
+		t.Fatalf("idempotent Enter drained again: %v", got)
+	}
+	st = m.Leave()
+	if st.RefusingInference {
+		t.Fatal("Leave reported RefusingInference = true")
+	}
+	if got := *calls; len(got) != 2 || got[1] {
+		t.Fatalf("Leave drained %v, want [true false]", got)
+	}
+	// A no-op Leave ends nothing and touches no data path.
+	m.Leave()
+	if got := *calls; len(got) != 2 {
+		t.Fatalf("no-op Leave drained again: %v", got)
+	}
+}
+
+func TestDataPathDrainRunsOutsideTheLock(t *testing.T) {
+	m, _ := newFixture()
+	// A drain that reads the status back must not deadlock: the manager
+	// releases its lock before calling the data path.
+	var seen []State
+	SetDataPathDrain(func(on bool) { seen = append(seen, m.Status().State) })
+	t.Cleanup(func() { SetDataPathDrain(nil) })
+
+	done := make(chan struct{})
+	go func() {
+		m.Enter(0)
+		m.Leave()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Enter/Leave with a status-reading drain did not return: hook called under the lock")
+	}
+	if len(seen) != 2 || seen[0] != StateMaintenance || seen[1] != StateActive {
+		t.Fatalf("drain saw states %v, want [maintenance active]", seen)
+	}
+}
+
+// drainRecorder records the last value the data path was set to, in the
+// order the calls finished.
+type drainRecorder struct {
+	mu    sync.Mutex
+	calls int
+	last  bool
+}
+
+func (r *drainRecorder) record(on bool) {
+	r.mu.Lock()
+	r.calls++
+	r.last = on
+	r.mu.Unlock()
+}
+
+func (r *drainRecorder) get() (int, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls, r.last
+}
+
+// An Enter whose data-path call is slow, and a Leave that completes its
+// transition meanwhile: the data path must end in the state the manager
+// reports, not in whichever call happened to finish last.
+func TestOverlappingTransitionsLeaveTheDataPathInTheReportedState(t *testing.T) {
+	m, _ := newFixture()
+	rec := &drainRecorder{}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	SetDataPathDrain(func(on bool) {
+		first := false
+		once.Do(func() { first = true })
+		if first {
+			close(entered)
+			<-release
+		}
+		rec.record(on)
+	})
+	t.Cleanup(func() { SetDataPathDrain(nil) })
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); m.Enter(0) }()
+	<-entered
+	go func() { defer wg.Done(); m.Leave() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for m.Status().State != StateActive {
+		if time.Now().After(deadline) {
+			t.Fatal("the Leave never took effect")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Give an unordered Leave the time to reach the data path first.
+	grace := time.Now().Add(100 * time.Millisecond)
+	for n, _ := rec.get(); n == 0 && time.Now().Before(grace); n, _ = rec.get() {
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	wg.Wait()
+
+	if _, on := rec.get(); on {
+		t.Fatalf("the data path was left draining while the manager reports %s", m.Status().State)
+	}
+}
+
+// Many operators toggling at once: whatever the interleaving, the last
+// value the data path received is the state the manager ends in.
+func TestConcurrentTransitionsEndInTheReportedState(t *testing.T) {
+	m, _ := newFixture()
+	rec := &drainRecorder{}
+	SetDataPathDrain(rec.record)
+	t.Cleanup(func() { SetDataPathDrain(nil) })
+
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				if (i+j)%2 == 0 {
+					m.Enter(0)
+				} else {
+					m.Leave()
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	n, on := rec.get()
+	if n == 0 {
+		t.Fatal("no transition reached the data path")
+	}
+	if want := m.Status().State == StateMaintenance; on != want {
+		t.Fatalf("the data path ended with drain=%v, the manager reports %s", on, m.Status().State)
+	}
+}

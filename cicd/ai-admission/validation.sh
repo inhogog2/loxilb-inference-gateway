@@ -21,6 +21,10 @@ chk_le() { # chk_le <id> <what> <max> <got>
   if [ "$4" != "unreadable" ] && [ "$4" -le "$3" ] 2>/dev/null; then echo "  [PASS] $1 $2 ($4 <= $3)"; npass=$((npass+1))
   else echo "  [FAIL] $1 $2: want <= $3, got '$4'"; nfail=$((nfail+1)); code=1; fi
 }
+chk_ge() { # chk_ge <id> <what> <min> <got>
+  if [ "$4" != "unreadable" ] && [ "$4" -ge "$3" ] 2>/dev/null; then echo "  [PASS] $1 $2 ($4 >= $3)"; npass=$((npass+1))
+  else echo "  [FAIL] $1 $2: want >= $3, got '$4'"; nfail=$((nfail+1)); code=1; fi
+}
 
 # ── the gateway's metrics (from the client host, through the VIP) ───────────
 metrics_raw() { $hexec l3h1 curl -s --max-time 8 "$API/metrics" 2>/dev/null; }
@@ -54,11 +58,47 @@ wait_metric() { # wait_metric <family> <want> <secs> [label-substr ...]
 }
 svc() { echo "service=\"$VIP:$1\""; }
 inflight() { msum loxilb_ai_admission_inflight "$(svc "$1")" 'role="service"'; }
+queued() { msum loxilb_ai_admission_queued "$(svc "$1")"; }
 decisions() { msum loxilb_ai_admission_decisions_total "$(svc "$1")" "reason=\"$2\""; }
+# The gateway log lives at /var/log/loxilb<hostname>.log inside the container:
+# always read it through the glob, and let the caller check it is non-empty.
+gw_log() { docker exec llb1 sh -c 'cat /var/log/loxilb*.log 2>/dev/null'; }
+lb_get() { $hexec l3h1 curl -s -m 8 "$API/config/loadbalancer/all" | jq -c ".lbAttr[] | select(.serviceArguments.port == $1)"; }
+# A rule is deleted by its FULL key: an AI rule carries host, path prefix, match
+# mode and model name, and a delete that omits any of them matches nothing
+# (404 no-rule error) while the rule and its waiters live on.
+lb_delete() { $hexec l3h1 curl -s -m 8 -X DELETE "$API/config/loadbalancer/hosturl/$VIP/externalipaddress/$VIP/port/$1/protocol/tcp?path_prefix=%2F&path_match_mode=prefix&model_name=${MODEL:-cap-model}"; }
+# The data plane's live queued count through the rule's read-back: unlike the
+# collector's 10 s store this reads the pool now, so a short wait can be seen.
+wait_effective_queued() { # wait_effective_queued <port> <want> <secs>
+  local got="" i
+  for i in $(seq 1 $(( $3 * 2 ))); do
+    got=$(lb_get "$1" | jq -r '.serviceArguments.fc_effective.queued // 0' 2>/dev/null)
+    [ "$got" == "$2" ] && { echo "$got"; return; }
+    sleep 0.5
+  done
+  echo "$got"
+}
+# A rule field read back until it holds a value: a replace POST reaches the
+# data plane through the broker's queue, so a GET right after it may still
+# see the old value.
+wait_lb_field() { # wait_lb_field <port> <jq path> <want> <secs>
+  local got="" i
+  for i in $(seq 1 $(( $4 * 2 ))); do
+    got=$(lb_get "$1" | jq -r "$2 // \"unreadable\"" 2>/dev/null)
+    [ "$got" == "$3" ] && { echo "$got"; return; }
+    sleep 0.5
+  done
+  echo "$got"
+}
+maint_put() { $hexec l3h1 curl -s -m 8 -X PUT "$API/maintenance" -H 'Content-Type: application/json' -d "{\"enabled\": $1}"; }
+maint_get() { $hexec l3h1 curl -s -m 8 "$API/maintenance"; }
 
 # ── the backends (from inside their namespace, never through the gateway) ───
 be() { $hexec l3ep1 curl -s -m 5 "http://127.0.0.1:8080/$1" 2>/dev/null; }
 receipts() { be "__receipts/$1" | jq -r '.count // "unreadable"'; }
+order() { be "__order/$1" | jq -r '.order | join(" ")'; }
+release() { be "__release/$1" >/dev/null; }
 peak() { be "__peak/$1" | jq -r '.peak // "unreadable"'; }
 peak_port() { be "__peak/$1" | jq -r ".ports[\"$2\"] // 0"; }
 release_all() { be __release_all >/dev/null; }
@@ -99,6 +139,38 @@ hold_burst() {
       "$@" -d "$BODY" "$url" > "$dir/$i.code" 2>/dev/null &
   done
 }
+# hold_each <dir> <n> <nonce> <url>: like hold_burst, but every request has its
+# own nonce (<nonce><i>) so the holds can be released one at a time.
+hold_each() {
+  local dir=$1 n=$2 nonce=$3 url=$4 i
+  for i in $(seq 1 "$n"); do
+    $hexec l3h1 curl -s -o "$dir/h$i.body" -D "$dir/h$i.hdr" -w '%{http_code}' --max-time 120 \
+      "${HDRS[@]}" -H 'X-Test-Hold: 1' -H "X-Test-Nonce: $nonce$i" -H "X-Request-Id: $nonce$i" \
+      -d "$BODY" "$url" > "$dir/h$i.code" 2>/dev/null &
+  done
+}
+sum_receipts() { # sum_receipts <nonce> <n>: receipts of <nonce>1..<nonce><n>
+  local s=0 i c
+  for i in $(seq 1 "$2"); do c=$(receipts "$1$i"); case "$c" in ''|*[!0-9]*) ;; *) s=$((s + c)) ;; esac; done
+  echo "$s"
+}
+wait_sum_receipts() { # wait_sum_receipts <nonce> <n> <want> <secs>
+  local got i
+  for i in $(seq 1 "$4"); do got=$(sum_receipts "$1" "$2"); [ "$got" == "$3" ] && { echo "$got"; return; }; sleep 1; done
+  echo "$got"
+}
+# queue_burst <dir> <n> <nonce> <url>: n requests sent one at a time, 300 ms
+# apart, so their arrival order at the gateway is their number; nothing holds
+# them at the backend, so once admitted each completes at once.
+queue_burst() {
+  local dir=$1 n=$2 nonce=$3 url=$4 i
+  for i in $(seq 1 "$n"); do
+    $hexec l3h1 curl -s -o "$dir/q$i.body" -D "$dir/q$i.hdr" -w '%{http_code}' --max-time 60 \
+      "${HDRS[@]}" -H "X-Test-Nonce: $nonce" -H "X-Request-Id: $nonce-$i" \
+      -d "$BODY" "$url" > "$dir/q$i.code" 2>/dev/null &
+    sleep 0.3
+  done
+}
 count_codes() { # count_codes <dir> <code>
   local dir=$1 want=$2 n=0 f
   for f in "$dir"/*.code; do [ -f "$f" ] && [ "$(cat "$f" 2>/dev/null)" == "$want" ] && n=$((n+1)); done
@@ -119,6 +191,7 @@ hdr_val() { printf '%s' "$1" | grep -i "^$2:" | head -n1 | cut -d: -f2- | tr -d 
 
 H1_URL="http://$VIP:$PORT_H1/v1/chat/completions"
 TLS_URL="https://$VIP:$PORT_TLS/v1/chat/completions"
+Q_URL="http://$VIP:$PORT_Q/v1/chat/completions"
 
 echo ""
 echo "Pre: the gate is on and exported"
@@ -312,7 +385,199 @@ echo "J: the gate's accounting stayed consistent"
 chk J1 "no accounting anomaly (underflow)"      0 "$(msum loxilb_ai_admission_anomalies_total 'kind="underflow"')"
 chk J2 "no accounting anomaly (unknown permit)" 0 "$(msum loxilb_ai_admission_anomalies_total 'kind="unknown_permit"')"
 chk J3 "no request was refused for no capacity" 0 "$(msum loxilb_ai_admission_decisions_total 'reason="no_healthy_capacity"')"
-chk J4 "every pool is exported"                 4 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
+chk J4 "every pool is exported"                 6 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
+
+# ── Q: the bounded queue, FIFO ──────────────────────────────────────────────
+echo ""
+echo "Q: 8 held on the queue pool, 4 wait in order, 2 more are refused"
+q0=$(decisions $PORT_Q queued); qf0=$(decisions $PORT_Q queue_full); adm0=$(decisions $PORT_Q admitted)
+wc0=$(msum loxilb_ai_admission_queue_wait_seconds_count "$(svc $PORT_Q)")
+DQ=$(mktemp -d)
+hold_each "$DQ" $FC_MAX_OUT capQh "$Q_URL"
+chk Q1 "the pool filled to the ceiling"                "$FC_MAX_OUT" "$(wait_sum_receipts capQh $FC_MAX_OUT $FC_MAX_OUT 15)"
+queue_burst "$DQ" $FC_Q_DEPTH capQq "$Q_URL"
+chk Q2 "queued gauge shows $FC_Q_DEPTH waiting"        "$FC_Q_DEPTH" "$(wait_metric loxilb_ai_admission_queued $FC_Q_DEPTH 25 "$(svc $PORT_Q)")"
+chk Q3 "none of them reached the backend"              0 "$(receipts capQq)"
+chk Q4 "the depth is exported as the queue limit"      "$FC_Q_DEPTH" "$(msum loxilb_ai_admission_limit "$(svc $PORT_Q)" 'role="queue"')"
+chk Q5 "queued decisions moved by $FC_Q_DEPTH"         "$FC_Q_DEPTH" "$(( $(wait_metric loxilb_ai_admission_decisions_total $((q0+FC_Q_DEPTH)) 25 "$(svc $PORT_Q)" 'reason="queued"') - q0 ))"
+for i in 1 2; do
+  $hexec l3h1 curl -s -o "$DQ/f$i.body" -D "$DQ/f$i.hdr" -w '%{http_code}' --max-time 20 "${HDRS[@]}" \
+    -H 'X-Test-Nonce: capQf' -H "X-Request-Id: capQf-$i" -d "$BODY" "$Q_URL" > "$DQ/f$i.code" 2>/dev/null
+done
+chk Q6 "two more were refused with 429"                2 "$(count_codes "$DQ" 429)"
+H=$(first_hdr_with "$DQ" 429)
+chk Q7 "the refusal reports the full queue"            "$FC_Q_DEPTH" "$(hdr_val "$H" X-Loxilb-Admission-Queued)"
+chk Q8 "and the ceiling"                               "$FC_MAX_OUT" "$(hdr_val "$H" X-Loxilb-Admission-Limit)"
+chk_has Q9 "refusal body names the reason"             admission_capacity "$(cat "$DQ/f1.body" 2>/dev/null)"
+chk Q10 "and they never reached the backend"           0 "$(receipts capQf)"
+chk Q11 "queue_full decisions moved by two"            2 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((qf0+2)) 25 "$(svc $PORT_Q)" 'reason="queue_full"') - qf0 ))"
+# One held request completes: its unit wakes the head of the queue; that
+# request completes at once and wakes the next, so the four drain in order.
+release capQh1
+chk Q12 "all four waiting requests reached the backend"  "$FC_Q_DEPTH" "$(wait_receipts capQq $FC_Q_DEPTH 20)"
+chk Q13 "in the order they arrived"                    "capQq-1 capQq-2 capQq-3 capQq-4" "$(order capQq)"
+chk Q14 "queued gauge back to zero"                    0 "$(wait_metric loxilb_ai_admission_queued 0 25 "$(svc $PORT_Q)")"
+chk Q15 "the wait histogram counted four resumes"      4 "$(( $(wait_metric loxilb_ai_admission_queue_wait_seconds_count $((wc0+4)) 25 "$(svc $PORT_Q)") - wc0 ))"
+release_all; wait
+chk Q16 "the four waiting requests answered 200"       "$FC_Q_DEPTH" "$(count_codes "$DQ" 200 | awk -v h=$FC_MAX_OUT '{print $1 - h}')"
+chk Q17 "admitted decisions moved by $((FC_MAX_OUT+FC_Q_DEPTH))" $((FC_MAX_OUT+FC_Q_DEPTH)) "$(( $(wait_metric loxilb_ai_admission_decisions_total $((adm0+FC_MAX_OUT+FC_Q_DEPTH)) 25 "$(svc $PORT_Q)" 'reason="admitted"') - adm0 ))"
+chk Q18 "gauge back to zero"                           0 "$(wait_metric loxilb_ai_admission_inflight 0 25 "$(svc $PORT_Q)" 'role="service"')"
+
+# ── T: the wait window ──────────────────────────────────────────────────────
+echo ""
+echo "T: two requests wait past ${FC_T_WAIT_MS} ms and are ended with 504"
+to0=$(decisions $PORT_Q queue_timeout)
+DT=$(mktemp -d)
+# The wait window is shortened at runtime for this row: a replace POST of the
+# same rule with the new wait, read back from the data plane before the burst.
+gw_add_rule $PORT_Q "$(gw_queue_json $FC_Q_DEPTH $FC_T_WAIT_MS)" 8080 8081 >/dev/null
+chk T0 "the wait window is changed at runtime"           "$FC_T_WAIT_MS" "$(wait_lb_field $PORT_Q .serviceArguments.fc_effective.queue_wait_ms "$FC_T_WAIT_MS" 10)"
+hold_burst "$DT" $FC_MAX_OUT capTh "$Q_URL"
+chk T1 "the pool filled to the ceiling"                "$FC_MAX_OUT" "$(wait_receipts capTh $FC_MAX_OUT 15)"
+queue_burst "$DT" 2 capTq "$Q_URL"
+chk T2 "two are waiting (data-plane read-back)"        2 "$(wait_effective_queued $PORT_Q 2 10)"
+chk T3 "both were ended with 504"                      2 "$(wait_codes "$DT" 504 2 20)"
+chk_has T4 "the body names the timeout"                admission_queue_timeout "$(cat "$DT/q1.body" 2>/dev/null)"
+chk_ge T5 "and carries the wait it spent (queued_ms)"  "$FC_T_WAIT_MS" "$(jq -r '.queued_ms // "unreadable"' "$DT/q1.body" 2>/dev/null)"
+chk_ge T6 "with Retry-After"                           1 "$(hdr_val "$(cat "$DT/q1.hdr")" Retry-After)"
+chk T7 "queue_timeout decisions moved by two"          2 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((to0+2)) 25 "$(svc $PORT_Q)" 'reason="queue_timeout"') - to0 ))"
+chk T8 "queued gauge back to zero"                     0 "$(wait_metric loxilb_ai_admission_queued 0 25 "$(svc $PORT_Q)")"
+release_all; wait
+sleep 2
+chk T9 "neither reached the backend, then or later"    0 "$(receipts capTq)"
+chk T10 "gauge back to zero"                           0 "$(wait_metric loxilb_ai_admission_inflight 0 25 "$(svc $PORT_Q)" 'role="service"')"
+gw_add_rule $PORT_Q "$(gw_queue_json $FC_Q_DEPTH $FC_Q_WAIT_MS)" 8080 8081 >/dev/null
+chk T11 "the wait window is restored"                  "$FC_Q_WAIT_MS" "$(wait_lb_field $PORT_Q .serviceArguments.fc_effective.queue_wait_ms "$FC_Q_WAIT_MS" 10)"
+
+# ── X: the client leaves while it waits ─────────────────────────────────────
+echo ""
+echo "X: two waiting clients reset their connections"
+cx0=$(decisions $PORT_Q cancelled)
+DX=$(mktemp -d)
+hold_burst "$DX" $FC_MAX_OUT capXh "$Q_URL"
+chk X1 "the pool filled to the ceiling"                "$FC_MAX_OUT" "$(wait_receipts capXh $FC_MAX_OUT 15)"
+$hexec l3h1 python3 "$(pwd)/h1_client.py" disconnect $VIP $PORT_Q --n 2 --after-s 3 --nonce-prefix capXq > /tmp/ai-admission-X.out 2>&1 &
+chk X2 "two are waiting (data-plane read-back)"        2 "$(wait_effective_queued $PORT_Q 2 10)"
+wait %% 2>/dev/null
+chk X3 "cancelled decisions moved by two"              2 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((cx0+2)) 25 "$(svc $PORT_Q)" 'reason="cancelled"') - cx0 ))"
+chk X4 "queued gauge back to zero"                     0 "$(wait_metric loxilb_ai_admission_queued 0 25 "$(svc $PORT_Q)")"
+release_all; wait
+sleep 2
+chk X5 "neither ever reached the backend"              "0 0" "$(receipts capXq-0) $(receipts capXq-1)"
+chk X6 "gauge back to zero"                            0 "$(wait_metric loxilb_ai_admission_inflight 0 25 "$(svc $PORT_Q)" 'role="service"')"
+
+# ── W: the memory warning at apply ──────────────────────────────────────────
+echo ""
+echo "W: a depth of 65536 is applied with a warning; a depth of $FC_Q_DEPTH without"
+chk_ge W1 "the gateway log is readable and non-empty"  1 "$(gw_log | wc -c | tr -d ' ')"
+chk_ge W2 "the warning names the :$PORT_W rule and the two guards" 1 "$(gw_log | grep -c "$VIP:$PORT_W .*fc_max_queue_depth=65536 may park up to .*connectionLimit or LLB_PD_MAX_TOTAL_INFLIGHT")"
+chk W3 "no warning for the :$PORT_Q rule"              0 "$(gw_log | grep "may park up to" | grep -c "$VIP:$PORT_Q ")"
+chk W4 "the :$PORT_W pool is gated all the same"        65536 "$(msum loxilb_ai_admission_limit "$(svc $PORT_W)" 'role="queue"')"
+
+# ── R: the fields are read back and changeable at runtime ───────────────────
+echo ""
+echo "R: GET reads the posted fields and the effective state; a replace POST changes them"
+L=$(lb_get $PORT_Q)
+chk R1 "fc_max_queue_depth read back"                  "$FC_Q_DEPTH"   "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_max_queue_depth')"
+chk R2 "fc_max_queue_wait_ms read back"                "$FC_Q_WAIT_MS" "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_max_queue_wait_ms')"
+chk R3 "fc_effective.mode"                             enforce         "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_effective.mode')"
+chk R4 "fc_effective.max_outstanding"                  "$FC_MAX_OUT"   "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_effective.max_outstanding')"
+chk R5 "fc_effective.queue_depth"                      "$FC_Q_DEPTH"   "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_effective.queue_depth')"
+chk R6 "fc_effective.queue_wait_ms"                    "$FC_Q_WAIT_MS" "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_effective.queue_wait_ms')"
+chk R7 "fc_effective.queue_memory_bound_mib = depth x 1 MiB" "$FC_Q_DEPTH" "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_effective.queue_memory_bound_mib')"
+chk R8 "fc_effective.queued is live"                   0 "$(printf '%s' "$L" | jq -r '.serviceArguments.fc_effective.queued // 0')"
+gw_add_rule $PORT_Q "$(gw_queue_json 2 $FC_Q_WAIT_MS)" 8080 8081 >/dev/null
+chk R9 "a replace POST with depth 2 is read back"      2 "$(wait_lb_field $PORT_Q .serviceArguments.fc_max_queue_depth 2 10)"
+chk R10 "and the data plane holds it"                  2 "$(wait_lb_field $PORT_Q .serviceArguments.fc_effective.queue_depth 2 10)"
+chk R11 "and exports it"                               2 "$(wait_metric loxilb_ai_admission_limit 2 25 "$(svc $PORT_Q)" 'role="queue"')"
+gw_add_rule $PORT_Q "$(gw_queue_json $FC_Q_DEPTH $FC_Q_WAIT_MS)" 8080 8081 >/dev/null
+chk R12 "restored to $FC_Q_DEPTH"                      "$FC_Q_DEPTH" "$(wait_metric loxilb_ai_admission_limit $FC_Q_DEPTH 25 "$(svc $PORT_Q)" 'role="queue"')"
+c=$($hexec l3h1 curl -s -o /dev/null -w '%{http_code}' -m 8 -X POST "$API/config/loadbalancer" -H 'Content-Type: application/json' \
+      -d "{\"serviceArguments\": {\"externalIP\": \"$VIP\", \"port\": 2027, \"protocol\": \"tcp\", \"sel\": 0, \"mode\": 4, \"sse_mode\": true, \"fc_max_queue_depth\": 4}, \"endpoints\": [{\"endpointIP\": \"31.31.31.1\", \"targetPort\": 8080, \"weight\": 1}]}")
+chk R13 "a depth without a wait window is refused"     400 "$c"
+# A replace is judged on the rule it leaves: one carrying only a depth keeps
+# the stored wait; one carrying only a zero wait would leave the stored depth
+# without a window, and is refused with the stored rule untouched.
+chk_has R14 "a replace carrying only a depth is accepted" Success "$(gw_add_rule $PORT_Q ', "fc_max_queue_depth": 2' 8080 8081)"
+chk R15 "the depth is replaced"                        2 "$(wait_lb_field $PORT_Q .serviceArguments.fc_effective.queue_depth 2 10)"
+chk R16 "and the stored wait is kept"                  "$FC_Q_WAIT_MS" "$(lb_get $PORT_Q | jq -r '.serviceArguments.fc_max_queue_wait_ms')"
+chk_has R17 "a replace leaving the depth without a wait is refused" '"code":400' "$(gw_add_rule $PORT_Q ', "fc_max_queue_wait_ms": 0' 8080 8081)"
+chk R18 "and the stored rule is untouched"             "2 $FC_Q_WAIT_MS" "$(lb_get $PORT_Q | jq -r '.serviceArguments | "\(.fc_max_queue_depth) \(.fc_max_queue_wait_ms)"')"
+gw_add_rule $PORT_Q "$(gw_queue_json $FC_Q_DEPTH $FC_Q_WAIT_MS)" 8080 8081 >/dev/null
+chk R19 "restored to $FC_Q_DEPTH"                      "$FC_Q_DEPTH" "$(wait_lb_field $PORT_Q .serviceArguments.fc_effective.queue_depth "$FC_Q_DEPTH" 10)"
+
+# ── KA: a refusal keeps the connection ──────────────────────────────────────
+echo ""
+echo "KA: a 429 on a buffered request keeps the connection; the next request on it is admitted"
+DK=$(mktemp -d)
+hold_burst "$DK" $FC_MAX_OUT capKAh "$H1_URL"
+chk KA1 "the pool filled to the ceiling"               "$FC_MAX_OUT" "$(wait_receipts capKAh $FC_MAX_OUT 15)"
+SIG=$(pwd)/.h1_signal; rm -f "$SIG"
+$hexec l3h1 python3 "$(pwd)/h1_client.py" shed_keepalive $VIP $PORT_H1 --signal "$SIG" --nonce-prefix capKA --timeout 90 > /tmp/ai-admission-KA.out 2>&1 &
+for i in $(seq 1 20); do grep -q '"status": "429"' /tmp/ai-admission-KA.out 2>/dev/null && break; sleep 1; done
+chk KA2 "the first request was refused with 429"       429 "$(grep '"nonce": "capKA-first"' /tmp/ai-admission-KA.out | jq -r '.status')"
+chk KA3 "with Connection: keep-alive"                  keep-alive "$(grep '"nonce": "capKA-first"' /tmp/ai-admission-KA.out | jq -r '.connection')"
+chk KA4 "and the socket stayed open"                   false "$(grep '"nonce": "capKA-first"' /tmp/ai-admission-KA.out | jq -r '.closed')"
+release_all; wait_metric loxilb_ai_admission_inflight 0 25 "$(svc $PORT_H1)" 'role="service"' >/dev/null
+touch "$SIG"
+for i in $(seq 1 30); do grep -q '"summary": "shed_keepalive"' /tmp/ai-admission-KA.out 2>/dev/null && break; sleep 1; done
+chk KA5 "the second request on the SAME socket was admitted" 200 "$(grep '"summary": "shed_keepalive"' /tmp/ai-admission-KA.out | jq -r '.second')"
+chk KA6 "on the kept connection"                       true "$(grep '"summary": "shed_keepalive"' /tmp/ai-admission-KA.out | jq -r '.reused')"
+chk KA7 "the refused request never reached the backend" 0 "$(receipts capKA-first)"
+chk KA8 "the admitted one did"                          1 "$(receipts capKA-second)"
+wait; rm -f "$SIG"
+
+# ── DL: the rule is deleted while requests wait ─────────────────────────────
+echo ""
+echo "DL: deleting the queue pool ends its two waiting requests with 503"
+DD=$(mktemp -d)
+hold_burst "$DD" $FC_MAX_OUT capDh "$Q_URL"
+chk DL1 "the pool filled to the ceiling"                "$FC_MAX_OUT" "$(wait_receipts capDh $FC_MAX_OUT 15)"
+queue_burst "$DD" 2 capDq "$Q_URL"
+chk DL2 "two are waiting"                               2 "$(wait_metric loxilb_ai_admission_queued 2 25 "$(svc $PORT_Q)")"
+chk_has DL2b "the rule is deleted by its full key"     Success "$(lb_delete $PORT_Q)"
+chk DL2c "and the GET no longer lists it"             gone "$([ -z "$(lb_get $PORT_Q)" ] && echo gone || echo listed)"
+chk DL3 "both waiting requests were ended with 503"     2 "$(wait_codes "$DD" 503 2 15)"
+chk_has DL4 "the body names the drain"                  admission_drained "$(cat "$DD/q1.body" 2>/dev/null)"
+release_all; wait
+sleep 2
+chk DL5 "neither reached the backend, then or later"    0 "$(receipts capDq)"
+for i in $(seq 1 20); do [ "$(denies_for capDq- | wc -l | tr -d ' ')" == "2" ] && break; sleep 1; done
+chk DL6 "both drains are on the audit trail"            2 "$(denies_for capDq- | jq -r '.detail.decision' | grep -c '^admission_drained$')"
+gw_add_rule $PORT_Q "$(gw_queue_json $FC_Q_DEPTH $FC_Q_WAIT_MS)" 8080 8081 >/dev/null
+chk DL7 "the pool is back, gated, with an empty queue"  2 "$(wait_metric loxilb_ai_admission_mode 2 25 "$(svc $PORT_Q)")"
+chk DL8 "nothing in flight on it"                       0 "$(wait_metric loxilb_ai_admission_inflight 0 25 "$(svc $PORT_Q)" 'role="service"')"
+
+# ── M: maintenance drains the data path ─────────────────────────────────────
+echo ""
+echo "M: entering maintenance refuses new requests, ends the waiting ones, lets executing ones finish"
+dr0=$(decisions $PORT_Q drained); dg0=$(decisions $PORT_Q draining)
+DM=$(mktemp -d)
+hold_burst "$DM" $FC_MAX_OUT capMh "$Q_URL"
+chk M1 "the pool filled to the ceiling"                "$FC_MAX_OUT" "$(wait_receipts capMh $FC_MAX_OUT 15)"
+queue_burst "$DM" 2 capMq "$Q_URL"
+chk M2 "two are waiting"                               2 "$(wait_metric loxilb_ai_admission_queued 2 25 "$(svc $PORT_Q)")"
+chk M3 "maintenance entered"                           maintenance "$(maint_put true | jq -r '.state')"
+S=$(maint_get)
+chk M4 "the read-back says inference is refused"       true "$(printf '%s' "$S" | jq -r '.refusing_new_inference')"
+chk M5 "and counts the $FC_MAX_OUT executing requests"  "$FC_MAX_OUT" "$(printf '%s' "$S" | jq -r '.in_flight_requests')"
+chk M6 "both waiting requests were ended with 503"     2 "$(wait_codes "$DM" 503 2 15)"
+chk_has M7 "the body names the drain"                  admission_drained "$(cat "$DM/q1.body" 2>/dev/null)"
+c=$($hexec l3h1 curl -s -o "$DM/n.body" -D "$DM/n.hdr" -w '%{http_code}' --max-time 20 "${HDRS[@]}" -H 'X-Test-Nonce: capMn' -d "$BODY" "$Q_URL")
+chk M8 "a new request is refused with 503"             503 "$c"
+chk_has M9 "naming the maintenance drain"              gateway_draining "$(cat "$DM/n.body" 2>/dev/null)"
+chk M9b "and closing the connection (traffic moves off the node)" close "$(hdr_val "$(cat "$DM/n.hdr" 2>/dev/null)" Connection)"
+chk M9c "with Retry-After 5"                           5 "$(hdr_val "$(cat "$DM/n.hdr" 2>/dev/null)" Retry-After)"
+chk M10 "and never reached the backend"                0 "$(receipts capMn)"
+chk M11 "drained decisions moved by two"               2 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((dr0+2)) 25 "$(svc $PORT_Q)" 'reason="drained"') - dr0 ))"
+chk M12 "draining decisions moved by one"              1 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((dg0+1)) 25 "$(svc $PORT_Q)" 'reason="draining"') - dg0 ))"
+release_all; wait
+chk M13 "the executing requests finished 200"          "$FC_MAX_OUT" "$(count_codes "$DM" 200)"
+chk M14 "maintenance left"                             active "$(maint_put false | jq -r '.state')"
+chk M15 "the read-back no longer claims a drain"       false "$(maint_get | jq -r '.refusing_new_inference')"
+c=$($hexec l3h1 curl -s -o /dev/null -w '%{http_code}' --max-time 20 "${HDRS[@]}" -H 'X-Test-Nonce: capMr' -d "$BODY" "$Q_URL")
+chk M16 "admission is restored"                        200 "$c"
+chk M17 "gauge back to zero"                           0 "$(wait_metric loxilb_ai_admission_inflight 0 25 "$(svc $PORT_Q)" 'role="service"')"
 
 # ── H: observe mode ─────────────────────────────────────────────────────────
 echo ""
@@ -338,7 +603,7 @@ else
   echo "  [FAIL] H0 the gateway did not come back in observe mode"; nfail=$((nfail+1)); code=1
 fi
 
-rm -rf "$DB" "$DN" "$DC" "$E" "$DG" "$DL" "${DH:-/nonexistent}" 2>/dev/null
+rm -rf "$DB" "$DN" "$DC" "$E" "$DG" "$DL" "$DQ" "$DT" "$DX" "$DK" "$DD" "$DM" "${DH:-/nonexistent}" 2>/dev/null
 
 echo ""
 if [ "$code" -eq 0 ]; then

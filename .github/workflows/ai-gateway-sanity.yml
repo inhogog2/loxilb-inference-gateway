@@ -209,7 +209,9 @@ jobs:
           cd -
       # The capacity admission gate: ceilings over HTTP/1.1, HTTP/2 and TLS,
       # the gauges and decision counters it exports, its refusals on the
-      # audit trail, and the same load admitted in observe mode.
+      # audit trail, the same load admitted in observe mode, and the bounded
+      # queue: waiting in order, deadlines, cancellation, runtime changes,
+      # rule deletion and the maintenance drain.
       - name: Capacity admission gate (HTTP/1, HTTP/2, TLS, audit, observe)
         run: |
           cd cicd/ai-admission/

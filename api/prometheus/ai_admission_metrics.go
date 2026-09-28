@@ -8,20 +8,23 @@ package prometheus
 
 /*
 #cgo CFLAGS: -I../../loxilb-ebpf/common
+#include <stddef.h>
 #include <stdint.h>
 
 // Twin declaration of proxy_fc_svc_stat_t. CANONICAL definition lives in
 // loxilb-ebpf/common/sockproxy_metrics.h; a weak stub for CGO-only builds
 // (go test, no sockproxy object) lives in proxy_metrics_stub.c. All THREE
-// must move in lockstep, same commit -- tail-append only, never reorder.
+// must move in lockstep, same commit; the offsets are pinned by the asserts
+// after the struct, in all three.
 //
 // Role index 0 = normal, 1 = prefill, 2 = decode; reason index follows the
 // gate's enum fc_reason. Cap on pools reported per call; lockstep with
 // PROXY_FC_STAT_MAX in sockproxy_metrics.h.
 #define PROXY_FC_STAT_MAX 256
 #define PROXY_FC_ROLES 3
-#define PROXY_FC_REASONS 5
+#define PROXY_FC_REASONS 12
 #define PROXY_FC_POOL_LEN 64
+#define PROXY_FC_QWAIT_BUCKETS 8
 
 typedef struct proxy_fc_svc_stat {
     uint32_t xip;
@@ -34,7 +37,21 @@ typedef struct proxy_fc_svc_stat {
     uint32_t ep_inflight[PROXY_FC_ROLES];
     uint64_t decisions[PROXY_FC_REASONS];
     char     pool[PROXY_FC_POOL_LEN];
+    uint32_t queued;
+    uint32_t max_queue_depth;
+    uint32_t max_queue_wait_ms;
+    uint32_t pad;
+    uint64_t qwait_bucket[PROXY_FC_QWAIT_BUCKETS];
+    uint64_t qwait_sum_ms;
+    uint64_t qwait_count;
 } proxy_fc_svc_stat_t;
+// Pinned to the layout in sockproxy_metrics.h.
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 296, "proxy_fc_svc_stat_t size");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 136, "pool offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 200, "queued offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 216, "qwait_bucket offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 288, "qwait_count offset");
 
 extern int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max);
 extern uint64_t proxy_get_fc_anomaly(int kind);
@@ -64,6 +81,11 @@ import (
 // collector emits ConstMetrics from it on scrape (reader). The C call walks
 // the service list under the proxy read lock, off the scrape path.
 //
+// The bounded queue rides on the same row: the requests waiting for a unit,
+// the depth and wait window in force, and a histogram of how long the
+// resumed ones waited, so an operator can tell a queue that absorbs bursts
+// from one that only delays the 429.
+//
 // Every model pool of an AI-gateway service gets a row whatever the gate's
 // mode. A pool with the gate off reports mode 0 and zeros, so the mode
 // series answers "is this pool gated" without a second source of truth, and
@@ -73,20 +95,37 @@ import (
 // ============================================================================
 
 // Role label values, indexed as the C arrays are; "service" is the pool-wide
-// unit that every inference request holds once however many legs it opens.
+// unit that every inference request holds once however many legs it opens,
+// "queue" is the bound on the requests waiting for one.
 var admissionRoleLabels = [3]string{"normal", "prefill", "decode"}
 
-const admissionRoleService = "service"
+const (
+	admissionRoleService = "service"
+	admissionRoleQueue   = "queue"
+)
 
 // Decision reasons, indexed as the gate's enum fc_reason. The wire vocabulary
 // is closed: a reason the gate does not have cannot appear here.
-var admissionReasonLabels = [5]string{
+var admissionReasonLabels = [12]string{
 	"admitted",
 	"capacity_shed",
 	"no_healthy_capacity",
 	"observe_would_shed",
 	"bypass_non_inference",
+	"queued",
+	"queue_full",
+	"queue_timeout",
+	"cancelled",
+	"drained",
+	"observe_would_queue",
+	"draining",
 }
+
+// Queue wait histogram upper bounds in seconds, one per C bucket
+// (fc_qwait_bounds_ms in sockproxy_fc.c: 10, 50, 100, 250, 500, 1000, 2500,
+// 5000 ms). The C side counts each wait in its first bucket whose bound it
+// does not exceed; Prometheus wants cumulative counts, so Collect sums them.
+var admissionQwaitBoundsSeconds = [8]float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
 // Anomaly kinds, indexed as the gate's enum fc_anomaly.
 var admissionAnomalyLabels = [2]string{"underflow", "unknown_permit"}
@@ -102,7 +141,13 @@ type admissionSample struct {
 	inflight       float64
 	epCap          [3]float64
 	epInflight     [3]float64
-	decisions      [5]float64
+	decisions      [12]float64
+
+	queued       float64
+	queueDepth   float64
+	qwaitBuckets [8]uint64
+	qwaitSumMs   uint64
+	qwaitCount   uint64
 }
 
 // admissionStore is the state shared between the collection loop (writer)
@@ -134,12 +179,22 @@ var (
 	)
 	admissionLimitDesc = prometheus.NewDesc(
 		"loxilb_ai_admission_limit",
-		"Ceiling in force for the role: role=\"service\" is the pool-wide bound on executing requests, the other roles are the per-endpoint bound for that role. 0 means unlimited at that level.",
+		"Ceiling in force for the role: role=\"service\" is the pool-wide bound on executing requests, role=\"queue\" is the bound on requests waiting for a unit (0: over a ceiling is refused at once), the other roles are the per-endpoint bound for that role. 0 means unlimited at that level.",
 		admissionRoleLabelNames, nil,
+	)
+	admissionQueuedDesc = prometheus.NewDesc(
+		"loxilb_ai_admission_queued",
+		"Inference requests parked on the pool right now, waiting for a capacity unit. Zero with no queue depth configured.",
+		admissionPoolLabels, nil,
+	)
+	admissionQueueWaitDesc = prometheus.NewDesc(
+		"loxilb_ai_admission_queue_wait_seconds",
+		"Time a request waited in the pool's queue before it was resumed and dispatched; requests that timed out, were cancelled or were drained are counted under their decision reason instead.",
+		admissionPoolLabels, nil,
 	)
 	admissionDecisionsDesc = prometheus.NewDesc(
 		"loxilb_ai_admission_decisions_total",
-		"Gate decisions per pool and reason: admitted, capacity_shed (429), no_healthy_capacity (503), observe_would_shed (admitted in observe mode where enforce would have refused, counted at each ceiling that would have refused it), bypass_non_inference (not an inference request, no unit taken).",
+		"Gate decisions per pool and reason: admitted, capacity_shed (429), no_healthy_capacity (503), observe_would_shed (admitted in observe mode where enforce would have refused, counted at each ceiling that would have refused it), bypass_non_inference (not an inference request, no unit taken), queued (parked to wait for a unit), queue_full (429, the queue at its depth), queue_timeout (504, waited the whole window), cancelled (the client left while waiting), drained (the pool or the process stopped taking work while it waited), observe_would_queue (admitted in observe mode where enforce would have parked it), draining (503, the process is draining for maintenance).",
 		admissionReasonLabelNames, nil,
 	)
 	admissionAnomaliesDesc = prometheus.NewDesc(
@@ -159,6 +214,8 @@ func (admissionCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- admissionModeDesc
 	ch <- admissionInflightDesc
 	ch <- admissionLimitDesc
+	ch <- admissionQueuedDesc
+	ch <- admissionQueueWaitDesc
 	ch <- admissionDecisionsDesc
 	ch <- admissionAnomaliesDesc
 }
@@ -178,6 +235,11 @@ func (admissionCollector) Collect(ch chan<- prometheus.Metric) {
 			ch <- prometheus.MustNewConstMetric(admissionInflightDesc, prometheus.GaugeValue, s.epInflight[r], s.service, s.pool, role)
 			ch <- prometheus.MustNewConstMetric(admissionLimitDesc, prometheus.GaugeValue, s.epCap[r], s.service, s.pool, role)
 		}
+		ch <- prometheus.MustNewConstMetric(admissionLimitDesc, prometheus.GaugeValue, s.queueDepth, s.service, s.pool, admissionRoleQueue)
+		ch <- prometheus.MustNewConstMetric(admissionQueuedDesc, prometheus.GaugeValue, s.queued, s.service, s.pool)
+		qwCount, qwBuckets := admissionQwaitHistogram(s.qwaitBuckets, s.qwaitCount)
+		ch <- prometheus.MustNewConstHistogram(admissionQueueWaitDesc, qwCount, float64(s.qwaitSumMs)/1000,
+			qwBuckets, s.service, s.pool)
 		for d, reason := range admissionReasonLabels {
 			ch <- prometheus.MustNewConstMetric(admissionDecisionsDesc, prometheus.CounterValue, s.decisions[d], s.service, s.pool, reason)
 		}
@@ -191,6 +253,32 @@ func (admissionCollector) Collect(ch chan<- prometheus.Metric) {
 // same registry the promauto metrics use).
 func init() {
 	prometheus.MustRegister(admissionCollector{})
+}
+
+// admissionQwaitCumulative turns the C side's per-bucket counts into the
+// cumulative form a Prometheus histogram carries, keyed by the bucket's upper
+// bound in seconds. Pure Go.
+func admissionQwaitCumulative(buckets [8]uint64) map[float64]uint64 {
+	out := make(map[float64]uint64, len(buckets))
+	var acc uint64
+	for i, n := range buckets {
+		acc += n
+		out[admissionQwaitBoundsSeconds[i]] = acc
+	}
+	return out
+}
+
+// admissionQwaitHistogram is the histogram a scrape emits: the cumulative
+// buckets and a count no smaller than the last of them. The C side adds a
+// wait to its bucket before its count and the snapshot reads them without a
+// lock, so a scrape can land between the two; a count below a bucket would
+// be a histogram that is not monotonic. Pure Go.
+func admissionQwaitHistogram(buckets [8]uint64, count uint64) (uint64, map[float64]uint64) {
+	cum := admissionQwaitCumulative(buckets)
+	if top := cum[admissionQwaitBoundsSeconds[len(admissionQwaitBoundsSeconds)-1]]; count < top {
+		count = top
+	}
+	return count, cum
 }
 
 // admissionServiceLabel renders the service identity the audit trail and the
@@ -268,6 +356,13 @@ func refreshAdmissionStore() {
 		for d := 0; d < len(admissionReasonLabels); d++ {
 			s.decisions[d] = float64(st.decisions[d])
 		}
+		s.queued = float64(st.queued)
+		s.queueDepth = float64(st.max_queue_depth)
+		for b := 0; b < len(s.qwaitBuckets); b++ {
+			s.qwaitBuckets[b] = uint64(st.qwait_bucket[b])
+		}
+		s.qwaitSumMs = uint64(st.qwait_sum_ms)
+		s.qwaitCount = uint64(st.qwait_count)
 		samples = append(samples, s)
 	}
 	sortAdmissionSamples(samples)

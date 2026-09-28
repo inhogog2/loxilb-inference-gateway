@@ -10,6 +10,7 @@
  * overridden by the strong symbol when the full binary is linked.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -165,8 +166,9 @@ int proxy_get_qos_stats(proxy_qos_svc_stat_t *out, int max) {
  * second) and must be updated in the same commit as the other two.
  */
 #define PROXY_FC_ROLES 3
-#define PROXY_FC_REASONS 5
+#define PROXY_FC_REASONS 12
 #define PROXY_FC_POOL_LEN 64
+#define PROXY_FC_QWAIT_BUCKETS 8
 
 typedef struct proxy_fc_svc_stat {
     uint32_t xip;
@@ -179,7 +181,21 @@ typedef struct proxy_fc_svc_stat {
     uint32_t ep_inflight[PROXY_FC_ROLES];
     uint64_t decisions[PROXY_FC_REASONS];
     char     pool[PROXY_FC_POOL_LEN];
+    uint32_t queued;
+    uint32_t max_queue_depth;
+    uint32_t max_queue_wait_ms;
+    uint32_t pad;
+    uint64_t qwait_bucket[PROXY_FC_QWAIT_BUCKETS];
+    uint64_t qwait_sum_ms;
+    uint64_t qwait_count;
 } proxy_fc_svc_stat_t;
+/* Pinned to the layout in sockproxy_metrics.h. */
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 296, "proxy_fc_svc_stat_t size");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 136, "pool offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 200, "queued offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 216, "qwait_bucket offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 288, "qwait_count offset");
 
 __attribute__((weak))
 int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max) {

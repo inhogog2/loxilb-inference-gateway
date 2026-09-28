@@ -998,6 +998,27 @@ type LbServiceArg struct {
 	// (05). This Octavia per-rule ceiling is DISTINCT from the SecurityRate per-SOURCE-IP
 	// limiters (P0-5/P0-6/P0-7) — do NOT conflate. NOT per-EP. Bounded to uint32 at ingest.
 	ConnectionLimit uint32 `json:"connectionLimit,omitempty"`
+	// FcMaxQueueDepth - capacity admission queue of the service's model
+	// pool: how many inference requests may wait for a capacity unit
+	// instead of being refused. 0 (or omitted) leaves the process default
+	// (LLB_FC_MAX_QUEUE_DEPTH) in force; at most 65536. Each waiting
+	// request parks a client connection holding about a megabyte of
+	// receive buffer, so the depth is a memory bound as much as a queue
+	// bound: depth x 1 MiB.
+	FcMaxQueueDepth uint32 `json:"fc_max_queue_depth,omitempty"`
+	// FcMaxQueueDepthPresent is the presence bit for replace semantics
+	// (an explicit zero resets to the process default). Transaction
+	// metadata, not persisted configuration.
+	FcMaxQueueDepthPresent bool `json:"-"`
+	// FcMaxQueueWaitMs - the longest a request may wait in that queue
+	// before it is answered 504; required (> 0) when FcMaxQueueDepth > 0.
+	FcMaxQueueWaitMs uint32 `json:"fc_max_queue_wait_ms,omitempty"`
+	// FcMaxQueueWaitMsPresent is the presence bit for replace semantics.
+	FcMaxQueueWaitMsPresent bool `json:"-"`
+	// FcEffective - the capacity gate's resolved state on the rule's pool,
+	// read from the data plane for GET only. Never persisted, never read
+	// on input.
+	FcEffective *FcEffectiveArg `json:"-"`
 	// MustExist - Octavia PATCH must-exist semantics. When true, AddLbRule
 	// refuses to CREATE an absent rule and returns the RuleNotExistsErr sentinel so the
 	// PATCH handler can map it to 404. POST callers leave this false (default), preserving
@@ -1464,6 +1485,25 @@ type LbSecVIPArg struct {
 type LbAllowedSrcIPArg struct {
 	// Prefix - Allowed Prefix
 	Prefix string `json:"prefix"`
+}
+
+// FcEffectiveArg - the capacity admission gate's resolved state on one
+// rule's model pool, as the data plane holds it: the mode and ceilings in
+// force (the environment's process defaults where the rule set nothing),
+// the units executing and waiting right now, and what the queue depth
+// costs when it is full (one parked client connection of about a
+// megabyte per waiting request).
+type FcEffectiveArg struct {
+	Mode                string `json:"mode"`
+	MaxOutstanding      uint32 `json:"max_outstanding"`
+	EpMaxInflight       uint32 `json:"ep_max_inflight"`
+	PrefillMaxInflight  uint32 `json:"prefill_max_inflight"`
+	DecodeMaxInflight   uint32 `json:"decode_max_inflight"`
+	QueueDepth          uint32 `json:"queue_depth"`
+	QueueWaitMs         uint32 `json:"queue_wait_ms"`
+	Inflight            uint32 `json:"inflight"`
+	Queued              uint32 `json:"queued"`
+	QueueMemoryBoundMib uint64 `json:"queue_memory_bound_mib"`
 }
 
 // LbRuleMod - Info related to a load-balancer entry
@@ -2089,6 +2129,10 @@ type NetHookInterface interface {
 	// counts streams only: short-lived non-streaming requests have no
 	// Go-side in-flight counter and are deliberately not estimated.
 	NetAiInFlightStreamsGet() int64
+	// NetAiInFlightRequestsGet returns the inference requests the capacity
+	// admission gate counts as executing across every gated model pool
+	// (streaming and non-streaming alike; 0 when no pool is gated).
+	NetAiInFlightRequestsGet() int64
 	NetPortAdd(*PortMod) (int, error)
 	NetPortDel(*PortMod) (int, error)
 	NetVlanGet() ([]VlanGet, error)

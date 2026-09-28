@@ -2598,6 +2598,117 @@
             },
             "overrides": []
           }
+        },
+        {
+          "id": 60,
+          "type": "timeseries",
+          "title": "Queued vs queue depth",
+          "description": "Inference requests parked on the pool waiting for a capacity unit, against the queue depth in force (role=queue of the limit family; hidden when 0, which means over a ceiling is refused at once). Queued pinned at the depth with a rising queue_full rate is a queue too short for the burst or a ceiling too low; queued stuck above zero with no traffic is a wake defect.",
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 106
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (service, pool) (loxilb_ai_admission_queued{instance=~\"$instance\"})",
+              "legendFormat": "{{service}} {{pool}} queued"
+            },
+            {
+              "refId": "B",
+              "expr": "max by (service, pool) (loxilb_ai_admission_limit{instance=~\"$instance\",role=\"queue\"} > 0)",
+              "legendFormat": "{{service}} {{pool}} depth"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No queue configured or no AI service"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".* depth"
+                },
+                "properties": [
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "fill": "dash",
+                      "dash": [
+                        10,
+                        10
+                      ]
+                    }
+                  },
+                  {
+                    "id": "custom.fillOpacity",
+                    "value": 0
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 61,
+          "type": "timeseries",
+          "title": "Queue wait p50 / p95",
+          "description": "How long resumed requests waited in the pool's queue before dispatch (only requests that got a unit; timeouts, cancels and drains are counted under their decision reason). The buckets end at 5 s, so a p95 reading 5 s means the tail is beyond the last bucket. Read against fc_max_queue_wait_ms: a p50 near the window means most waiters are close to the 504.",
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 106
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.5, sum by (service, pool, le) (rate(loxilb_ai_admission_queue_wait_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+              "legendFormat": "{{service}} {{pool}} p50"
+            },
+            {
+              "refId": "B",
+              "expr": "histogram_quantile(0.95, sum by (service, pool, le) (rate(loxilb_ai_admission_queue_wait_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+              "legendFormat": "{{service}} {{pool}} p95"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "noValue": "No queue configured or no AI service"
+            },
+            "overrides": []
+          }
         }
       ]
     }

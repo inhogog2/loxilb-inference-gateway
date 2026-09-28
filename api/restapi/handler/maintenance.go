@@ -30,15 +30,18 @@ import (
 // maintenanceStatusModel renders a maintenance snapshot as the wire
 // contract. Refusal fields are derived from what THIS state actually
 // makes the gateway refuse: the maintenance gate rejects mutating config
-// calls, and it does not touch the data path -- refusing_new_inference
-// is therefore hardwired false rather than mirroring the state, so the
-// read-back never claims a traffic drain that is not happening.
+// calls, and refusing_new_inference is true only when a data path has
+// installed its drain and this episode is draining it (the capacity
+// admission gate refusing new inference requests and ending the ones
+// waiting for capacity), so the read-back never claims a traffic drain
+// that is not happening.
 func maintenanceStatusModel(st maintenance.Status) *models.MaintenanceStatus {
 	state := string(st.State)
 	inMaint := st.State == maintenance.StateMaintenance
-	refusingInference := false
+	refusingInference := st.RefusingInference
 	cancellable := true
 	inFlight := ApiHooks.NetAiInFlightStreamsGet()
+	inFlightRequests := ApiHooks.NetAiInFlightRequestsGet()
 	elapsed := int64(st.Elapsed / time.Second)
 	deadlineExceeded := st.DeadlineExceeded
 	m := &models.MaintenanceStatus{
@@ -48,6 +51,7 @@ func maintenanceStatusModel(st maintenance.Status) *models.MaintenanceStatus {
 		RefusingNewInference:  &refusingInference,
 		Cancellable:           &cancellable,
 		InFlightStreams:       &inFlight,
+		InFlightRequests:      inFlightRequests,
 		ElapsedSeconds:        &elapsed,
 		DrainTimeoutSeconds:   uint32(st.DrainTimeout / time.Second),
 		DrainDeadlineExceeded: &deadlineExceeded,

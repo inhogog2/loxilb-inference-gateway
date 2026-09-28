@@ -30,6 +30,16 @@ func pdThresholdOnReplace(current, incoming uint8, present bool) uint8 {
 	return current
 }
 
+// u32OnReplace is pdThresholdOnReplace for a 32-bit declaration: presence
+// authorizes an explicit zero as a reset, a nonzero incoming value is an
+// update, and an omitted field keeps the stored declaration.
+func u32OnReplace(current, incoming uint32, present bool) uint32 {
+	if present || incoming != 0 {
+		return incoming
+	}
+	return current
+}
+
 func pdCacheThresholdEffective(declared uint8) uint8 {
 	if declared == 0 {
 		return pdCacheThresholdDefault

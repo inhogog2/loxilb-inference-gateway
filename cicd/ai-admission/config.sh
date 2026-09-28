@@ -15,6 +15,9 @@
 #   :2021  HTTP/1.1  -> l3ep1:8080, :8081   (mock_backend.py, one process)
 #   :2022  HTTP/2    -> l3ep1:8090, :8091   (h2c_backend.py x2)
 #   :2023  TLS       -> l3ep1:8080, :8081   with a 3 s SSE duration cap
+#   :2024  HTTP/1.1  -> l3ep1:8080          one endpoint
+#   :2025  HTTP/1.1  -> l3ep1:8080, :8081   queue depth 4, wait 30 s
+#   :2026  HTTP/1.1  -> l3ep1:8080          queue depth 65536 (the warning)
 
 source ../common.sh
 source ./gw.sh

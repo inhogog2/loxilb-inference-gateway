@@ -11,6 +11,14 @@ PORT_H1=2021          # plaintext HTTP/1.1 pool, two backends
 PORT_H2=2022          # HTTP/2 (h2c) pool, two h2c backends
 PORT_TLS=2023         # TLS listener, the same two HTTP/1.1 backends, SSE cap 3 s
 PORT_ONE=2024         # one backend: the endpoint ceiling is the binding one
+PORT_Q=2025           # the same two backends with a queue: depth 4, wait 30 s
+PORT_W=2026           # one backend, depth 65536: the memory warning fires at apply
+FC_Q_DEPTH=4
+# The pool's wait is long enough that a waiter outlives the 10 s metric
+# republish the rows poll between parking it and releasing a unit; row T
+# shortens it at runtime for the deadline it proves.
+FC_Q_WAIT_MS=30000
+FC_T_WAIT_MS=4000
 SSE_CAP_SEC=3
 AUDIT_DIR=/var/log/loxilb/audit
 GW_ARGS="--audit-dir $AUDIT_DIR --audit-required"
@@ -92,11 +100,16 @@ gw_add_rule() {
   esac
 }
 
+# gw_queue_json <depth> <wait-ms>: the two queue fields as rule JSON
+gw_queue_json() { echo ", \"fc_max_queue_depth\": $1, \"fc_max_queue_wait_ms\": $2"; }
+
 gw_add_rules() {
   gw_add_rule $PORT_H1  ""                                                       8080 8081 || return 1
   gw_add_rule $PORT_H2  ", \"backend_protocol\": \"http2\""                       8090 8091 || return 1
   gw_add_rule $PORT_TLS ", \"security\": 1, \"max_stream_duration_sec\": $SSE_CAP_SEC" 8080 8081 || return 1
   gw_add_rule $PORT_ONE ""                                                       8080      || return 1
+  gw_add_rule $PORT_Q   "$(gw_queue_json $FC_Q_DEPTH $FC_Q_WAIT_MS)"             8080 8081 || return 1
+  gw_add_rule $PORT_W   "$(gw_queue_json 65536 $FC_Q_WAIT_MS)"                   8080      || return 1
   sleep 2
 }
 
