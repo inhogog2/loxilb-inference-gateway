@@ -53,6 +53,12 @@ func stripV6Brackets(ip string) string {
 func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: Load balancer %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
 
+	// serviceArguments is optional in the schema, so a body without it
+	// passes validation; everything below reads through it.
+	if params.Attr.ServiceArguments == nil {
+		return errorResponseWithCode(http.StatusBadRequest, "serviceArguments is required")
+	}
+
 	pres, err := parseLoadbalancerRequestPresence(rawLoadbalancerBodyFromContext(params.HTTPRequest.Context()))
 	if err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, "malformed load-balancer body")
