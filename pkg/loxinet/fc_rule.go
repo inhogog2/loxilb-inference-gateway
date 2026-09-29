@@ -37,6 +37,7 @@ type fcRuleCfg struct {
 	adaptive           uint8 // cmn.FcRuleAdaptive*
 	warmupMs           uint32
 	ttftTargetMs       uint32
+	tenantSharePct     uint32
 }
 
 // fcRuleResolve returns the gate declaration a rule will store: on create
@@ -62,6 +63,7 @@ func fcRuleResolve(eRule *ruleEnt, serv *cmn.LbServiceArg) (fcRuleCfg, error) {
 		adaptive:           adaptive,
 		warmupMs:           serv.FcWarmupMs,
 		ttftTargetMs:       serv.FcTtftTargetMs,
+		tenantSharePct:     serv.FcTenantMaxSharePct,
 	}
 	if eRule != nil {
 		cur := eRule.fcCfg
@@ -78,6 +80,7 @@ func fcRuleResolve(eRule *ruleEnt, serv *cmn.LbServiceArg) (fcRuleCfg, error) {
 		}
 		next.warmupMs = u32OnReplace(cur.warmupMs, serv.FcWarmupMs, serv.FcWarmupMsPresent)
 		next.ttftTargetMs = u32OnReplace(cur.ttftTargetMs, serv.FcTtftTargetMs, serv.FcTtftTargetMsPresent)
+		next.tenantSharePct = u32OnReplace(cur.tenantSharePct, serv.FcTenantMaxSharePct, serv.FcTenantMaxSharePctPresent)
 	}
 	for _, c := range []struct {
 		name string
@@ -105,6 +108,10 @@ func fcRuleResolve(eRule *ruleEnt, serv *cmn.LbServiceArg) (fcRuleCfg, error) {
 		return fcRuleCfg{}, cmn.NewValidationError("fc_ttft_target_ms",
 			"fc_ttft_target_ms must be within 0..%d", cmn.FcTtftTargetMsMax)
 	}
+	if next.tenantSharePct > cmn.FcTenantMaxSharePctMax {
+		return fcRuleCfg{}, cmn.NewValidationError("fc_tenant_max_share_pct",
+			"fc_tenant_max_share_pct must be within 0..%d", cmn.FcTenantMaxSharePctMax)
+	}
 	return next, nil
 }
 
@@ -120,6 +127,7 @@ func (c fcRuleCfg) toServ(s *cmn.LbServiceArg) {
 	s.FcAdaptive = cmn.FcAdaptiveFromRule(c.adaptive)
 	s.FcWarmupMs = c.warmupMs
 	s.FcTtftTargetMs = c.ttftTargetMs
+	s.FcTenantMaxSharePct = c.tenantSharePct
 }
 
 // adaptiveInForce reports whether the rule's pool adapts its service

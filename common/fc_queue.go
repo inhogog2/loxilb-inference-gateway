@@ -41,6 +41,9 @@ const FcWarmupMsMax = 3600000
 // FcTtftTargetMsMax bounds a rule's TTFT target (an hour).
 const FcTtftTargetMsMax = 3600000
 
+// FcTenantMaxSharePctMax bounds a rule's tenant share, a percentage.
+const FcTenantMaxSharePctMax = 100
+
 // The data plane's encoding of a rule's adaptive switch (enum
 // fc_rule_adaptive), shifted like the mode so a rule can say "off" under an
 // environment that has it on.

@@ -767,6 +767,11 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	FcTelemetryStaleMs int32 `json:"fc_telemetry_stale_ms,omitempty"`
 
+	// The most of the service ceiling in force, and of the queue depth, one tenant may hold, in percent (rounded up, at least one). A tenant is the tenant id the request's credential resolved to; requests without one are one tenant. A tenant at its share waits for one of its own units when the pool queues (within its share of the queue), or is refused with 429 admission_tenant_share, while other tenants still admit; waiters held back by their share never make another tenant wait. Inert without fc_max_outstanding. 100 is no share; 0 or omitted leaves the process default (LLB_FC_TENANT_MAX_SHARE_PCT, else no share) in force. Replace and null semantics as fc_max_outstanding.
+	// Maximum: 100
+	// Minimum: 0
+	FcTenantMaxSharePct int32 `json:"fc_tenant_max_share_pct,omitempty"`
+
 	// With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.
 	// Maximum: 3.6e+06
 	// Minimum: 0
@@ -1051,6 +1056,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	}
 
 	if err := m.validateFcTelemetryStaleMs(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateFcTenantMaxSharePct(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -1568,6 +1577,22 @@ func (m *LoadbalanceEntryServiceArguments) validateFcTelemetryStaleMs(formats st
 	}
 
 	if err := validate.MaximumInt("serviceArguments"+"."+"fc_telemetry_stale_ms", "body", int64(m.FcTelemetryStaleMs), 3.6e+06, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcTenantMaxSharePct(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcTenantMaxSharePct) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"fc_tenant_max_share_pct", "body", int64(m.FcTenantMaxSharePct), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"fc_tenant_max_share_pct", "body", int64(m.FcTenantMaxSharePct), 100, false); err != nil {
 		return err
 	}
 
@@ -2423,6 +2448,12 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// The P/D scorers' trust window for scraped queue depth, in milliseconds.
 	TelemetryStaleMs int32 `json:"telemetry_stale_ms,omitempty"`
 
+	// The tenant share in force, in percent; 0 or 100 is no share.
+	TenantMaxSharePct int32 `json:"tenant_max_share_pct,omitempty"`
+
+	// Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.
+	TenantsActive int32 `json:"tenants_active,omitempty"`
+
 	// ttft target ms
 	TtftTargetMs int32 `json:"ttft_target_ms,omitempty"`
 
@@ -2708,6 +2739,10 @@ type LoadbalanceEntryServiceArgumentsFcEffectiveSource struct {
 	// Enum: [rule env default]
 	TelemetryStaleMs string `json:"telemetry_stale_ms,omitempty"`
 
+	// tenant max share pct
+	// Enum: [rule env default]
+	TenantMaxSharePct string `json:"tenant_max_share_pct,omitempty"`
+
 	// ttft target ms
 	// Enum: [rule env default]
 	TtftTargetMs string `json:"ttft_target_ms,omitempty"`
@@ -2754,6 +2789,10 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) Validate(formats str
 	}
 
 	if err := m.validateTelemetryStaleMs(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateTenantMaxSharePct(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -3170,6 +3209,51 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateTelemetrySta
 
 	// value enum
 	if err := m.validateTelemetryStaleMsEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"telemetry_stale_ms", "body", m.TelemetryStaleMs); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTenantMaxSharePctPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTenantMaxSharePctPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTenantMaxSharePctPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateTenantMaxSharePctEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTenantMaxSharePctPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateTenantMaxSharePct(formats strfmt.Registry) error {
+	if swag.IsZero(m.TenantMaxSharePct) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateTenantMaxSharePctEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"tenant_max_share_pct", "body", m.TenantMaxSharePct); err != nil {
 		return err
 	}
 
