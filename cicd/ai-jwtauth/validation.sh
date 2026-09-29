@@ -2924,6 +2924,24 @@ gw_go_heap_kb() {
   esac
   printf '%s\n' "$body" | awk '/^go_memstats_heap_sys_bytes / { printf "%d", ($2 + 0) / 1024 }'
 }
+# gw_go_pageheap_kb -- heap_sys + stack_sys + gc_sys: everything the runtime
+# carves from its page heap, so it grows only when the runtime maps more.
+# heap_sys alone is not that: the runtime computes it as the page heap MINUS
+# in-use stack spans and GC work buffers, so it falls and rises again as
+# goroutine stacks and GC work buffers are taken from the heap and returned,
+# without a byte being mapped. H2-LIFE-003 reads this sum around every
+# data-segment read to tell a round in which the runtime mapped memory.
+gw_go_pageheap_kb() {
+  local body
+  body=$($hexec l3h1 curl -s --max-time 8 "http://$VIP:11111/netlox/v1/metrics" 2>/dev/null)
+  case "$body" in
+    *go_memstats_heap_sys_bytes*go_memstats_stack_sys_bytes*|*go_memstats_stack_sys_bytes*go_memstats_heap_sys_bytes*) ;;
+    *) echo unreadable; return ;;
+  esac
+  printf '%s\n' "$body" | awk '
+    /^go_memstats_(heap|stack|gc)_sys_bytes / { sum += $2 + 0; n++ }
+    END { if (n == 3) printf "%d", sum / 1024; else print "unreadable" }'
+}
 
 # gw_maps_snapshot -- one line per private writable mapping of the gateway
 # process, "start-end size_kB name", so two snapshots can say WHICH mapping a
@@ -3234,6 +3252,51 @@ echo "             climbing with the stream count."
 # settles, and a C-side leak of 64 KiB per denial moves 9600 kB every round
 # and never settles: neither is subtracted, both still fail.
 #
+# 🚨 A GO HEAP STEP IS AN EVENT, AND IT IS COUNTED, NOT GUESSED AT.
+#
+# Next, main and unrelated branches went red about half the time with one
+# more signature: a single scored round moved the data segment by 4096 kB
+# (twice by 8192), the other rounds by 0-4 kB, on a constant thread count,
+# and the growth landed in the one 172-180 MiB anonymous mapping that is the
+# Go heap (hosted runners build with a toolchain that places the heap at a
+# random base, so it is not at 0xc000000000 there). 4 MiB is the unit in
+# which the runtime maps new heap: its page allocator grows by whole 4 MiB
+# chunks, at a moment its GC pacer chooses, and never unmaps them. Four of the
+# six reds showed heap_sys moving by the same 4096/8192 kB. The other two
+# showed heap_sys moving 0 and 128 kB -- and in both the step fell at an edge
+# of the window, between a VmData read and the heap_sys read beside it: once
+# in the round that closes the window (heap read first, then VmData) and once
+# in the round that opens it (VmData first, then heap), where the map
+# snapshot taken after the heap read also missed it. This suite's own metrics
+# scrapes allocate Go heap, so they are one of the things that can tip the
+# pacer at exactly that moment.
+#
+# Nothing here is subtracted for it. The runtime's page heap is now read on
+# both sides of every VmData read, which pins any heap step to the round whose
+# VmData step contains it, edges included, and such a round is handled exactly
+# like a thread event: printed with its page-heap and VmData steps, the
+# warm-up streak reset, and a scored window in progress restarted. The scored
+# window therefore runs on a constant thread count AND a constant page heap,
+# so its VmData growth is C-side state and the runtime's other bookkeeping,
+# as before, and the oracle and ceiling over it are unchanged. A Go-side leak
+# large enough to grow the heap every few rounds never gets six quiet rounds,
+# never settles, and fails on that; a C-side leak still moves VmData on a
+# constant heap and fails as before. A reading that is not a number flags
+# nothing.
+#
+# The page heap is read as heap_sys + stack_sys + gc_sys, not heap_sys. The
+# runtime computes heap_sys as the page heap minus in-use stack spans and GC
+# work buffers, so heap_sys alone falls and rises as those are borrowed and
+# given back, with nothing mapped. Keyed on heap_sys, a stock gateway on the
+# bed reported +32, +224, +352 and +608 kB "heap growth" on rounds whose
+# VmData moved 0-76 kB, and heap_sys over the scored window read -192 kB.
+# The sum is immune to that shuffle but carries gc_sys's own metadata, which
+# grows by 2-64 kB on most rounds (nine of twelve on the bed). That is the
+# bookkeeping the window already subtracts, not a heap step, and the runtime
+# draws the line itself: mheap.grow maps whole 4 MiB chunks (npage rounded
+# up to pallocChunkPages), never less. So a round is a heap event only when
+# the page heap grew by at least 4096 kB.
+#
 # An UNSETTLED run is a failed MEASUREMENT, not a detected leak, and says so.
 # So is a round that could not be read, and a series shorter than the rounds
 # actually driven: an oracle that cannot obtain its reading has shown nothing.
@@ -3243,6 +3306,7 @@ H2L_SETTLE_NEED=2       # consecutive quiet rounds required
 H2L_WARM_CAP=30         # warm-up budget in rounds (cold bed needed 13)
 H2L_MEAS_ROUNDS=6       # scored rounds = 900 streams
 H2L_DATA_KB=128         # ceiling on VmData growth over those 900 streams
+H2L_HEAP_STEP_KB=4096   # the unit the runtime grows its page heap by
 H2L_ROUND_CAP=$(( H2L_WARM_CAP + 2 * H2L_MEAS_ROUNDS ))  # every round, restarts included
 H2L_DENY_OK=1
 H2L_DENY_WHY=""
@@ -3267,9 +3331,10 @@ h2l_round_drive() {
 # reach a state where growth means something. The scored rounds then run on
 # that constant thread count. A thread that comes up inside the window is
 # reported with its VmData step and the window restarts from warm-up: that
-# jump is the thread's stack and first arena, not stream state. Every thread
-# event is printed with the verdict, and a process that keeps starting threads
-# never settles and fails on exactly that.
+# jump is the thread's stack and first arena, not stream state. A round in
+# which the Go heap grew is handled the same way (see the header). Every event
+# is printed with the verdict, and a process that keeps starting threads or
+# growing its heap never settles and fails on exactly that.
 H2L_PHASE=warm
 H2L_STREAK=0
 H2L_WINDOW=0            # scored rounds completed in the current window
@@ -3281,7 +3346,12 @@ H2L_ALL_DELTAS=""       # every round's, for an unsettled verdict
 H2L_THREADS_SERIES=""
 H2L_THREAD_EVENTS=""
 H2L_SETTLED_AT=0
+H2L_HEAP_EVENTS=""
+H2L_HEAP_RESTARTS=0
+h2l_num() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+H2L_HA_PREV=$(gw_go_pageheap_kb)
 H2L_PREV=$(gw_vmdata_kb)
+H2L_HB_PREV=$(gw_go_pageheap_kb)
 H2L_THR_PREV=$(gw_threads)
 H2L_TASKS_PREV=$(gw_tasks)
 while [ "$H2L_ROUNDS" -lt "$H2L_ROUND_CAP" ]; do
@@ -3298,9 +3368,31 @@ while [ "$H2L_ROUNDS" -lt "$H2L_ROUND_CAP" ]; do
     H2L_BOOK3=$(gw_go_bookkeeping_kb)
     H2L_HEAP3=$(gw_go_heap_kb)
   fi
+  # The page heap brackets every data-segment read: once before, once after.
+  H2L_HA=$(gw_go_pageheap_kb)
   H2L_NOW=$(gw_vmdata_kb)
+  H2L_HB=$(gw_go_pageheap_kb)
   H2L_THR=$(gw_threads)
   H2L_TASKS_NOW=$(gw_tasks)
+  # Did the runtime map memory inside the interval this round's VmData step covers,
+  # (previous VmData read, this VmData read]? A step after the previous
+  # round's closing read shows as B moving since that read; a step between
+  # the previous VmData read and that closing read shows as the previous
+  # round's own pair disagreeing. The two cover the interval with no
+  # gap. A reading that is not a number flags nothing -- the round is then
+  # scored exactly as before.
+  H2L_HGROW=0
+  if h2l_num "$H2L_HB" && h2l_num "$H2L_HB_PREV" && [ "$H2L_HB" -gt "$H2L_HB_PREV" ]; then
+    H2L_HGROW=$(( H2L_HB - H2L_HB_PREV ))
+  fi
+  if h2l_num "$H2L_HB_PREV" && h2l_num "$H2L_HA_PREV" && [ "$H2L_HB_PREV" -gt "$H2L_HA_PREV" ]; then
+    H2L_HGROW=$(( H2L_HGROW + H2L_HB_PREV - H2L_HA_PREV ))
+  fi
+  H2L_HA_PREV=$H2L_HA
+  H2L_HB_PREV=$H2L_HB
+  # Below one whole chunk the page heap did not grow: that is GC metadata
+  # (gc_sys), which stays scored and is subtracted with the bookkeeping.
+  [ "$H2L_HGROW" -lt "$H2L_HEAP_STEP_KB" ] && H2L_HGROW=0
   if [ "$H2L_PREV" = unreadable ] || [ -z "$H2L_NOW" ] || [ -z "$H2L_THR" ] ||
      [ "$H2L_THR_PREV" = unreadable ] || [ "$H2L_THR" = unreadable ]; then
     # an oracle that cannot obtain its reading has shown nothing
@@ -3314,7 +3406,7 @@ while [ "$H2L_ROUNDS" -lt "$H2L_ROUND_CAP" ]; do
   if [ "$H2L_THR" != "$H2L_THR_PREV" ]; then
     h2l_new=$(comm -13 <(printf '%s\n' "$H2L_TASKS_PREV") <(printf '%s\n' "$H2L_TASKS_NOW") | tr '\n' ',' | sed 's/,$//')
     h2l_gone=$(comm -23 <(printf '%s\n' "$H2L_TASKS_PREV") <(printf '%s\n' "$H2L_TASKS_NOW") | tr '\n' ',' | sed 's/,$//')
-    H2L_THREAD_EVENTS="$H2L_THREAD_EVENTS round $H2L_ROUNDS: threads $H2L_THR_PREV -> $H2L_THR (new tid/comm: ${h2l_new:-none}; gone: ${h2l_gone:-none}), VmData +$H2L_D kB;"
+    H2L_THREAD_EVENTS="$H2L_THREAD_EVENTS round $H2L_ROUNDS: threads $H2L_THR_PREV -> $H2L_THR (new tid/comm: ${h2l_new:-none}; gone: ${h2l_gone:-none}), VmData +$H2L_D kB, Go page heap +$H2L_HGROW kB;"
     H2L_THR_PREV=$H2L_THR
     H2L_TASKS_PREV=$H2L_TASKS_NOW
     if [ "$H2L_PHASE" = measure ]; then
@@ -3327,6 +3419,17 @@ while [ "$H2L_ROUNDS" -lt "$H2L_ROUND_CAP" ]; do
     continue
   fi
   H2L_TASKS_PREV=$H2L_TASKS_NOW
+  if [ "$H2L_HGROW" -gt 0 ]; then
+    H2L_HEAP_EVENTS="$H2L_HEAP_EVENTS round $H2L_ROUNDS: Go page heap +$H2L_HGROW kB, VmData +$H2L_D kB;"
+    if [ "$H2L_PHASE" = measure ]; then
+      H2L_HEAP_RESTARTS=$((H2L_HEAP_RESTARTS + 1))
+      H2L_PHASE=warm
+      H2L_DELTAS=""
+      H2L_WINDOW=0
+    fi
+    H2L_STREAK=0
+    continue
+  fi
   if [ "$H2L_PHASE" = warm ]; then
     if [ "$H2L_D" -le "$H2L_SETTLE_KB" ]; then
       H2L_STREAK=$((H2L_STREAK + 1))
@@ -3380,6 +3483,12 @@ if [ -n "$H2L_THREAD_EVENTS" ]; then
   echo "         a new thread's stack and first malloc arena land in VmData and are not"
   echo "         per-stream state; the scored window was restarted $H2L_RESTARTS time(s) on it"
 fi
+if [ -n "$H2L_HEAP_EVENTS" ]; then
+  echo "         Go page heap growth events (heap_sys + stack_sys + gc_sys):$H2L_HEAP_EVENTS"
+  echo "         the runtime maps its heap in 4 MiB chunks when its pacer decides; the"
+  echo "         scored window was restarted $H2L_HEAP_RESTARTS time(s) on it. A heap that grows"
+  echo "         every round never settles and fails below"
+fi
 note_case "H2-LIFE-003"
 if [ "$H2L_READ_OK" != 1 ]; then
   echo "  [FAIL] H2-LIFE-003 - the data segment or thread count could not be read in round"
@@ -3392,7 +3501,7 @@ elif [ "$H2L_DONE" != 1 ]; then
   echo "         per-round VmData growth (kB, 150 streams each):$H2L_ALL_DELTAS"
   echo "  [FAIL] H2-LIFE-003 - the data segment never settled: $H2L_ROUNDS rounds"
   echo "         ($H2L_STREAMS streams) without $H2L_SETTLE_NEED consecutive rounds under ${H2L_SETTLE_KB} kB on a"
-  echo "         constant thread count followed by $H2L_MEAS_ROUNDS scored rounds on that count."
+  echo "         constant thread count and Go heap followed by $H2L_MEAS_ROUNDS scored rounds on both."
   echo "         That is a failed MEASUREMENT, not a detected leak -- the growth above was"
   echo "         never measured on a quiet process"
   FAIL=$((FAIL + 1))
@@ -3426,7 +3535,7 @@ else
   echo "         unaccounted growth: +${H2L_NET} kB (ceiling ${H2L_DATA_KB} kB)"
   if [ "$H2L_NET" -le "$H2L_DATA_KB" ]; then
     echo "  [PASS] H2-LIFE-003 data segment flat across $H2L_MEAS_STREAMS reset streams on a settled"
-    echo "         process (+${H2L_NET} kB unaccounted of +${H2L_GROW} kB, ceiling ${H2L_DATA_KB} kB; settled after $H2L_SETTLED_AT rounds, $H2L_THR0 threads throughout)."
+    echo "         process (+${H2L_NET} kB unaccounted of +${H2L_GROW} kB, ceiling ${H2L_DATA_KB} kB; settled after $H2L_SETTLED_AT rounds, $H2L_THR0 threads and no Go heap step throughout)."
     echo "         NOTE: bounds MEGABYTE-scale growth only -- the allocator free pool this"
     echo "         late in the suite absorbs a kilobyte-per-stream leak; see the header"
     PASS=$((PASS + 1))
