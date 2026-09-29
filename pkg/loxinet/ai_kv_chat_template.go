@@ -352,8 +352,11 @@ func kvExtractMessageContent(raw json.RawMessage) (string, bool) {
 // the profile's addGenerationPrompt; continue_final_message and
 // add_special_tokens unless false; documents, reasoning_effort, a
 // per-request chat_template, truncate_prompt_tokens and
-// prompt_token_ids(_b64) whenever set; and a message with more than one text
-// part, whose join the engines disagree on. A field one engine ignores is still
+// prompt_token_ids(_b64) whenever set; a message with more than one text
+// part, whose join the engines disagree on; and a conversation that ends with
+// an assistant turn, which SGLang v0.5.18 re-renders as a user turn
+// (_handle_last_assistant_message) while vLLM and TRT-LLM keep it as the
+// assistant's. A field one engine ignores is still
 // refused: the gateway does not know which engine serves the rule, and a
 // refusal only costs scoring, while acceptance would mis-hash.
 func kvChatExcludedFeature(body string, addGenerationPrompt bool) string {
@@ -422,6 +425,12 @@ func kvChatExcludedFeature(body string, addGenerationPrompt bool) string {
 			if texts > 1 {
 				return "multi_text_part"
 			}
+		}
+	}
+	if n := len(msgs); n > 0 {
+		var role string
+		if json.Unmarshal(msgs[n-1]["role"], &role) == nil && role == "assistant" {
+			return "trailing_assistant"
 		}
 	}
 	return ""
