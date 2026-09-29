@@ -31,8 +31,12 @@ package loxinet
 // Both load with the registry's trusted-file discipline (beneath-only, no
 // symlinks, owner/mode/size checks), and the request bytes must hash to the
 // expect file's pinned sha256 — a drifted fixture is an attestation failure,
-// never silently re-pinned. Fixture regeneration is a profile-revision
-// event; the repo's committed source set lives under
+// never silently re-pinned. A chat fixture of a clock-declaring profile
+// (renderPolicy.clockPolicy) additionally pins "oracleNow", the instant its
+// banked ids were rendered at: its template prints the current date, so the
+// live probe derives the expected ids from the gateway's own render+encode
+// at probe time, and the banked ids are the offline oracle cross-check.
+// Fixture regeneration is a profile-revision event; the repo's committed source set lives under
 // cicd/common/kv_hash/fixtures/probe/ and is staged to the registry root by
 // deployment.
 //
@@ -129,6 +133,9 @@ type kvProbeFixture struct {
 	RequestSha256 string
 	ExpectedIDs   []int64
 	API           string // "completions" | "chat"
+	// OracleNow is the instant a clock-template chat fixture's banked ids
+	// were rendered at; zero for every static fixture.
+	OracleNow time.Time
 }
 
 // kvProbeExpect is the strict schema of <name>.expect.json.
@@ -136,6 +143,7 @@ type kvProbeExpect struct {
 	RequestSha256    string  `json:"requestSha256"`
 	ExpectedTokenIds []int64 `json:"expectedTokenIds"`
 	API              string  `json:"api"`
+	OracleNow        string  `json:"oracleNow,omitempty"`
 }
 
 // kvProbeFixturesLoad loads and verifies the fixture set for a profile from
@@ -191,6 +199,15 @@ func kvProbeFixturesLoadDir(dirRel string) ([]kvProbeFixture, error) {
 		if len(exp.ExpectedTokenIds) == 0 || exp.RequestSha256 == "" {
 			return nil, fmt.Errorf("fixture %s: missing expectedTokenIds/requestSha256", n)
 		}
+		var oracleNow time.Time
+		if exp.OracleNow != "" {
+			if exp.API != "chat" {
+				return nil, fmt.Errorf("fixture %s: oracleNow on a %s fixture (only a chat render reads the clock)", n, exp.API)
+			}
+			if oracleNow, err = time.Parse(time.RFC3339, exp.OracleNow); err != nil {
+				return nil, fmt.Errorf("fixture %s: oracleNow: %w", n, err)
+			}
+		}
 		reqRaw, _, err := kvReadTrustedFile(rootFd, dirRel+"/"+base+".request.json", kvProbeFixtureCap)
 		if err != nil {
 			return nil, fmt.Errorf("fixture %s: request: %w", base, err)
@@ -205,6 +222,7 @@ func kvProbeFixturesLoadDir(dirRel string) ([]kvProbeFixture, error) {
 			RequestSha256: exp.RequestSha256,
 			ExpectedIDs:   exp.ExpectedTokenIds,
 			API:           exp.API,
+			OracleNow:     oracleNow,
 		})
 	}
 	if len(out) == 0 {
@@ -233,11 +251,11 @@ func (a *kvVllmAttest) TokenParityProbe(ep KvAttestEndpoint, info kvAttestRuleIn
 	if err != nil {
 		return KvAttestFinding{Reason: KvAttestReasonFixturesMissing, Detail: err.Error()}
 	}
-	if f := kvFixtureSurfaceCheck(fixtures, info); !f.OK {
+	if f := kvFixtureSetCheck(fixtures, info); !f.OK {
 		return f
 	}
 	for _, fx := range fixtures {
-		if f := a.tokenizeProbeOne(ep, fx); !f.OK {
+		if f := a.tokenizeProbeOne(ep, fx, info.modelName); !f.OK {
 			return f
 		}
 	}
@@ -270,16 +288,94 @@ func kvFixtureSurfaceCheck(fixtures []kvProbeFixture, info kvAttestRuleInfo) KvA
 	return KvAttestFinding{OK: true}
 }
 
-func (a *kvVllmAttest) tokenizeProbeOne(ep KvAttestEndpoint, fx kvProbeFixture) KvAttestFinding {
+// kvFixtureSetCheck is the per-set gate every adapter applies before
+// probing: surface coverage, then the clock pairing. A clock-declaring
+// profile's chat renders carry the current date, so a static chat fixture
+// would match the engine only on the day it was generated; an oracleNow
+// fixture on a profile without the declaration would re-derive from a
+// render that never reads the clock. Either is a fixture set that does not
+// belong to the bound profile.
+func kvFixtureSetCheck(fixtures []kvProbeFixture, info kvAttestRuleInfo) KvAttestFinding {
+	if f := kvFixtureSurfaceCheck(fixtures, info); !f.OK {
+		return f
+	}
+	clock := false
+	if e, ok := kvProfileByModel(info.modelName); ok {
+		clock = e.Profile.RenderPolicy.ClockPolicy != ""
+	}
+	for _, fx := range fixtures {
+		if fx.API != "chat" {
+			continue
+		}
+		if clock && fx.OracleNow.IsZero() {
+			return KvAttestFinding{Reason: KvAttestReasonFixturesMissing,
+				Detail: fmt.Sprintf("fixture %s: static chat fixture for a clock-declaring profile (oracleNow required)", fx.Name)}
+		}
+		if !clock && !fx.OracleNow.IsZero() {
+			return KvAttestFinding{Reason: KvAttestReasonFixturesMissing,
+				Detail: fmt.Sprintf("fixture %s: oracleNow on a profile that declares no clock policy", fx.Name)}
+		}
+	}
+	return KvAttestFinding{OK: true}
+}
+
+func (a *kvVllmAttest) tokenizeProbeOne(ep KvAttestEndpoint, fx kvProbeFixture, model string) KvAttestFinding {
 	url := fmt.Sprintf("http://%s:%d/tokenize", ep.IP, ep.Port)
-	return kvTokenizeFixtureProbe(a.client, url, fx)
+	return kvTokenizeFixtureProbe(a.client, url, fx, model)
+}
+
+// kvClockFixtureExpect derives a clock fixture's expected ids at instant
+// now through the gateway's own render+encode chain — the same chain a
+// served chat request is hashed with, so a green probe proves the engine
+// and the router agree on today's render.
+func kvClockFixtureExpect(fx kvProbeFixture, model string, now time.Time) ([]int64, KvAttestFinding) {
+	msgs, ok := kvParseChatMessages(string(fx.RequestBytes))
+	if !ok || len(msgs) == 0 {
+		return nil, KvAttestFinding{Reason: KvAttestReasonProbeSchema,
+			Detail: fmt.Sprintf("fixture %s: chat fixture carries no parseable messages", fx.Name)}
+	}
+	rendered, ok := kvRenderChatTemplateAt(model, msgs, func() time.Time { return now })
+	if !ok {
+		return nil, KvAttestFinding{Reason: KvAttestReasonProfileResolution,
+			Detail: fmt.Sprintf("fixture %s: no validated chat renderer for model %q", fx.Name, model)}
+	}
+	// Chat renders carry their own special tokens (encode-mode contract,
+	// kvBridgeTokenizeChat).
+	ids := kvTrtllmOracleEncodeFn(rendered, model, kvTrtllmOracleMaxTokens, false)
+	if len(ids) == 0 {
+		return nil, KvAttestFinding{Reason: KvAttestReasonProfileResolution,
+			Detail: fmt.Sprintf("fixture %s: tokenizer produced no tokens for model %q", fx.Name, model)}
+	}
+	out := make([]int64, len(ids))
+	for i, id := range ids {
+		out[i] = int64(id)
+	}
+	return out, KvAttestFinding{OK: true}
 }
 
 // kvTokenizeFixtureProbe posts one committed fixture's request bytes
 // verbatim and applies the pinned {count, tokens, max_model_len} response
 // schema plus the FULL token-array comparison (§5). Engine adapters differ
-// only in the tokenize URL they construct.
-func kvTokenizeFixtureProbe(client *http.Client, url string, fx kvProbeFixture) KvAttestFinding {
+// only in the tokenize URL they construct. A clock fixture's expectation is
+// derived at probe time; when the UTC date turns between that derivation
+// and the engine's render, the engine may hold either day, so the probe
+// re-derives once on the new day before it may fail.
+func kvTokenizeFixtureProbe(client *http.Client, url string, fx kvProbeFixture, model string) KvAttestFinding {
+	want := fx.ExpectedIDs
+	var derivedAt time.Time
+	if !fx.OracleNow.IsZero() {
+		// The banked ids must still be the gateway's own render at
+		// oracleNow: a stale or edited fixture fails here, before the
+		// engine is asked anything.
+		if f := kvTrtllmOracleFixtureCheck(fx, model); !f.OK {
+			return f
+		}
+		derivedAt = kvChatClock().UTC()
+		var f KvAttestFinding
+		if want, f = kvClockFixtureExpect(fx, model, derivedAt); !f.OK {
+			return f
+		}
+	}
 	resp, err := client.Post(url, "application/json", strings.NewReader(string(fx.RequestBytes)))
 	if err != nil {
 		return KvAttestFinding{Reason: KvAttestReasonEndpointUnreach,
@@ -313,14 +409,33 @@ func kvTokenizeFixtureProbe(client *http.Client, url string, fx kvProbeFixture) 
 		return KvAttestFinding{Reason: KvAttestReasonProbeSchema,
 			Detail: fmt.Sprintf("fixture %s: count %d != len(tokens) %d", fx.Name, *tr.Count, len(toks))}
 	}
-	if len(toks) != len(fx.ExpectedIDs) {
+	f := kvTokenArrayCompare(fx.Name, toks, want)
+	if f.OK || derivedAt.IsZero() {
+		return f
+	}
+	now := kvChatClock().UTC()
+	y1, m1, d1 := derivedAt.Date()
+	y2, m2, d2 := now.Date()
+	if y1 == y2 && m1 == m2 && d1 == d2 {
+		return f
+	}
+	want2, f2 := kvClockFixtureExpect(fx, model, now)
+	if !f2.OK {
+		return f2
+	}
+	return kvTokenArrayCompare(fx.Name, toks, want2)
+}
+
+// kvTokenArrayCompare is the FULL token-array comparison (§5).
+func kvTokenArrayCompare(name string, toks, want []int64) KvAttestFinding {
+	if len(toks) != len(want) {
 		return KvAttestFinding{Reason: KvAttestReasonTokenMismatch,
-			Detail: fmt.Sprintf("fixture %s: %d tokens, expected %d", fx.Name, len(toks), len(fx.ExpectedIDs))}
+			Detail: fmt.Sprintf("fixture %s: %d tokens, expected %d", name, len(toks), len(want))}
 	}
 	for i := range toks {
-		if toks[i] != fx.ExpectedIDs[i] {
+		if toks[i] != want[i] {
 			return KvAttestFinding{Reason: KvAttestReasonTokenMismatch,
-				Detail: fmt.Sprintf("fixture %s: token[%d]=%d, expected %d", fx.Name, i, toks[i], fx.ExpectedIDs[i])}
+				Detail: fmt.Sprintf("fixture %s: token[%d]=%d, expected %d", name, i, toks[i], want[i])}
 		}
 	}
 	return KvAttestFinding{OK: true}

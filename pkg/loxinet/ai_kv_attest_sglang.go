@@ -266,12 +266,12 @@ func (a *kvSglangAttest) TokenParityProbe(ep KvAttestEndpoint, info kvAttestRule
 	if err != nil {
 		return KvAttestFinding{Reason: KvAttestReasonFixturesMissing, Detail: err.Error()}
 	}
-	if f := kvFixtureSurfaceCheck(fixtures, info); !f.OK {
+	if f := kvFixtureSetCheck(fixtures, info); !f.OK {
 		return f
 	}
 	url := fmt.Sprintf("http://%s:%d/v1/tokenize", ep.IP, ep.Port)
 	for _, fx := range fixtures {
-		if f := kvTokenizeFixtureProbe(a.client, url, fx); !f.OK {
+		if f := kvTokenizeFixtureProbe(a.client, url, fx, info.modelName); !f.OK {
 			return f
 		}
 	}
