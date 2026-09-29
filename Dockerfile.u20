@@ -5,7 +5,7 @@ FROM ubuntu:20.04 as build
 ARG DEBIAN_FRONTEND=noninteractive
 
 ARG TAG=main
-ARG LOXICMD_TAG=c62dc09aa14d3ba5167f7c0c40db035ec8f4e94c
+ARG LOXICMD_TAG=96770c4bb5a59d97c2da85a303f6ecf6860b71d7
 
 # Env variables
 ENV PATH="${PATH}:/usr/local/go/bin"
