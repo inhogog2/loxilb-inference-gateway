@@ -44,6 +44,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -204,27 +205,67 @@ func kvChatTemplateSupported(modelName string) bool {
 	return err == nil
 }
 
+// kvChatDecodeExact decodes a chat request body with exact, case-sensitive
+// key matching: the top-level object and every messages[] entry as raw
+// key/value maps. encoding/json's struct decoding matches keys
+// case-insensitively, while the engines' request models (pydantic) match
+// them exactly and ignore unknown keys — so a body carrying both "content"
+// and "Content" would render one prompt engine-side and another here. A
+// duplicated key keeps its last value, as Python's json module does.
+// ok=false when the body, messages or any message is not the expected shape.
+func kvChatDecodeExact(body string) (map[string]json.RawMessage, []map[string]json.RawMessage, bool) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &top); err != nil || top == nil {
+		return nil, nil, false
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(top["messages"], &raw); err != nil {
+		return top, nil, false
+	}
+	msgs := make([]map[string]json.RawMessage, 0, len(raw))
+	for _, r := range raw {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(r, &m); err != nil || m == nil {
+			return top, nil, false
+		}
+		msgs = append(msgs, m)
+	}
+	return top, msgs, true
+}
+
+// kvJSONPresent reports a key that is set to anything but null.
+func kvJSONPresent(raw json.RawMessage) bool {
+	return len(raw) > 0 && string(raw) != "null"
+}
+
 // kvParseChatMessages extracts the ordered role/content turns from a raw chat
-// request body (the JSON loxilb's C side has in its receive buffer). Content may
-// be a plain string or the OpenAI array form ([{type:"text",text:"..."}]); the
-// text segments are joined with "\n" to match the engine's string-content-format
-// part handling. Returns ok=false on parse failure or no messages.
+// request body (the JSON loxilb's C side has in its receive buffer). Keys are
+// matched exactly (kvChatDecodeExact). Content may be a plain string or the
+// OpenAI array form ([{type:"text",text:"..."}]); the text segments are joined
+// with "\n" to match the engine's string-content-format part handling.
+// Returns ok=false on parse failure, no messages, a role that is not a JSON
+// string, or content of a shape the engines reject — there is no engine
+// render to match for a request the engine refuses.
 func kvParseChatMessages(body string) ([]kvChatMessage, bool) {
-	var req struct {
-		Messages []struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal([]byte(body), &req); err != nil {
+	_, msgs, ok := kvChatDecodeExact(body)
+	if !ok || len(msgs) == 0 {
 		return nil, false
 	}
-	if len(req.Messages) == 0 {
-		return nil, false
-	}
-	out := make([]kvChatMessage, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		out = append(out, kvChatMessage{Role: m.Role, Content: kvExtractMessageContent(m.Content)})
+	out := make([]kvChatMessage, 0, len(msgs))
+	for _, m := range msgs {
+		role := m["role"]
+		if len(role) == 0 || role[0] != '"' {
+			return nil, false
+		}
+		var r string
+		if err := json.Unmarshal(role, &r); err != nil {
+			return nil, false
+		}
+		content, ok := kvExtractMessageContent(m["content"])
+		if !ok {
+			return nil, false
+		}
+		out = append(out, kvChatMessage{Role: r, Content: content})
 	}
 	return out, true
 }
@@ -234,28 +275,40 @@ func kvParseChatMessages(body string) ([]kvChatMessage, bool) {
 // with "\n": string-content-format chat templates receive parts joined that
 // way by the engine's request parser, so any other separator renders (and
 // therefore tokenizes and hashes) different bytes than the engine caches.
-func kvExtractMessageContent(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
+// Absent or null content is "". ok=false for any other JSON type, a part that
+// is not an object with a string "type", or a text part without a string
+// "text" — shapes the engines reject with 400.
+func kvExtractMessageContent(raw json.RawMessage) (string, bool) {
+	if !kvJSONPresent(raw) {
+		return "", true
 	}
 	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s
-	}
-	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(raw, &parts); err == nil {
-		texts := make([]string, 0, len(parts))
-		for _, p := range parts {
-			if p.Type == "text" {
-				texts = append(texts, p.Text)
-			}
+	if raw[0] == '"' {
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return "", false
 		}
-		return strings.Join(texts, "\n")
+		return s, true
 	}
-	return ""
+	var parts []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return "", false
+	}
+	texts := make([]string, 0, len(parts))
+	for _, p := range parts {
+		var typ string
+		if t := p["type"]; len(t) == 0 || t[0] != '"' || json.Unmarshal(t, &typ) != nil {
+			return "", false
+		}
+		if typ != "text" {
+			continue
+		}
+		var text string
+		if t := p["text"]; len(t) == 0 || t[0] != '"' || json.Unmarshal(t, &text) != nil {
+			return "", false
+		}
+		texts = append(texts, text)
+	}
+	return strings.Join(texts, "\n"), true
 }
 
 // kvChatExcludedFeature inspects a raw chat request body for the plan-§4
@@ -278,75 +331,56 @@ func kvExtractMessageContent(raw json.RawMessage) string {
 // refused: the gateway does not know which engine serves the rule, and a
 // refusal only costs scoring, while acceptance would mis-hash.
 func kvChatExcludedFeature(body string, addGenerationPrompt bool) string {
-	var req struct {
-		Tools                json.RawMessage `json:"tools"`
-		ToolChoice           json.RawMessage `json:"tool_choice"`
-		CacheSalt            json.RawMessage `json:"cache_salt"`
-		PromptEmbeds         json.RawMessage `json:"prompt_embeds"`
-		ChatTemplateKwargs   json.RawMessage `json:"chat_template_kwargs"`
-		AddGenerationPrompt  json.RawMessage `json:"add_generation_prompt"`
-		ContinueFinalMessage json.RawMessage `json:"continue_final_message"`
-		AddSpecialTokens     json.RawMessage `json:"add_special_tokens"`
-		Documents            json.RawMessage `json:"documents"`
-		ReasoningEffort      json.RawMessage `json:"reasoning_effort"`
-		ChatTemplate         json.RawMessage `json:"chat_template"`
-		TruncatePromptTokens json.RawMessage `json:"truncate_prompt_tokens"`
-		PromptTokenIDs       json.RawMessage `json:"prompt_token_ids"`
-		PromptTokenIDsB64    json.RawMessage `json:"prompt_token_ids_b64"`
-		Messages             []struct {
-			Content json.RawMessage `json:"content"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal([]byte(body), &req); err != nil {
-		return ""
-	}
-	present := func(raw json.RawMessage) bool {
-		return len(raw) > 0 && string(raw) != "null"
+	top, msgs, ok := kvChatDecodeExact(body)
+	if !ok {
+		// Unparseable here is unparseable for the render too (the bridge
+		// refuses it as a request error); never report "no feature" for a
+		// body this detector could not read.
+		return "unparseable"
 	}
 	// differs reports a set flag whose value is not the JSON boolean want.
 	// Anything but a plain boolean differs: the engines' request models
 	// coerce strings and numbers, so their meaning is not the gateway's to
 	// guess.
 	differs := func(raw json.RawMessage, want bool) bool {
-		if !present(raw) {
+		if !kvJSONPresent(raw) {
 			return false
 		}
 		var v bool
 		return json.Unmarshal(raw, &v) != nil || v != want
 	}
 	switch {
-	case present(req.Tools) || present(req.ToolChoice):
+	case kvJSONPresent(top["tools"]) || kvJSONPresent(top["tool_choice"]):
 		return "tools"
-	case present(req.CacheSalt):
+	case kvJSONPresent(top["cache_salt"]):
 		return "cache_salt"
-	case present(req.PromptEmbeds):
+	case kvJSONPresent(top["prompt_embeds"]):
 		return "prompt_embeds"
-	case present(req.ChatTemplateKwargs):
+	case kvJSONPresent(top["chat_template_kwargs"]):
 		return "template_kwargs"
-	case differs(req.AddGenerationPrompt, addGenerationPrompt):
+	case differs(top["add_generation_prompt"], addGenerationPrompt):
 		return "add_generation_prompt"
-	case differs(req.ContinueFinalMessage, false):
+	case differs(top["continue_final_message"], false):
 		return "continue_final_message"
-	case differs(req.AddSpecialTokens, false):
+	case differs(top["add_special_tokens"], false):
 		return "add_special_tokens"
-	case present(req.Documents):
+	case kvJSONPresent(top["documents"]):
 		return "documents"
-	case present(req.ReasoningEffort):
+	case kvJSONPresent(top["reasoning_effort"]):
 		return "reasoning_effort"
-	case present(req.ChatTemplate):
+	case kvJSONPresent(top["chat_template"]):
 		return "chat_template"
-	case present(req.TruncatePromptTokens):
+	case kvJSONPresent(top["truncate_prompt_tokens"]):
 		return "truncate_prompt_tokens"
-	case present(req.PromptTokenIDs) || present(req.PromptTokenIDsB64):
+	case kvJSONPresent(top["prompt_token_ids"]) || kvJSONPresent(top["prompt_token_ids_b64"]):
 		return "prompt_token_ids"
 	}
-	for _, m := range req.Messages {
-		var parts []struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(m.Content, &parts); err == nil {
+	for _, m := range msgs {
+		var parts []map[string]json.RawMessage
+		if err := json.Unmarshal(m["content"], &parts); err == nil {
 			for _, p := range parts {
-				if p.Type != "" && p.Type != "text" {
+				var typ string
+				if json.Unmarshal(p["type"], &typ) == nil && typ != "" && typ != "text" {
 					return "multimodal"
 				}
 			}
@@ -354,3 +388,82 @@ func kvChatExcludedFeature(body string, addGenerationPrompt bool) string {
 	}
 	return ""
 }
+
+// kvChatTemplateFeature refuses message shapes whose engine render the
+// gateway cannot reproduce for this template (strict paths only, like
+// kvChatExcludedFeature; "" = none):
+//
+//   - role "developer": vLLM v0.28.0 rewrites it to "system" and merges every
+//     system turn into one at position 0 unless the template names
+//     'developer'; TRT-LLM 1.3.0rc24 passes it through unchanged. The engines
+//     disagree, so no single render is right.
+//   - message-level "tools": SGLang v0.5.18 folds a system/developer turn's
+//     tools into the template's tools argument.
+//   - any other message key the template mentions (name, tool_calls,
+//     reasoning_content, ...): the gateway renders role/content only, while
+//     the engines pass such keys into the message the template reads. A key
+//     the template never mentions cannot change the render. The test is
+//     textual (like vLLM's own developer-role detection): a false positive
+//     only refuses.
+//   - a null or absent content when the template tests content for none or
+//     definedness: the gateway renders "" and cannot know the engine's value.
+func kvChatTemplateFeature(body, templateSrc string) string {
+	_, msgs, ok := kvChatDecodeExact(body)
+	if !ok {
+		return "unparseable"
+	}
+	for _, m := range msgs {
+		var role string
+		_ = json.Unmarshal(m["role"], &role)
+		if role == "developer" {
+			return "developer_role"
+		}
+		for k, v := range m {
+			switch k {
+			case "role", "content":
+				continue
+			case "tools":
+				if kvJSONPresent(v) {
+					return "message_tools"
+				}
+				continue
+			}
+			if kvJSONPresent(v) && kvTemplateMentions(templateSrc, k) {
+				return "message_field"
+			}
+		}
+		if !kvJSONPresent(m["content"]) && kvTemplateTestsContent(templateSrc) {
+			return "null_content"
+		}
+	}
+	return ""
+}
+
+// kvTemplateMentions reports whether key appears in the template source as a
+// whole word (attribute, subscript or string literal).
+func kvTemplateMentions(src, key string) bool {
+	for i := 0; ; {
+		j := strings.Index(src[i:], key)
+		if j < 0 {
+			return false
+		}
+		j += i
+		end := j + len(key)
+		if (j == 0 || !kvIdentByte(src[j-1])) && (end == len(src) || !kvIdentByte(src[end])) {
+			return true
+		}
+		i = j + 1
+	}
+}
+
+func kvIdentByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// kvTemplateTestsContent reports a template that branches on whether a
+// message's content is none or defined.
+func kvTemplateTestsContent(src string) bool {
+	return kvContentTestRe.MatchString(src)
+}
+
+var kvContentTestRe = regexp.MustCompile(`content['"]?\]?\s+is\s+(not\s+)?(none|defined|undefined)`)
