@@ -42,7 +42,10 @@ package loxinet
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
+	"time"
 )
 
 // kvChatMessage is one role/content turn extracted from a chat request body.
@@ -51,18 +54,30 @@ type kvChatMessage struct {
 	Content string
 }
 
+// kvChatClock is the clock strftime_now reads under the utc-date policy
+// (a variable so tests can pin the instant).
+var kvChatClock = time.Now
+
 // kvJinjaChatContext builds the render context the engine's own renderer
-// receives: the message list, the generation-prompt knob, and the tokenizer's
-// special-token strings (HF passes special_tokens_map into
-// apply_chat_template; a template referencing a token the profile does not
-// declare fails the render loudly instead of rendering different bytes).
+// receives: the message list (each message a {"role", "content"} dict in
+// that key order, as the engine builds it), tools and documents as None,
+// the generation-prompt knob, and the tokenizer's special-token strings (HF
+// passes special_tokens_map into apply_chat_template; a template
+// referencing a token the profile does not declare fails the render loudly
+// instead of rendering different bytes). strftime_now exists only under a
+// declared clock policy.
 func kvJinjaChatContext(messages []kvChatMessage, pol KvRenderPolicy) map[string]any {
 	msgs := make([]any, 0, len(messages))
 	for _, m := range messages {
-		msgs = append(msgs, map[string]any{"role": m.Role, "content": m.Content})
+		d := kvJjNewDict()
+		d.set("role", m.Role)
+		d.set("content", m.Content)
+		msgs = append(msgs, d)
 	}
 	ctx := map[string]any{
 		"messages":              msgs,
+		"tools":                 nil,
+		"documents":             nil,
 		"add_generation_prompt": pol.AddGenerationPrompt,
 	}
 	if pol.BosToken != "" {
@@ -71,7 +86,25 @@ func kvJinjaChatContext(messages []kvChatMessage, pol KvRenderPolicy) map[string
 	if pol.EosToken != "" {
 		ctx["eos_token"] = pol.EosToken
 	}
+	if pol.ClockPolicy == KvClockPolicyUTCDate {
+		ctx["strftime_now"] = kvJjStrftimeNow(func() time.Time { return kvChatClock().UTC() })
+	}
 	return ctx
+}
+
+// kvCheckClockPolicy ties a template's use of strftime_now to the profile's
+// clock declaration, both ways: an undeclared date would render from a
+// clock the engine does not share, and a declaration the template never
+// uses would impose a launch requirement (TZ=UTC) for nothing.
+func kvCheckClockPolicy(tpl *kvJinjaTemplate, pol *KvRenderPolicy) error {
+	uses := tpl.References("strftime_now")
+	switch {
+	case uses && pol.ClockPolicy == "":
+		return errors.New("template reads strftime_now; the profile must declare renderPolicy.clockPolicy: utc-date")
+	case !uses && pol.ClockPolicy != "":
+		return fmt.Errorf("renderPolicy.clockPolicy %q declared but the template never reads strftime_now", pol.ClockPolicy)
+	}
+	return nil
 }
 
 // kvRenderChatTemplate renders the chat-template-applied prompt for modelName
