@@ -314,7 +314,12 @@ const kvModelTypeGptOss = "gpt_oss"
 // then renders chat with mistral_common, which differs from the chat
 // template: no default system prompt, special-token literals in user text
 // encoded as plain text, trailing whitespace of assistant turns dropped. In
-// "hf" mode vLLM does not pick up the template and refuses chat.
+// "hf" mode vLLM does not pick up the template and refuses chat. SGLang
+// v0.5.18 loads these repositories through transformers' MistralCommonBackend,
+// whose apply_chat_template renders with mistral_common and ignores the
+// template SGLang assigns to it; SGLang then encodes the rendered text with a
+// second BOS. TRT-LLM 1.3.0rc24 loads a tokenizers backend and renders the
+// template.
 const kvModelTypeMistral3 = "mistral3"
 
 // kvChatRenderer names what an engine renders a profile's chat requests
@@ -335,7 +340,7 @@ func kvChatEngineRenderer(p *ModelPromptProfile, engine string) kvChatRenderer {
 	switch {
 	case p.ModelType == kvModelTypeGptOss && engine != "sglang":
 		return kvChatRenderer{name: "the Harmony encoder", alt: " or serve it with sglang"}
-	case p.ModelType == kvModelTypeMistral3 && engine == "vllm":
+	case p.ModelType == kvModelTypeMistral3 && (engine == "vllm" || engine == "sglang"):
 		return kvChatRenderer{name: "mistral_common"}
 	}
 	return kvChatRenderer{}
