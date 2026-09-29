@@ -359,12 +359,12 @@ groups:
           panel: "Adaptive ceiling vs configured"
 
       - alert: LoxilbProxyAcceptValveBlocking
-        expr: sum by (instance) (rate(loxilb_proxy_accept_blocked_total[5m])) > 0
+        expr: (sum by (instance) (loxilb_proxy_context_inflight) >= sum by (instance) (loxilb_proxy_accept_bound)) and on (instance) (sum by (instance) (loxilb_proxy_accept_bound) > 0)
         for: 5m
         labels: { severity: warning }
         annotations:
           summary: "loxilb holding new connections back at its context bound on {{ $labels.instance }}"
-          description: "loxilb_proxy_context_inflight reached LLB_PD_MAX_TOTAL_INFLIGHT and accepts wait in the listen backlog, before any pool's admission gate. Raise the bound if memory allows, else add gateway instances."
+          description: "loxilb_proxy_context_inflight has held at LLB_PD_MAX_TOTAL_INFLIGHT for 5 minutes: the listeners are paused and new connections wait in the listen backlog, before any pool's admission gate. Raise the bound if memory allows, else add gateway instances."
           dashboard: "LoxiLB / AI Gateway"
           panel: "Accept valve: contexts vs bound"
 

@@ -2767,7 +2767,7 @@
       "tail": "prom-init-sockproxy-main"
      }
     ],
-    "evidence": "api/prometheus/sockproxy_metrics.go, inside the collector goroutine that copies the C proxy_get_metrics() snapshot each period (tail field proxy_accept_blocked = global_stats.pd_admission_total_blocked, incremented in handle_new_connection on every listener poll that declines accept() at the bound). Observed on the bed by cicd/ai-admission (run p8a-quick-2, 2026-09-28): bound 12, ten requests held -> row VA2 read 772524; the count is per listener poll, not per connection, so its magnitude measures time at the bound."
+    "evidence": "api/prometheus/sockproxy_metrics.go, inside the collector goroutine that copies the C proxy_get_metrics() snapshot each period (tail field proxy_accept_blocked = global_stats.pd_admission_total_blocked, incremented in handle_new_connection once per pause of a listener at the bound). Observed on the bed by cicd/ai-admission (run pv-green-1, 2026-09-29): bound 12, ten requests held -> row VA2 read 1 and row VA4 read a change of 0 over 22 s at the bound; with the pause removed (red twin) VA4 read 6475802."
    },
    "loxilb_proxy_accept_bound": {
     "status": "verified-runtime",

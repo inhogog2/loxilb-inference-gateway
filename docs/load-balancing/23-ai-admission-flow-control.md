@@ -291,16 +291,15 @@ contexts, not requests, before any pool sees them:
 |---|---|---|
 | `loxilb_proxy_context_inflight` | gauge | connection contexts held, client and backend legs alike; counted only while the valve is on, so `0` when unbounded |
 | `loxilb_proxy_accept_bound` | gauge | the bound; `0` when unbounded |
-| `loxilb_proxy_accept_blocked_total` | counter | times an accept was declined at the bound (the connection waits in the listen backlog); counted on every poll of the listener while at the bound, so it grows with the time spent there, not with the connections waiting |
+| `loxilb_proxy_accept_blocked_total` | counter | times the valve paused accepting at the bound: connections wait in the listen backlog until a context is released, which re-arms the listener; one per pause, not per connection, so a steady rate is the node reaching its bound again and again |
 
-Known cost: while the node sits at the bound, the notifier thread that
-serves the listener polls it continuously (the listener stays readable
-with connections waiting in its backlog), so that thread uses a full CPU
-core for as long as the bound holds; measured on a test bed at the bound,
-about 330,000 declined accepts a second on one core. Below the bound, and
-with `LLB_PD_MAX_TOTAL_INFLIGHT` unset, there is no cost. Size the bound
-so that it is reached only in overload, and treat a sustained
-`loxilb_proxy_accept_blocked_total` rate as a capacity alarm.
+At the bound the valve pauses the listeners: poll stops reporting them, so
+connections waiting in the backlog cost no CPU. The release of a connection
+context re-arms them, and the once-a-second health pass re-arms any that a
+release missed. Measured on a test bed with ten streams held at a bound of
+12: 8.5 % of one core, against 8.2 % with no bound.
+Size the bound so that it is reached only in overload, and treat contexts
+held at the bound as a capacity alarm.
 
 The AI dashboard's "AI admission gate" row plots in flight against the
 ceiling, queued against the depth, the queue wait p50/p95 and the decisions
@@ -316,7 +315,7 @@ by reason.
 | `decisions_total{reason="queue_timeout"}` rising | requests wait a whole `fc_max_queue_wait_ms` | the queue only delays refusals at this load: shorten the wait or add capacity |
 | `queued` near `limit{role="queue"}` for minutes | the queue absorbs a sustained, not a burst, overload | add capacity; a deeper queue parks more client memory (depth × 1 MiB) |
 | `warming_endpoints` above 0 after every health flap | an endpoint flaps between down and up | fix the endpoint; its ramp restarts on every return |
-| `proxy_accept_blocked_total` rising | the node is at its connection-context bound; new connections wait in the listen backlog | raise `LLB_PD_MAX_TOTAL_INFLIGHT` if memory allows, else add gateway instances |
+| `proxy_context_inflight` at `proxy_accept_bound`, or `proxy_accept_blocked_total` rising | the node is at its connection-context bound; new connections wait in the listen backlog | raise `LLB_PD_MAX_TOTAL_INFLIGHT` if memory allows, else add gateway instances |
 | `anomalies_total` above 0 | a bookkeeping defect | report it with the gateway log |
 
 The shipped alert rules (`deploy/monitoring/prometheus/rules/loxilb-alerts.yml`,

@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-09-28T13:01:01+00:00",
-  "source_revision": "a1f8a6365c8558a8185c82f0254220c097c062df"
+  "generated_at": "2026-09-28T23:41:46+00:00",
+  "source_revision": "dd717f7043f1111699c7a512679c98ace7f50464"
  },
  "contract": {
   "total": 286,
@@ -11093,8 +11093,7 @@
    "priority": "diagnostic",
    "privacy": "none",
    "consumers": [
-    "loxilb-ai.json",
-    "loxilb-alerts.yml"
+    "loxilb-ai.json"
    ],
    "waiver": "",
    "source": "api/prometheus/sockproxy_metrics.go:662",
@@ -11146,7 +11145,7 @@
      "entry_point": "main"
     }
    ],
-   "verification_evidence": "api/prometheus/sockproxy_metrics.go, inside the collector goroutine that copies the C proxy_get_metrics() snapshot each period (tail field proxy_accept_blocked = global_stats.pd_admission_total_blocked, incremented in handle_new_connection on every listener poll that declines accept() at the bound). Observed on the bed by cicd/ai-admission (run p8a-quick-2, 2026-09-28): bound 12, ten requests held -> row VA2 read 772524; the count is per listener poll, not per connection, so its magnitude measures time at the bound."
+   "verification_evidence": "api/prometheus/sockproxy_metrics.go, inside the collector goroutine that copies the C proxy_get_metrics() snapshot each period (tail field proxy_accept_blocked = global_stats.pd_admission_total_blocked, incremented in handle_new_connection once per pause of a listener at the bound). Observed on the bed by cicd/ai-admission (run pv-green-1, 2026-09-29): bound 12, ten requests held -> row VA2 read 1 and row VA4 read a change of 0 over 22 s at the bound; with the pause removed (red twin) VA4 read 6475802."
   },
   {
    "name": "loxilb_proxy_accept_bound",
@@ -11160,7 +11159,8 @@
    "priority": "diagnostic",
    "privacy": "none",
    "consumers": [
-    "loxilb-ai.json"
+    "loxilb-ai.json",
+    "loxilb-alerts.yml"
    ],
    "waiver": "",
    "source": "api/prometheus/sockproxy_metrics.go:668",
@@ -11822,7 +11822,8 @@
    "priority": "diagnostic",
    "privacy": "none",
    "consumers": [
-    "loxilb-ai.json"
+    "loxilb-ai.json",
+    "loxilb-alerts.yml"
    ],
    "waiver": "",
    "source": "api/prometheus/sockproxy_metrics.go:656",
