@@ -22,8 +22,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // kvWriteProfileFixture writes one profile document plus its tokenizer
@@ -157,6 +159,54 @@ func TestKvProfileRegistryTemplateCompileGate(t *testing.T) {
 	if out, ok := kvRenderChatTemplate("acme/reg-chat",
 		[]kvChatMessage{{Role: "user", Content: "hello-trust-path"}}); !ok || out != "hello-trust-path" {
 		t.Fatalf("on-disk trust-path render wrong: ok=%v out=%q", ok, out)
+	}
+}
+
+// TestKvProfileRegistryClockPolicyGate: a template that prints the date
+// (Llama-3.2's shape: strftime_now when defined, a hard-coded date
+// otherwise) is refused at publish without a clock declaration — rendering
+// the fallback date would silently differ from the engine, which always has
+// strftime_now. Declared, it publishes and renders the gateway's UTC date.
+func TestKvProfileRegistryClockPolicyGate(t *testing.T) {
+	root := kvRegistryTestSetup(t)
+	kvWriteProfileFixture(t, root, "p-base", "acme/reg-base", []byte("tok-base"))
+	if err := KvProfileRegistryLoadFrom(root); err != nil {
+		t.Fatalf("baseline publish: %v", err)
+	}
+	prevGen := kvProfileCurrent().Gen
+	dated := []byte(`{% if strftime_now is defined %}{{ strftime_now("%d %b %Y") }}{% else %}26 Jul 2024{% endif %}|{{ messages[0].content }}`)
+
+	undeclared := kvTrustedTempDir(t)
+	kvWriteChatProfileFixture(t, undeclared, "p-dated", "acme/reg-dated", []byte("tok-dated"), dated)
+	if err := KvProfileRegistryLoadFrom(undeclared); err == nil || !strings.Contains(err.Error(), "clockPolicy") {
+		t.Fatalf("dated template without a clock declaration must be refused, got %v", err)
+	}
+	if g := kvProfileCurrent(); g == nil || g.Gen != prevGen {
+		t.Fatal("failed publish must leave the previous generation serving")
+	}
+
+	declared := kvTrustedTempDir(t)
+	kvWriteChatProfileFixture(t, declared, "p-dated", "acme/reg-dated", []byte("tok-dated"), dated)
+	docPath := filepath.Join(declared, "p-dated.yaml")
+	doc, err := os.ReadFile(docPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc = []byte(strings.Replace(string(doc), "addGenerationPrompt: true\n",
+		"addGenerationPrompt: true\n  clockPolicy: utc-date\n", 1))
+	if err := os.WriteFile(docPath, doc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := KvProfileRegistryLoadFrom(declared); err != nil {
+		t.Fatalf("declared dated profile refused: %v", err)
+	}
+	prevClock := kvChatClock
+	// 23:30 at UTC-5 is already the next day in UTC: the render must follow UTC.
+	kvChatClock = func() time.Time { return time.Date(2026, 3, 4, 23, 30, 0, 0, time.FixedZone("x", -5*3600)) }
+	t.Cleanup(func() { kvChatClock = prevClock })
+	out, ok := kvRenderChatTemplate("acme/reg-dated", []kvChatMessage{{Role: "user", Content: "q"}})
+	if !ok || out != "05 Mar 2026|q" {
+		t.Fatalf("declared clock render: ok=%v out=%q", ok, out)
 	}
 }
 

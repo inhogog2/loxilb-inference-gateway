@@ -120,6 +120,8 @@ func TestKvProfileValidationMatrix(t *testing.T) {
 			p.TemplateSha256 = kvTestShaB
 			p.TemplateContentFormat = "string"
 		}, "addGenerationPrompt"},
+		{"unknown clock policy", func(p *ModelPromptProfile) { p.RenderPolicy.ClockPolicy = "local-date" }, "clockPolicy"},
+		{"clock policy without template", func(p *ModelPromptProfile) { p.RenderPolicy.ClockPolicy = KvClockPolicyUTCDate }, "clockPolicy requires templateArtifact"},
 		{"alias policy any", func(p *ModelPromptProfile) { p.AliasPolicy = "any" }, "aliasPolicy"},
 		{"alias policy empty", func(p *ModelPromptProfile) { p.AliasPolicy = "" }, "aliasPolicy"},
 		{"aliases without list policy", func(p *ModelPromptProfile) { p.AllowedAliases = []string{"x"} }, "allowedAliases"},

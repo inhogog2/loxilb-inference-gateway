@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -250,7 +251,14 @@ func TestKvChatSupportRequiresChatDeclaration(t *testing.T) {
 func TestKvJinjaCompileRefusals(t *testing.T) {
 	for _, src := range []string{
 		"{% include 'x' %}",
-		"{% macro f() %}{% endmacro %}",
+		"{% call f() %}{% endcall %}",
+		"{% filter upper %}x{% endfilter %}",
+		"{% for x in y recursive %}{% endfor %}",
+		"{% macro f() %}{{ varargs }}{% endmacro %}",
+		"{% continue %}",
+		"{{ messages | bogusfilter }}",
+		"{{ 1.5 }}",
+		"{{ 2 ** 3 }}",
 		"{% if x %}unterminated",
 		"{{ messages",
 		"{% for m messages %}{% endfor %}",
@@ -271,11 +279,12 @@ func TestKvJinjaRenderFaults(t *testing.T) {
 		}
 	}
 	for _, src := range []string{
-		"{{ messages[3].content }}",                    // index out of range
-		"{{ undefinedvar + 'x' }}",                     // undefined concat
-		"{% for m in messages[0].tools %}{% endfor %}", // iterate undefined
-		"{{ messages | bogusfilter }}",                 // unknown filter
-		"{{ messages[0].content.frob() }}",             // unknown method
+		"{{ messages[3].content }}",        // attribute of the Undefined past the end
+		"{{ undefinedvar + 'x' }}",         // undefined concat
+		"{% for m in none %}{% endfor %}",  // iterate None
+		"{{ messages[0].tools[0] }}",       // subscript of undefined
+		"{{ raise_exception('refused') }}", // template-raised refusal
+		"{{ messages[0].content.frob() }}", // unknown method
 	} {
 		tpl, err := kvJinjaCompile(src)
 		if err != nil {
@@ -284,5 +293,50 @@ func TestKvJinjaRenderFaults(t *testing.T) {
 		if out, err := tpl.Render(ctx()); err == nil {
 			t.Errorf("render of %q succeeded with %q, want error", src, out)
 		}
+	}
+}
+
+// TestKvJinjaChatContextShape pins the serving context to what the engine's
+// apply_chat_template passes: tools and documents are defined as None, each
+// message is a dict with "role" then "content" (a template that serializes a
+// message, or iterates its keys, observes that order), and strftime_now is
+// absent unless the profile declares the utc-date clock policy.
+func TestKvJinjaChatContextShape(t *testing.T) {
+	tpl, err := kvJinjaCompile("{{ tools is defined }}{{ tools is none }}{{ documents is none }}" +
+		"{{ messages[0] | tojson }}{% for k in messages[0] %}{{ k }};{% endfor %}{{ strftime_now is defined }}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := []kvChatMessage{{Role: "user", Content: "hi"}}
+	got, err := tpl.Render(kvJinjaChatContext(msgs, KvRenderPolicy{AddGenerationPrompt: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `TrueTrueTrue{"role": "user", "content": "hi"}role;content;False`; got != want {
+		t.Fatalf("chat context shape:\n got:  %q\n want: %q", got, want)
+	}
+	got, err = tpl.Render(kvJinjaChatContext(msgs, KvRenderPolicy{AddGenerationPrompt: true, ClockPolicy: KvClockPolicyUTCDate}))
+	if err != nil || !strings.HasSuffix(got, "True") {
+		t.Fatalf("utc-date policy must define strftime_now: %q, %v", got, err)
+	}
+}
+
+// TestKvJinjaCheckClockPolicy: a template that prints the date needs the
+// declaration, and the declaration needs a template that prints the date.
+func TestKvJinjaCheckClockPolicy(t *testing.T) {
+	dated, _ := kvJinjaCompile(`{% if strftime_now is defined %}{{ strftime_now("%d %b %Y") }}{% else %}26 Jul 2024{% endif %}`)
+	plain, _ := kvJinjaCompile(`{{ messages[0].content }}`)
+	utc := KvRenderPolicy{ClockPolicy: KvClockPolicyUTCDate}
+	if kvCheckClockPolicy(dated, &KvRenderPolicy{}) == nil {
+		t.Error("undeclared strftime_now template accepted")
+	}
+	if kvCheckClockPolicy(dated, &utc) != nil {
+		t.Error("declared strftime_now template refused")
+	}
+	if kvCheckClockPolicy(plain, &utc) == nil {
+		t.Error("clock declaration without a strftime_now template accepted")
+	}
+	if kvCheckClockPolicy(plain, &KvRenderPolicy{}) != nil {
+		t.Error("plain template without declaration refused")
 	}
 }
