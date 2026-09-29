@@ -82,10 +82,21 @@ type kvJinjaTemplate struct {
 	// names is every variable name the template reads — the render context
 	// it can observe (e.g. whether it consults strftime_now).
 	names map[string]bool
+	// iteratesContent: some for loop iterates a content value (see
+	// kvJjIsContentAccess).
+	iteratesContent bool
 }
 
 // References reports whether the template reads the named variable.
 func (t *kvJinjaTemplate) References(name string) bool { return t.names[name] }
+
+// IteratesContent reports a for loop over x.content, x['content'] or a
+// variable named content, through filters, tests and slices, on any base.
+// vLLM v0.28.0 (renderers/hf.py _detect_content_format) and SGLang v0.5.18
+// (detect_jinja_template_content_format) switch a template to the "openai"
+// content format on a subset of these loops — they require the base to be
+// a message loop variable — so this is a superset of both.
+func (t *kvJinjaTemplate) IteratesContent() bool { return t.iteratesContent }
 
 type kvJjError struct {
 	pos int
@@ -348,14 +359,40 @@ func kvJinjaCompile(src string) (*kvJinjaTemplate, error) {
 			return nil, kvJjErrf(0, "unsupported implicit macro variable %q", n)
 		}
 	}
-	return &kvJinjaTemplate{nodes: nodes, names: p.names}, nil
+	return &kvJinjaTemplate{nodes: nodes, names: p.names, iteratesContent: p.iteratesContent}, nil
 }
 
 type kvJjSegParser struct {
-	segs      []kvJjSeg
-	i         int
-	loopDepth int
-	names     map[string]bool
+	segs            []kvJjSeg
+	i               int
+	loopDepth       int
+	names           map[string]bool
+	iteratesContent bool
+}
+
+// kvJjIsContentAccess reports an expression that reads a content value:
+// x.content, x['content'] or the variable content, under any filters,
+// tests and slices.
+func kvJjIsContentAccess(e kvJjExpr) bool {
+	for {
+		switch x := e.(type) {
+		case *kvJjFilter:
+			e = x.e
+		case *kvJjTest:
+			e = x.e
+		case *kvJjSlice:
+			e = x.obj
+		case *kvJjAttr:
+			return x.name == "content"
+		case *kvJjIndex:
+			lit, ok := x.idx.(*kvJjLit)
+			return ok && lit.v == "content"
+		case *kvJjVar:
+			return x.name == "content"
+		default:
+			return false
+		}
+	}
 }
 
 // parseBody parses statements until one of the terminator keywords appears,
@@ -524,6 +561,9 @@ func (p *kvJjSegParser) parseFor(head string, pos int) (kvJjNode, error) {
 		return nil, err
 	}
 	n := &kvJjFor{targets: targets, seq: seq, pos: pos}
+	if kvJjIsContentAccess(seq) {
+		p.iteratesContent = true
+	}
 	if ep.accept("ident", "if") {
 		if n.filter, err = ep.parseExpression(true); err != nil {
 			return nil, err
