@@ -245,14 +245,35 @@ func kvExtractMessageContent(raw json.RawMessage) string {
 // gateway's plain-text render, so a strict rule refuses to score them
 // (request-class UNSUPPORTED — never readiness-affecting, I-12) instead of
 // routing a mis-hashed prefix. Legacy rules keep today's behavior untouched.
-func kvChatExcludedFeature(body string) string {
+//
+// Besides the plan-§4 features, it refuses every request field that changes
+// the engine's prompt ids while the gateway renders from the profile alone.
+// The set is the union over the engines' chat paths (vLLM v0.28.0
+// build_chat_params/build_tok_params, SGLang v0.5.18 _apply_jinja_template,
+// TRT-LLM 1.3.0rc24 openai_chat): add_generation_prompt when it differs from
+// the profile's addGenerationPrompt; continue_final_message and
+// add_special_tokens unless false; documents, reasoning_effort, a
+// per-request chat_template, truncate_prompt_tokens and
+// prompt_token_ids(_b64) whenever set. A field one engine ignores is still
+// refused: the gateway does not know which engine serves the rule, and a
+// refusal only costs scoring, while acceptance would mis-hash.
+func kvChatExcludedFeature(body string, addGenerationPrompt bool) string {
 	var req struct {
-		Tools              json.RawMessage `json:"tools"`
-		ToolChoice         json.RawMessage `json:"tool_choice"`
-		CacheSalt          json.RawMessage `json:"cache_salt"`
-		PromptEmbeds       json.RawMessage `json:"prompt_embeds"`
-		ChatTemplateKwargs json.RawMessage `json:"chat_template_kwargs"`
-		Messages           []struct {
+		Tools                json.RawMessage `json:"tools"`
+		ToolChoice           json.RawMessage `json:"tool_choice"`
+		CacheSalt            json.RawMessage `json:"cache_salt"`
+		PromptEmbeds         json.RawMessage `json:"prompt_embeds"`
+		ChatTemplateKwargs   json.RawMessage `json:"chat_template_kwargs"`
+		AddGenerationPrompt  json.RawMessage `json:"add_generation_prompt"`
+		ContinueFinalMessage json.RawMessage `json:"continue_final_message"`
+		AddSpecialTokens     json.RawMessage `json:"add_special_tokens"`
+		Documents            json.RawMessage `json:"documents"`
+		ReasoningEffort      json.RawMessage `json:"reasoning_effort"`
+		ChatTemplate         json.RawMessage `json:"chat_template"`
+		TruncatePromptTokens json.RawMessage `json:"truncate_prompt_tokens"`
+		PromptTokenIDs       json.RawMessage `json:"prompt_token_ids"`
+		PromptTokenIDsB64    json.RawMessage `json:"prompt_token_ids_b64"`
+		Messages             []struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"messages"`
 	}
@@ -261,6 +282,17 @@ func kvChatExcludedFeature(body string) string {
 	}
 	present := func(raw json.RawMessage) bool {
 		return len(raw) > 0 && string(raw) != "null"
+	}
+	// differs reports a set flag whose value is not the JSON boolean want.
+	// Anything but a plain boolean differs: the engines' request models
+	// coerce strings and numbers, so their meaning is not the gateway's to
+	// guess.
+	differs := func(raw json.RawMessage, want bool) bool {
+		if !present(raw) {
+			return false
+		}
+		var v bool
+		return json.Unmarshal(raw, &v) != nil || v != want
 	}
 	switch {
 	case present(req.Tools) || present(req.ToolChoice):
@@ -271,6 +303,22 @@ func kvChatExcludedFeature(body string) string {
 		return "prompt_embeds"
 	case present(req.ChatTemplateKwargs):
 		return "template_kwargs"
+	case differs(req.AddGenerationPrompt, addGenerationPrompt):
+		return "add_generation_prompt"
+	case differs(req.ContinueFinalMessage, false):
+		return "continue_final_message"
+	case differs(req.AddSpecialTokens, false):
+		return "add_special_tokens"
+	case present(req.Documents):
+		return "documents"
+	case present(req.ReasoningEffort):
+		return "reasoning_effort"
+	case present(req.ChatTemplate):
+		return "chat_template"
+	case present(req.TruncatePromptTokens):
+		return "truncate_prompt_tokens"
+	case present(req.PromptTokenIDs) || present(req.PromptTokenIDsB64):
+		return "prompt_token_ids"
 	}
 	for _, m := range req.Messages {
 		var parts []struct {

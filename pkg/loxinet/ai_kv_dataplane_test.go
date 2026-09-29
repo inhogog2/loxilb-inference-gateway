@@ -402,11 +402,71 @@ func TestKvChatExcludedFeature(t *testing.T) {
 		{"multimodal", `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"x"}}]}]}`, "multimodal"},
 		{"text_parts_ok", `{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`, ""},
 		{"null_tools_ok", `{"messages":[],"tools":null}`, ""},
+		// Render-affecting request fields (engine request -> template vars).
+		{"gen_prompt_matches_profile", `{"messages":[],"add_generation_prompt":true}`, ""},
+		{"gen_prompt_differs", `{"messages":[],"add_generation_prompt":false}`, "add_generation_prompt"},
+		{"gen_prompt_not_bool", `{"messages":[],"add_generation_prompt":"true"}`, "add_generation_prompt"},
+		{"gen_prompt_null_ok", `{"messages":[],"add_generation_prompt":null}`, ""},
+		{"continue_false_ok", `{"messages":[],"continue_final_message":false}`, ""},
+		{"continue_true", `{"messages":[],"continue_final_message":true}`, "continue_final_message"},
+		{"special_tokens_false_ok", `{"messages":[],"add_special_tokens":false}`, ""},
+		{"special_tokens_true", `{"messages":[],"add_special_tokens":true}`, "add_special_tokens"},
+		{"documents", `{"messages":[],"documents":[{"title":"t","text":"x"}]}`, "documents"},
+		{"documents_empty", `{"messages":[],"documents":[]}`, "documents"},
+		{"reasoning_effort", `{"messages":[],"reasoning_effort":"low"}`, "reasoning_effort"},
+		{"reasoning_effort_none", `{"messages":[],"reasoning_effort":"none"}`, "reasoning_effort"},
+		{"reasoning_effort_null_ok", `{"messages":[],"reasoning_effort":null}`, ""},
+		{"chat_template", `{"messages":[],"chat_template":"{{ messages }}"}`, "chat_template"},
+		{"truncate", `{"messages":[],"truncate_prompt_tokens":8}`, "truncate_prompt_tokens"},
+		{"prompt_token_ids", `{"messages":[],"prompt_token_ids":[1,2]}`, "prompt_token_ids"},
+		{"prompt_token_ids_b64", `{"messages":[],"prompt_token_ids_b64":"AQAAAA=="}`, "prompt_token_ids"},
 	}
 	for _, c := range cases {
-		if got := kvChatExcludedFeature(c.body); got != c.want {
+		if got := kvChatExcludedFeature(c.body, true); got != c.want {
 			t.Fatalf("%s: got %q want %q", c.name, got, c.want)
 		}
+	}
+	// The generation-prompt comparison follows the profile, not a constant.
+	if got := kvChatExcludedFeature(`{"messages":[],"add_generation_prompt":false}`, false); got != "" {
+		t.Fatalf("gen_prompt false vs profile false: got %q", got)
+	}
+	if got := kvChatExcludedFeature(`{"messages":[],"add_generation_prompt":true}`, false); got != "add_generation_prompt" {
+		t.Fatalf("gen_prompt true vs profile false: got %q", got)
+	}
+}
+
+// TestKvBridgeTokenizeChatRenderFields: the strict bridge compares
+// add_generation_prompt against the serving profile's renderPolicy. With a
+// profile declaring false, a request saying false passes the refusal and
+// reaches the tokenizer (absent here: TOKENIZER fault), while true is
+// refused UNSUPPORTED; legacy paths never consult the refusal.
+func TestKvBridgeTokenizeChatRenderFields(t *testing.T) {
+	kvDataplaneTestSetup(t)
+	kvTestRegister(51, "rule-chat-fields", KvContractAPIBoth)
+	b, err := KvBindingAllocate("rule-chat-fields", kvTestComponents(1))
+	if err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	kvSvcContractOutcome(51, false, "")
+	const model = "acme/render-fields-model"
+	kvTestPublishChatProfile(t, model,
+		"{% for m in messages %}{{ m.content }}{% endfor %}{% if add_generation_prompt %}GEN{% endif %}",
+		KvRenderPolicy{AddGenerationPrompt: false})
+
+	const agree = `{"messages":[{"role":"user","content":"hi"}],"add_generation_prompt":false}`
+	const differ = `{"messages":[{"role":"user","content":"hi"}],"add_generation_prompt":true}`
+	const effort = `{"messages":[{"role":"user","content":"hi"}],"reasoning_effort":"high"}`
+	if _, rc := kvBridgeTokenizeChat(51, b.BindingGen, agree, model, 16); rc != KvTokErrTokenizer {
+		t.Fatalf("strict matching generation prompt must pass the refusal, got %d", rc)
+	}
+	if _, rc := kvBridgeTokenizeChat(51, b.BindingGen, differ, model, 16); rc != KvTokErrUnsupported {
+		t.Fatalf("strict differing generation prompt must be UNSUPPORTED, got %d", rc)
+	}
+	if _, rc := kvBridgeTokenizeChat(51, b.BindingGen, effort, model, 16); rc != KvTokErrUnsupported {
+		t.Fatalf("strict reasoning_effort must be UNSUPPORTED, got %d", rc)
+	}
+	if _, rc := kvBridgeTokenizeChat(0, 0, effort, model, 16); rc != KvTokErrRequest {
+		t.Fatalf("legacy reasoning_effort must keep the pre-contract path, got %d", rc)
 	}
 }
 

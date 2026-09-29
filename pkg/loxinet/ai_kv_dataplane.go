@@ -473,7 +473,13 @@ func kvBridgeTokenizeChat(svcID, bindingGen uint32, body, model string, max int)
 		return nil, KvTokErrRequest
 	}
 	if strict {
-		if feature := kvChatExcludedFeature(body); feature != "" {
+		// No profile leaves the engine default (true) to compare against;
+		// the render below then faults on the missing renderer anyway.
+		addGen := true
+		if e, ok := kvProfileByModel(model); ok {
+			addGen = e.Profile.RenderPolicy.AddGenerationPrompt
+		}
+		if feature := kvChatExcludedFeature(body, addGen); feature != "" {
 			return nil, KvTokErrUnsupported
 		}
 	}
