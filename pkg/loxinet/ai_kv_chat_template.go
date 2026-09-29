@@ -169,13 +169,38 @@ func kvRenderChatTemplateReq(modelName string, messages []kvChatMessage, clock f
 // with the template.
 const kvModelTypeGptOss = "gpt_oss"
 
-// kvChatTemplateServesEngine reports whether engine renders the profile's
-// chat requests with the pinned chat template the gateway executes. When it
-// does not, the gateway's hash describes a prompt the engine never builds —
-// and the engine's /tokenize still uses the template, so the attestation
-// probe cannot notice.
-func kvChatTemplateServesEngine(p *ModelPromptProfile, engine string) bool {
-	return p.ModelType != kvModelTypeGptOss || engine == "sglang"
+// kvModelTypeMistral3 is the config.json model_type of Mistral AI's
+// Mistral3ForConditionalGeneration releases. vLLM v0.28.0 resolves
+// tokenizer_mode "auto" to "mistral" when the repository lists
+// consolidated*.safetensors and tekken.json (these releases ship both) and
+// then renders chat with mistral_common, which differs from the chat
+// template: no default system prompt, special-token literals in user text
+// encoded as plain text, trailing whitespace of assistant turns dropped. In
+// "hf" mode vLLM does not pick up the template and refuses chat.
+const kvModelTypeMistral3 = "mistral3"
+
+// kvChatRenderer names what an engine renders a profile's chat requests
+// with when that is not the pinned chat template the gateway executes;
+// alt is the remedy beyond declaring the completions surface.
+type kvChatRenderer struct {
+	name string
+	alt  string
+}
+
+// kvChatEngineRenderer returns the engine's own chat renderer for the
+// profile, or a zero value when the engine renders the pinned template.
+// When it does not, the gateway's hash describes a prompt the engine never
+// builds. For Harmony the engine's /tokenize still uses the template, so the
+// attestation probe cannot notice; for mistral_common the probe notices only
+// through a fixture whose render differs, so admission refuses both.
+func kvChatEngineRenderer(p *ModelPromptProfile, engine string) kvChatRenderer {
+	switch {
+	case p.ModelType == kvModelTypeGptOss && engine != "sglang":
+		return kvChatRenderer{name: "the Harmony encoder", alt: " or serve it with sglang"}
+	case p.ModelType == kvModelTypeMistral3 && engine == "vllm":
+		return kvChatRenderer{name: "mistral_common"}
+	}
+	return kvChatRenderer{}
 }
 
 // kvProfileDeclaresChat reports whether a profile declares the chat surface.

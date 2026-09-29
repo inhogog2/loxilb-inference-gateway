@@ -141,8 +141,9 @@ type ModelPromptProfile struct {
 	OracleVersion   string `yaml:"oracleVersion,omitempty"`
 	// ModelType mirrors the model's config.json "model_type". Engines pick
 	// the chat renderer from it: for "gpt_oss" vLLM and TRT-LLM render chat
-	// with the Harmony encoder instead of the chat template, so admission
-	// refuses a strict chat surface for such a profile on those engines.
+	// with the Harmony encoder, for "mistral3" vLLM renders it with
+	// mistral_common, instead of the chat template, so admission refuses a
+	// strict chat surface for such a profile on those engines.
 	ModelType string `yaml:"modelType,omitempty"`
 	// SupportedApis declares the request surfaces this profile serves
 	// ("chat", "completions"). Non-empty.
