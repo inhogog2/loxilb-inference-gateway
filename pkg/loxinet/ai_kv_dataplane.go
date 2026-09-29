@@ -26,6 +26,7 @@ package loxinet
 // C guard path falls back to Tier-2 regardless of C-side state.
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -483,15 +484,20 @@ func kvBridgeTokenizeChat(svcID, bindingGen uint32, body, model string, max int)
 			return nil, KvTokErrUnsupported
 		}
 	}
-	rendered, ok := kvRenderChatTemplate(model, msgs)
-	if !ok || rendered == "" {
-		if strict {
+	rendered, err := kvRenderChatTemplateReq(model, msgs, kvChatClock)
+	if err != nil {
+		if !strict {
+			return nil, KvTokErrRequest
+		}
+		if errors.Is(err, errKvNoChatRenderer) {
 			// Admission refuses a declared chat surface without a validated
 			// renderer, so a strict rule reaching this branch means the
 			// renderer itself failed.
 			return nil, kvBridgeRuntimeFault(svcID, KvTokErrRenderer)
 		}
-		return nil, KvTokErrRequest
+		// The validated template refused these messages: request-class,
+		// never readiness-affecting (I-12).
+		return nil, KvTokErrUnsupported
 	}
 	// Chat-rendered text: the template already carries its special tokens and
 	// vLLM encodes the render with add_special_tokens=False.

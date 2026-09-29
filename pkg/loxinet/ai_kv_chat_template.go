@@ -127,19 +127,39 @@ func kvRenderChatTemplate(modelName string, messages []kvChatMessage) (string, b
 // kvRenderChatTemplateAt is kvRenderChatTemplate with an explicit clock for
 // strftime_now (only a clock-declaring profile's template reads it).
 func kvRenderChatTemplateAt(modelName string, messages []kvChatMessage, clock func() time.Time) (string, bool) {
+	out, err := kvRenderChatTemplateReq(modelName, messages, clock)
+	return out, err == nil
+}
+
+// errKvNoChatRenderer: no chat-declaring profile serves the model, or its
+// pinned template artifact is missing or does not compile.
+var errKvNoChatRenderer = errors.New("kv-chat: no validated chat renderer for the model")
+
+// kvRenderChatTemplateReq renders like kvRenderChatTemplateAt but keeps the
+// failure class. errKvNoChatRenderer means the renderer itself is unusable (a
+// runtime fault for a strict rule, whose admission proved it usable). Any
+// other error means the compiled template refused THIS request's messages —
+// raise_exception on a role order or content shape (the engines answer 400
+// for the same request), a construct only this shape reaches, or an empty
+// render: a request-class failure that must never fence the rule, or any
+// client could degrade it at will.
+func kvRenderChatTemplateReq(modelName string, messages []kvChatMessage, clock func() time.Time) (string, error) {
 	e, ok := kvProfileByModel(modelName)
 	if !ok || !kvProfileDeclaresChat(&e.Profile) {
-		return "", false
+		return "", errKvNoChatRenderer
 	}
 	tpl, err := e.chatTemplate()
 	if err != nil {
-		return "", false
+		return "", errKvNoChatRenderer
 	}
 	out, err := tpl.Render(kvJinjaChatContextAt(messages, e.Profile.RenderPolicy, clock))
-	if err != nil || out == "" {
-		return "", false
+	if err != nil {
+		return "", err
 	}
-	return out, true
+	if out == "" {
+		return "", errors.New("kv-chat: template rendered no text for these messages")
+	}
+	return out, nil
 }
 
 // kvModelTypeGptOss is the config.json model_type the engines serve through
