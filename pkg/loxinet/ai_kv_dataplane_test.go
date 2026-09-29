@@ -17,6 +17,7 @@
 package loxinet
 
 import (
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -497,5 +498,46 @@ func TestKvSvcContractKickInstall(t *testing.T) {
 			t.Fatalf("kicked install must clear the fence")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// A validated template that refuses a request's messages (raise_exception on
+// role order, or an empty render) is a request-class failure: it must return
+// UNSUPPORTED and never reach kvBridgeRuntimeFault, which fences the rule —
+// otherwise any client could degrade a READY rule by sending a message order
+// the template rejects. Only an unusable renderer stays a runtime fault.
+func TestKvBridgeTokenizeChatTemplateRefusalIsRequestClass(t *testing.T) {
+	kvDataplaneTestSetup(t)
+	kvTestRegister(51, "rule-chat-raise", KvContractAPIBoth)
+	b, err := KvBindingAllocate("rule-chat-raise", kvTestComponents(1))
+	if err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	kvSvcContractOutcome(51, false, "")
+
+	const model = "acme/alternating-roles"
+	const tpl = `{% for m in messages %}{% if m['role'] != 'system' and ((m['role'] == 'user') != (loop.index0 % 2 == 0)) %}` +
+		`{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}` +
+		`{% if m['role'] != 'system' %}{{ m['content'] }}{% endif %}{% endfor %}`
+	kvTestPublishChatProfile(t, model, tpl, KvRenderPolicy{AddGenerationPrompt: true})
+
+	const twoUsers = `{"messages":[{"role":"user","content":"a"},{"role":"user","content":"b"}]}`
+	if _, rc := kvBridgeTokenizeChat(51, b.BindingGen, twoUsers, model, 16); rc != KvTokErrUnsupported {
+		t.Fatalf("strict raise_exception: rc %d, want UNSUPPORTED %d (a renderer fault would fence the rule)", rc, KvTokErrUnsupported)
+	}
+	if _, rc := kvBridgeTokenizeChat(0, 0, twoUsers, model, 16); rc != KvTokErrRequest {
+		t.Fatalf("legacy raise_exception: rc %d, want %d", rc, KvTokErrRequest)
+	}
+	// Renders nothing (system turns print no text): request-class too.
+	const systemOnly = `{"messages":[{"role":"system","content":"s"}]}`
+	if _, err := kvRenderChatTemplateReq(model, []kvChatMessage{{"user", "x"}}, kvChatClock); err != nil {
+		t.Fatalf("control render failed: %v", err)
+	}
+	if _, rc := kvBridgeTokenizeChat(51, b.BindingGen, systemOnly, model, 16); rc != KvTokErrUnsupported {
+		t.Fatalf("strict empty render: rc %d, want UNSUPPORTED %d", rc, KvTokErrUnsupported)
+	}
+	// An unusable renderer is still a runtime fault.
+	if _, err := kvRenderChatTemplateReq("acme/no-template-model", nil, kvChatClock); !errors.Is(err, errKvNoChatRenderer) {
+		t.Fatalf("no renderer: err %v, want errKvNoChatRenderer", err)
 	}
 }

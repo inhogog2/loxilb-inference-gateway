@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-09-29T06:13:38+00:00",
-  "source_revision": "b5e337f18fbe048333ac80f58f501b761e60da99"
+  "generated_at": "2026-09-29T06:51:01+00:00",
+  "source_revision": "15f0957befc53c4a711eabb128c1bcaee1ee92da"
  },
  "contract": {
   "total": 286,
@@ -2092,8 +2092,8 @@
      "symbol": "kvDataplaneContractInstallAsync",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_dataplane.go",
-     "def_line": 381,
-     "call_line": 385,
+     "def_line": 383,
+     "call_line": 387,
      "calls": "kvAttestActivate",
      "note": "the controller starts only after a full dataplane contract install ACK, which is the only path to eligible=1"
     },
@@ -2205,8 +2205,8 @@
      "symbol": "kvDataplaneContractInstallAsync",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_dataplane.go",
-     "def_line": 381,
-     "call_line": 385,
+     "def_line": 383,
+     "call_line": 387,
      "calls": "kvAttestActivate",
      "note": "the controller starts only after a full dataplane contract install ACK, which is the only path to eligible=1"
     },
@@ -2329,8 +2329,8 @@
      "symbol": "kvDataplaneContractInstallAsync",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_dataplane.go",
-     "def_line": 381,
-     "call_line": 385,
+     "def_line": 383,
+     "call_line": 387,
      "calls": "kvAttestActivate",
      "note": "the controller starts only after a full dataplane contract install ACK, which is the only path to eligible=1"
     },
@@ -2451,8 +2451,8 @@
      "symbol": "kvDataplaneContractInstallAsync",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_dataplane.go",
-     "def_line": 381,
-     "call_line": 385,
+     "def_line": 383,
+     "call_line": 387,
      "calls": "kvAttestActivate",
      "note": "the controller starts only after a full dataplane contract install ACK, which is the only path to eligible=1"
     },

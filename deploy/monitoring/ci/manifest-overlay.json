@@ -791,7 +791,7 @@
     { "symbol": "loop", "kind": "method", "receiver": "kvAttestController", "file": "pkg/loxinet/ai_kv_attest.go", "def_line": 458, "call_line": 477, "calls": "cadenceCheck", "note": "single controller goroutine per rule; its deferred teardown clears this rule's series after the last publish" },
     { "symbol": "KvAttestStart", "kind": "func", "file": "pkg/loxinet/ai_kv_attest.go", "def_line": 326, "call_line": 351, "calls": "loop" },
     { "symbol": "kvAttestActivate", "kind": "func", "file": "pkg/loxinet/ai_kv_attest.go", "def_line": 927, "call_line": 934, "calls": "KvAttestStart" },
-    { "symbol": "kvDataplaneContractInstallAsync", "kind": "func", "file": "pkg/loxinet/ai_kv_dataplane.go", "def_line": 381, "call_line": 385, "calls": "kvAttestActivate", "note": "the controller starts only after a full dataplane contract install ACK, which is the only path to eligible=1" },
+    { "symbol": "kvDataplaneContractInstallAsync", "kind": "func", "file": "pkg/loxinet/ai_kv_dataplane.go", "def_line": 383, "call_line": 387, "calls": "kvAttestActivate", "note": "the controller starts only after a full dataplane contract install ACK, which is the only path to eligible=1" },
     { "symbol": "AddLbRule", "kind": "method", "receiver": "RuleH", "file": "pkg/loxinet/rules.go", "def_line": 3763, "call_line": 4684, "calls": "kvDataplaneContractInstallAsync" },
     { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
    ],
