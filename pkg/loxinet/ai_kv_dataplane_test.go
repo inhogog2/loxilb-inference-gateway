@@ -402,6 +402,12 @@ func TestKvChatExcludedFeature(t *testing.T) {
 		{"template_kwargs", `{"messages":[],"chat_template_kwargs":{"enable_thinking":false}}`, "template_kwargs"},
 		{"multimodal", `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"x"}}]}]}`, "multimodal"},
 		{"text_parts_ok", `{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`, ""},
+		{"empty_parts_ok", `{"messages":[{"role":"user","content":[]}]}`, ""},
+		// Engines join several text parts differently ("\n", " ", or a
+		// template's own concatenation): one part is safe, two are not.
+		{"two_text_parts", `{"messages":[{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}]}`, "multi_text_part"},
+		{"two_text_parts_later_message", `{"messages":[{"role":"system","content":"s"},{"role":"user","content":[{"type":"text","text":"a"}]},{"role":"assistant","content":"x"},{"role":"user","content":[{"type":"text","text":"b"},{"type":"text","text":"c"}]}]}`, "multi_text_part"},
+		{"one_text_part_per_message_ok", `{"messages":[{"role":"user","content":[{"type":"text","text":"a"}]},{"role":"assistant","content":[{"type":"text","text":"b"}]}]}`, ""},
 		{"null_tools_ok", `{"messages":[],"tools":null}`, ""},
 		// Render-affecting request fields (engine request -> template vars).
 		{"gen_prompt_matches_profile", `{"messages":[],"add_generation_prompt":true}`, ""},
