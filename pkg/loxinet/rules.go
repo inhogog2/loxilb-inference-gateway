@@ -6635,6 +6635,7 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.FcAdaptive = r.fcCfg.adaptive
 	nWork.FcWarmupMs = r.fcCfg.warmupMs
 	nWork.FcTtftTargetMs = r.fcCfg.ttftTargetMs
+	nWork.FcTenantSharePct = uint8(r.fcCfg.tenantSharePct)
 	nWork.CbEnable = r.cbEnable
 	nWork.KvExactMode = r.kvExactMode // KV-cache exact routing
 	nWork.KvBlockSize = r.kvBlockSize

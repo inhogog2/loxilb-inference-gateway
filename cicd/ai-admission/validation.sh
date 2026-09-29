@@ -394,7 +394,7 @@ echo "J: the gate's accounting stayed consistent"
 chk J1 "no accounting anomaly (underflow)"      0 "$(msum loxilb_ai_admission_anomalies_total 'kind="underflow"')"
 chk J2 "no accounting anomaly (unknown permit)" 0 "$(msum loxilb_ai_admission_anomalies_total 'kind="unknown_permit"')"
 chk J3 "no request was refused for no capacity" 0 "$(msum loxilb_ai_admission_decisions_total 'reason="no_healthy_capacity"')"
-chk J4 "every pool is exported"                11 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
+chk J4 "every pool is exported"                13 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
 
 # ── Q: the bounded queue, FIFO ──────────────────────────────────────────────
 echo ""
@@ -798,6 +798,94 @@ chk_has WU10 "unbounded, connection contexts are not counted" "loxilb_proxy_cont
 chk_has WU11 "the valve is unbounded and says so" "loxilb_proxy_accept_bound 0" "$(metrics_raw)"
 release capWU2
 
+# ── TS / TW: the tenant share ───────────────────────────────────────────────
+# Two keyed pools; a key per tenant. A tenant holds at most half of each
+# pool's ceiling (and of its queue); every other tenant keeps admitting.
+TS_URL="http://$VIP:$PORT_TS/v1/chat/completions"
+TQ_URL="http://$VIP:$PORT_TQ/v1/chat/completions"
+mk_key() { # mk_key <tenant> -> the raw key of a new key for that tenant
+  $hexec l3h1 curl -s -m 10 -X POST "$API/config/ai/apikey" -H 'Content-Type: application/json' \
+    -d "{\"tenant_id\": \"$1\", \"name\": \"$1-key\", \"allowed_models\": [\"$MODEL\"],
+         \"rate_limit_rps\": 1000, \"burst_size\": 1000, \"enabled\": true}" | jq -r '.raw_key // empty'
+}
+# hold_key <dir> <name> <nonce> <url> <key>: one request as that key's
+# tenant, held at the backend until its nonce is released.
+hold_key() {
+  $hexec l3h1 curl -s -o "$1/$2.body" -D "$1/$2.hdr" -w '%{http_code}' --max-time 120 \
+    "${HDRS[@]}" -H "X-Api-Key: $5" -H 'X-Test-Hold: 1' -H "X-Test-Nonce: $3" -H "X-Request-Id: $3" \
+    -d "$BODY" "$4" > "$1/$2.code" 2>/dev/null &
+}
+# send_key <dir> <name> <nonce> <url> <key>: one request, not held, waited for.
+send_key() {
+  $hexec l3h1 curl -s -o "$1/$2.body" -D "$1/$2.hdr" -w '%{http_code}' --max-time 20 \
+    "${HDRS[@]}" -H "X-Api-Key: $5" -H "X-Test-Nonce: $3" -H "X-Request-Id: $3" \
+    -d "$BODY" "$4" > "$1/$2.code" 2>/dev/null
+  cat "$1/$2.code"
+}
+KEY_A=$(mk_key share-a); KEY_B=$(mk_key share-b); KEY_C=$(mk_key share-c)
+echo ""
+echo "TS: tenant A holds its share of the :$PORT_TS ceiling ($FC_TS_MAX at $FC_TS_PCT %); its next is refused, tenant B still admits"
+chk TS0 "three tenant keys issued" 3 "$(for k in "$KEY_A" "$KEY_B" "$KEY_C"; do [ -n "$k" ] && echo; done | wc -l | tr -d ' ')"
+ts0=$(decisions $PORT_TS tenant_share)
+DTS=$(mktemp -d)
+hold_key "$DTS" a1 capTSa1 "$TS_URL" "$KEY_A"
+hold_key "$DTS" a2 capTSa2 "$TS_URL" "$KEY_A"
+chk TS1 "tenant A's two reached the backend"       2 "$(wait_sum_receipts capTSa 2 2 15)"
+chk TS2 "A's third answered 429"                   429 "$(send_key "$DTS" a3 capTSa3 "$TS_URL" "$KEY_A")"
+chk_has TS3 "naming the tenant share"              admission_tenant_share "$(cat "$DTS/a3.body" 2>/dev/null)"
+chk TS4 "it never reached the backend"             0 "$(receipts capTSa3)"
+hold_key "$DTS" b1 capTSb1 "$TS_URL" "$KEY_B"
+hold_key "$DTS" b2 capTSb2 "$TS_URL" "$KEY_B"
+chk TS5 "tenant B's two admitted beside A's"       2 "$(wait_sum_receipts capTSb 2 2 15)"
+chk TS6 "the data plane counts two tenants"        2 "$(wait_lb_field $PORT_TS '(.serviceArguments.fc_effective.tenants_active // 0)' 2 10)"
+chk TS7 "the share in force, from the rule"        "$FC_TS_PCT rule" "$(lb_get $PORT_TS | jq -r '.serviceArguments.fc_effective | "\(.tenant_max_share_pct) \(.source.tenant_max_share_pct)"')"
+chk TS8 "tenant_share decisions moved by one"      1 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((ts0+1)) 25 "$(svc $PORT_TS)" 'reason="tenant_share"') - ts0 ))"
+for n in capTSa1 capTSa2 capTSb1 capTSb2; do release $n; done; wait
+chk TS9 "the four held answered 200"               4 "$(count_codes "$DTS" 200)"
+chk TS10 "no tenant holds anything now"            0 "$(wait_lb_field $PORT_TS '(.serviceArguments.fc_effective.tenants_active // 0)' 0 10)"
+
+echo ""
+echo "TW: on the :$PORT_TQ queue (ceiling $FC_TQ_MAX, a unit and two waiters a tenant) A's waiters hold nobody up"
+DTW=$(mktemp -d)
+tq0=$(decisions $PORT_TQ queued)
+hold_key "$DTW" a1 capTWa1 "$TQ_URL" "$KEY_A"
+chk TW1 "A's first executes"                        1 "$(wait_receipts capTWa1 1 15)"
+hold_key "$DTW" a2 capTWa2 "$TQ_URL" "$KEY_A"; sleep 0.3
+hold_key "$DTW" a3 capTWa3 "$TQ_URL" "$KEY_A"
+chk TW2 "A's next two wait"                         2 "$(wait_effective_queued $PORT_TQ 2 10)"
+chk TW3 "A's fourth is refused at its queue share"  429 "$(send_key "$DTW" a4 capTWa4 "$TQ_URL" "$KEY_A")"
+chk_has TW4 "naming the tenant share"               admission_tenant_share "$(cat "$DTW/a4.body" 2>/dev/null)"
+# Both waiters are A's, and A is at its share: B takes the free unit at once
+# instead of waiting behind them.
+hold_key "$DTW" b1 capTWb1 "$TQ_URL" "$KEY_B"
+chk TW5 "B is admitted past A's waiters"            1 "$(wait_receipts capTWb1 1 8)"
+hold_key "$DTW" c1 capTWc1 "$TQ_URL" "$KEY_C"
+chk TW6 "the ceiling full, C waits behind A's two"  3 "$(wait_effective_queued $PORT_TQ 3 10)"
+# B's unit comes back: A heads the queue but is at its share, so the turn is C's.
+release capTWb1
+chk TW7 "the freed unit went to C"                  1 "$(wait_receipts capTWc1 1 10)"
+chk TW8 "not to A's head waiter"                    0 "$(receipts capTWa2)"
+# A's own unit comes back: now A's head waiter runs, in arrival order.
+release capTWa1
+chk TW9 "A's own unit went to A's head waiter"      1 "$(wait_receipts capTWa2 1 10)"
+chk TW10 "A's second still waits"                   0 "$(receipts capTWa3)"
+release capTWc1
+release capTWa2
+chk TW11 "then A's second"                          1 "$(wait_receipts capTWa3 1 10)"
+release capTWa3; wait
+chk TW12 "the five admitted answered 200"           5 "$(count_codes "$DTW" 200)"
+chk TW13 "the queue is empty"                       0 "$(wait_effective_queued $PORT_TQ 0 10)"
+chk TW14 "no tenant holds anything now"             0 "$(wait_lb_field $PORT_TQ '(.serviceArguments.fc_effective.tenants_active // 0)' 0 10)"
+# TW5 alone cannot tell "admitted at once" from "parked, then woken": the
+# 1 Hz pass wakes the first waiter that can run, so a B parked behind A's
+# waiters still reaches the backend within a second. The decisions can: only
+# A's two and C ever waited. Read once the count arrives, and again one
+# republish later so a fourth has had its chance to show.
+wait_metric_ge loxilb_ai_admission_decisions_total $((tq0 + 3)) 25 "$(svc $PORT_TQ)" 'reason="queued"' >/dev/null
+sleep 11
+tq1=$(decisions $PORT_TQ queued)
+chk TW15 "only A's two and C ever waited"           3 "$( [ "$tq1" -ge 0 ] 2>/dev/null && echo $((tq1 - tq0)) || echo "$tq1")"
+
 # ── H: observe mode ─────────────────────────────────────────────────────────
 echo ""
 echo "H: the same load in observe mode is admitted and only counted"
@@ -831,15 +919,20 @@ fi
 
 # ── VA: the process accept valve bites, and says so ─────────────────────────
 echo ""
-echo "VA: a gateway with a connection-context bound of 12 holds accepts back past it"
+# Every listener holds a connection context of its own, so the bound is set
+# one above the listeners this scenario serves: the first held request takes
+# the last context and the rest wait in the listen backlog. A fixed bound
+# would stop meaning that the moment the scenario gained a rule.
+VA_BOUND=$(( $($hexec l3h1 curl -s -m 8 "$API/config/loadbalancer/all" | jq '.lbAttr | length' 2>/dev/null || echo 0) + 1 ))
+echo "VA: a gateway with a connection-context bound of $VA_BOUND (its listeners + 1) holds accepts back past it"
 DVA=$(mktemp -d)
-if GW_EXTRA_ENV="LLB_PD_MAX_TOTAL_INFLIGHT=12" gw_restart enforce; then
-  chk VA1 "the bound is exported" 12 "$(wait_metric loxilb_proxy_accept_bound 12 25)"
+if GW_EXTRA_ENV="LLB_PD_MAX_TOTAL_INFLIGHT=$VA_BOUND" gw_restart enforce; then
+  chk VA1 "the bound is exported" $VA_BOUND "$(wait_metric loxilb_proxy_accept_bound $VA_BOUND 25)"
   hold_burst "$DVA" 10 capVA "http://$VIP:$PORT_WU/v1/chat/completions"
   chk_ge VA2 "accepts were held back at the bound" 1 "$(wait_metric_ge loxilb_proxy_accept_blocked_total 1 25)"
   # Every held request is a client and a backend context; the valve holds
   # accepts back once the count reaches the bound.
-  chk_ge VA3 "connection contexts held are counted, up to the bound" 12 "$(wait_metric_ge loxilb_proxy_context_inflight 12 25)"
+  chk_ge VA3 "connection contexts held are counted, up to the bound" $VA_BOUND "$(wait_metric_ge loxilb_proxy_context_inflight $VA_BOUND 25)"
   # At the bound the valve pauses the listener instead of leaving its backlog
   # to be reported on every poll round (which counted hundreds of thousands of
   # hold-backs a second and spun a core). The window spans two republishes of
