@@ -163,6 +163,10 @@ func TestKvBridgeStrictRefusalsPrecedeTheTokenizer(t *testing.T) {
 	if _, rc := kvBridgeTokenizeChat(52, b.BindingGen, plainBody, model, 16); rc != KvTokErrTokenizer {
 		t.Fatalf("control: rc %d, want the tokenizer fault %d (the body must reach the tokenizer)", rc, KvTokErrTokenizer)
 	}
+	const onePart = `{"messages":[{"role":"user","content":[{"type":"text","text":"ab"}]}]}`
+	if _, rc := kvBridgeTokenizeChat(52, b.BindingGen, onePart, model, 16); rc != KvTokErrTokenizer {
+		t.Fatalf("one text part: rc %d, want the tokenizer fault %d (a single part renders the same everywhere)", rc, KvTokErrTokenizer)
+	}
 	if _, rc := kvBridgeTokenize(52, b.BindingGen, "ab", model, 16); rc != KvTokErrTokenizer {
 		t.Fatalf("completions control: rc %d, want the tokenizer fault %d", rc, KvTokErrTokenizer)
 	}
@@ -171,6 +175,7 @@ func TestKvBridgeStrictRefusalsPrecedeTheTokenizer(t *testing.T) {
 		{"NUL in content", `{"messages":[{"role":"user","content":"a\u0000b"}]}`},
 		{"developer role", `{"messages":[{"role":"developer","content":"be brief"},{"role":"user","content":"ab"}]}`},
 		{"message-level tools", `{"messages":[{"role":"system","content":"s","tools":[{"type":"function"}]},{"role":"user","content":"ab"}]}`},
+		{"two text parts", `{"messages":[{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}]}`},
 	}
 	for _, c := range chat {
 		if _, rc := kvBridgeTokenizeChat(52, b.BindingGen, c.body, model, 16); rc != KvTokErrUnsupported {
