@@ -32,6 +32,16 @@ if tpl_sha != model["template_sha256"]:
     sys.exit(f"banked template {tpl_path} digest {tpl_sha} != goldens' "
              f"{model['template_sha256']} — regenerate the goldens first")
 
+# At least one fixture must open without a system message: a template that
+# injects a default system prompt renders that request differently from an
+# engine renderer that does not (mistral_common), and only such a fixture lets
+# the attestation probe see it.
+if not any(c["messages"] and c["messages"][0]["role"] != "system"
+           for c in model["cases"].values()):
+    sys.exit(f"{slug}: every case opens with a system message — the fixture "
+             "set could not detect an engine that skips the template's "
+             "default system prompt")
+
 os.makedirs(out_dir, exist_ok=True)
 for name, case in sorted(model["cases"].items()):
     if not case["encode_rendered_matches_templated"]:

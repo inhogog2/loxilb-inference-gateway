@@ -304,6 +304,40 @@ func TestKvExactAdmissionHarmonyChatRefusal(t *testing.T) {
 	}
 }
 
+// TestKvExactAdmissionMistralCommonChatRefusal: vLLM renders mistral3 chat
+// with mistral_common (Ministral-3 measured: no default system prompt, so a
+// user-first request is 10 ids at the engine against 533 from the template)
+// — admission refuses the strict chat surface on vLLM, the default engine
+// included. Completions stay admitted, and the other engines are untouched.
+func TestKvExactAdmissionMistralCommonChatRefusal(t *testing.T) {
+	p := testProfile([]string{"chat", "completions"}, KvAliasPolicyBaseModelOnly, nil)
+	p.BaseModel = "mistralai/Ministral-3-3B-Instruct-2512"
+	p.ModelType = kvModelTypeMistral3
+	deps := admissionDeps(func(d *kvExactAdmissionDeps) {
+		d.profileByID = func(id string) (*ModelPromptProfile, uint64, bool) { return p, 7, id == p.ProfileID }
+	})
+	for _, eng := range []string{"", "vllm"} {
+		for _, mode := range []string{"", KvExactApiChat, KvExactApiBoth} {
+			_, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, mode, p.ProfileID, deps)
+			if err == nil || !strings.Contains(err.Error(), "mistral_common") {
+				t.Fatalf("engine %q api %q: mistral3 strict chat must be refused, got %v", eng, mode, err)
+			}
+			if err != nil && strings.Contains(err.Error(), "sglang") {
+				t.Fatalf("engine %q: the refusal must not point at an engine no leg has measured: %v", eng, err)
+			}
+		}
+		if _, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, KvExactApiCompletions, p.ProfileID, deps); err != nil {
+			t.Fatalf("engine %q: mistral3 completions must stay admitted: %v", eng, err)
+		}
+	}
+	for _, eng := range []string{"sglang", "trtllm"} {
+		res, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, "", p.ProfileID, deps)
+		if err != nil || !res.APIChat {
+			t.Fatalf("engine %s: mistral3 chat is not refused outside vLLM, got %+v %v", eng, res, err)
+		}
+	}
+}
+
 // TestKvExactAdmissionFailClosedWithoutContractSource: strict admission with
 // no engine-contract registry registered must refuse — never compose a
 // binding over an unproven contract identity.
