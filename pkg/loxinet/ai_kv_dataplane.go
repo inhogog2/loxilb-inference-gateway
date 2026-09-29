@@ -510,7 +510,11 @@ func kvBridgeTokenizeChat(svcID, bindingGen uint32, body, model string, max int)
 			}
 		}
 	}
-	rendered, err := kvRenderChatTemplateReq(model, msgs, kvChatClock)
+	// One instant for every render of this request: a date-printing template
+	// rendered twice across midnight must not look shape-dependent.
+	now := kvChatClock()
+	clock := func() time.Time { return now }
+	rendered, err := kvRenderChatTemplateReq(model, msgs, clock)
 	if err != nil {
 		if !strict {
 			return nil, KvTokErrRequest
@@ -523,6 +527,11 @@ func kvBridgeTokenizeChat(svcID, bindingGen uint32, body, model string, max int)
 		}
 		// The validated template refused these messages: request-class,
 		// never readiness-affecting (I-12).
+		return nil, KvTokErrUnsupported
+	}
+	if strict && kvChatContentShapeDependent(model, body, msgs, rendered, clock) {
+		// The engine's prompt depends on the content shape it hands the
+		// template: request-class, like the refusals above.
 		return nil, KvTokErrUnsupported
 	}
 	if rc := kvBridgeNulGuard(rendered, strict); rc != 0 {

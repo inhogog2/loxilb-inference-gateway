@@ -75,11 +75,30 @@ func kvJinjaChatContext(messages []kvChatMessage, pol KvRenderPolicy) map[string
 // render pinned to one instant (the attestor re-deriving a probe fixture
 // at the instant its oracle rendered) never touches the shared kvChatClock.
 func kvJinjaChatContextAt(messages []kvChatMessage, pol KvRenderPolicy, clock func() time.Time) map[string]any {
+	return kvJinjaChatContextShaped(messages, pol, clock, nil)
+}
+
+// kvJinjaChatContextShaped builds the context with each content as the string
+// itself, or — where parts[i] >= 0 — as a list of that many text parts, the
+// shape an engine hands a template it treats as "openai" content format:
+// 0 is the empty list, 1 is [{"type": "text", "text": content}] (strict
+// requests never carry more than one text part). nil parts = all strings.
+func kvJinjaChatContextShaped(messages []kvChatMessage, pol KvRenderPolicy, clock func() time.Time, parts []int) map[string]any {
 	msgs := make([]any, 0, len(messages))
-	for _, m := range messages {
+	for i, m := range messages {
 		d := kvJjNewDict()
 		d.set("role", m.Role)
-		d.set("content", m.Content)
+		switch {
+		case parts == nil || parts[i] < 0:
+			d.set("content", m.Content)
+		case parts[i] == 0:
+			d.set("content", []any{})
+		default:
+			part := kvJjNewDict()
+			part.set("type", "text")
+			part.set("text", m.Content)
+			d.set("content", []any{part})
+		}
 		msgs = append(msgs, d)
 	}
 	ctx := map[string]any{
@@ -145,6 +164,10 @@ var errKvNoChatRenderer = errors.New("kv-chat: no validated chat renderer for th
 // render: a request-class failure that must never fence the rule, or any
 // client could degrade it at will.
 func kvRenderChatTemplateReq(modelName string, messages []kvChatMessage, clock func() time.Time) (string, error) {
+	return kvRenderChatTemplateShaped(modelName, messages, clock, nil)
+}
+
+func kvRenderChatTemplateShaped(modelName string, messages []kvChatMessage, clock func() time.Time, parts []int) (string, error) {
 	e, ok := kvProfileByModel(modelName)
 	if !ok || !kvProfileDeclaresChat(&e.Profile) {
 		return "", errKvNoChatRenderer
@@ -153,7 +176,7 @@ func kvRenderChatTemplateReq(modelName string, messages []kvChatMessage, clock f
 	if err != nil {
 		return "", errKvNoChatRenderer
 	}
-	out, err := tpl.Render(kvJinjaChatContextAt(messages, e.Profile.RenderPolicy, clock))
+	out, err := tpl.Render(kvJinjaChatContextShaped(messages, e.Profile.RenderPolicy, clock, parts))
 	if err != nil {
 		return "", err
 	}
@@ -161,6 +184,121 @@ func kvRenderChatTemplateReq(modelName string, messages []kvChatMessage, clock f
 		return "", errors.New("kv-chat: template rendered no text for these messages")
 	}
 	return out, nil
+}
+
+// kvChatContentShapeDependent reports whether the engine's prompt for this
+// request depends on the content shape the engine hands the template, which
+// the gateway cannot know: it parses string and list content into the same
+// string. rendered is the gateway's string-shape render, taken at the instant
+// clock returns. The engines differ:
+//   - vLLM v0.28.0 gives a template it detects as "openai" content format
+//     every content as a list — a string as one text part, null as [] —
+//     (chat_utils._parse_chat_message_content); other templates get strings.
+//   - SGLang v0.5.18 keeps a string a string, but for a template it detects
+//     as "openai" (a content loop, or any mention of image, audio, video or
+//     vision) keeps a client's list a list.
+//
+// gemma-4, for one, prints a system text part as `text | trim + ' '` and a
+// system string as `content | trim`. Each shape an engine may produce is
+// rendered; a different text, or a render the template refuses, is a
+// dependence and a strict rule refuses the request. Templates neither engine
+// treats as "openai" format see strings everywhere and pay no second render.
+func kvChatContentShapeDependent(modelName, body string, messages []kvChatMessage, rendered string, clock func() time.Time) bool {
+	e, ok := kvProfileByModel(modelName)
+	if !ok {
+		return false
+	}
+	tpl, err := e.chatTemplate()
+	if err != nil {
+		return false
+	}
+	contentLoop := tpl.IteratesContent()
+	openaiSGLang := contentLoop || kvTemplateMentionsMedia(string(e.TemplateBytes))
+	if !openaiSGLang {
+		return false
+	}
+	client := kvChatClientContentShapes(body)
+	if len(client) != len(messages) {
+		return true
+	}
+	differs := func(parts []int) bool {
+		out, err := kvRenderChatTemplateShaped(modelName, messages, clock, parts)
+		return err != nil || out != rendered
+	}
+	if contentLoop {
+		vllm := make([]int, len(client))
+		for i, c := range client {
+			switch c {
+			case kvChatContentString:
+				vllm[i] = 1
+			case kvChatContentNull:
+				vllm[i] = 0
+			default:
+				vllm[i] = c
+			}
+		}
+		if differs(vllm) {
+			return true
+		}
+	}
+	sglang := make([]int, len(client))
+	anyList := false
+	for i, c := range client {
+		sglang[i] = -1
+		if c >= 0 {
+			sglang[i], anyList = c, true
+		}
+	}
+	return anyList && differs(sglang)
+}
+
+// Client content shapes: a list reports its text-part count (>= 0).
+const (
+	kvChatContentString = -1
+	kvChatContentNull   = -2
+)
+
+// kvChatClientContentShapes returns, per message of body, whether the client
+// sent the content as a string, as null or absent, or as a list of n text
+// parts. nil when the body does not decode.
+func kvChatClientContentShapes(body string) []int {
+	_, msgs, ok := kvChatDecodeExact(body)
+	if !ok {
+		return nil
+	}
+	out := make([]int, len(msgs))
+	for i, m := range msgs {
+		raw := m["content"]
+		switch {
+		case !kvJSONPresent(raw):
+			out[i] = kvChatContentNull
+		case raw[0] == '[':
+			var parts []map[string]json.RawMessage
+			_ = json.Unmarshal(raw, &parts)
+			n := 0
+			for _, p := range parts {
+				var typ string
+				if json.Unmarshal(p["type"], &typ) == nil && typ == "text" {
+					n++
+				}
+			}
+			out[i] = n
+		default:
+			out[i] = kvChatContentString
+		}
+	}
+	return out
+}
+
+// kvTemplateMentionsMedia is SGLang v0.5.18's shortcut to the "openai"
+// content format: the words appear anywhere in the template source.
+func kvTemplateMentionsMedia(src string) bool {
+	for _, w := range []string{"image", "audio", "video", "vision"} {
+		if strings.Contains(src, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // kvModelTypeGptOss is the config.json model_type the engines serve through
@@ -352,8 +490,11 @@ func kvExtractMessageContent(raw json.RawMessage) (string, bool) {
 // the profile's addGenerationPrompt; continue_final_message and
 // add_special_tokens unless false; documents, reasoning_effort, a
 // per-request chat_template, truncate_prompt_tokens and
-// prompt_token_ids(_b64) whenever set; and a message with more than one text
-// part, whose join the engines disagree on. A field one engine ignores is still
+// prompt_token_ids(_b64) whenever set; a message with more than one text
+// part, whose join the engines disagree on; and a conversation that ends with
+// an assistant turn, which SGLang v0.5.18 re-renders as a user turn
+// (_handle_last_assistant_message) while vLLM and TRT-LLM keep it as the
+// assistant's. A field one engine ignores is still
 // refused: the gateway does not know which engine serves the rule, and a
 // refusal only costs scoring, while acceptance would mis-hash.
 func kvChatExcludedFeature(body string, addGenerationPrompt bool) string {
@@ -422,6 +563,12 @@ func kvChatExcludedFeature(body string, addGenerationPrompt bool) string {
 			if texts > 1 {
 				return "multi_text_part"
 			}
+		}
+	}
+	if n := len(msgs); n > 0 {
+		var role string
+		if json.Unmarshal(msgs[n-1]["role"], &role) == nil && role == "assistant" {
+			return "trailing_assistant"
 		}
 	}
 	return ""

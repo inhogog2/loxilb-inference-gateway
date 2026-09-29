@@ -407,7 +407,9 @@ func TestKvChatExcludedFeature(t *testing.T) {
 		// template's own concatenation): one part is safe, two are not.
 		{"two_text_parts", `{"messages":[{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}]}`, "multi_text_part"},
 		{"two_text_parts_later_message", `{"messages":[{"role":"system","content":"s"},{"role":"user","content":[{"type":"text","text":"a"}]},{"role":"assistant","content":"x"},{"role":"user","content":[{"type":"text","text":"b"},{"type":"text","text":"c"}]}]}`, "multi_text_part"},
-		{"one_text_part_per_message_ok", `{"messages":[{"role":"user","content":[{"type":"text","text":"a"}]},{"role":"assistant","content":[{"type":"text","text":"b"}]}]}`, ""},
+		{"one_text_part_per_message_ok", `{"messages":[{"role":"user","content":[{"type":"text","text":"a"}]},{"role":"assistant","content":[{"type":"text","text":"b"}]},{"role":"user","content":[{"type":"text","text":"c"}]}]}`, ""},
+		// SGLang renders a closing assistant turn as a user turn.
+		{"trailing_assistant", `{"messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b"}]}`, "trailing_assistant"},
 		{"null_tools_ok", `{"messages":[],"tools":null}`, ""},
 		// Render-affecting request fields (engine request -> template vars).
 		{"gen_prompt_matches_profile", `{"messages":[],"add_generation_prompt":true}`, ""},
