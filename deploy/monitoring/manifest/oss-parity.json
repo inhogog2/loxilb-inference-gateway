@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-09-28T23:41:51+00:00",
-  "source_revision": "dd717f7043f1111699c7a512679c98ace7f50464",
+  "generated_at": "2026-09-29T01:22:36+00:00",
+  "source_revision": "fea2b4055828f6ace40a61171ea0300ec24777b3",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 286,
+  "gateway_families": 287,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 251,
+  "absent": 252,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -747,6 +747,20 @@
   },
   {
    "name": "loxilb_ai_admission_queued",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": [
+     "pool",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_admission_tenants_active",
    "owner": "loxilb",
    "class": "default",
    "parity": "absent",

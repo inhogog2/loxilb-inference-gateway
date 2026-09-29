@@ -4792,6 +4792,14 @@ func init() {
                       ],
                       "type": "string"
                     },
+                    "tenant_max_share_pct": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
                     "ttft_target_ms": {
                       "enum": [
                         "rule",
@@ -4813,6 +4821,16 @@ func init() {
                 },
                 "telemetry_stale_ms": {
                   "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "tenant_max_share_pct": {
+                  "description": "The tenant share in force, in percent; 0 or 100 is no share.",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "tenants_active": {
+                  "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
                   "format": "int32",
                   "type": "integer"
                 },
@@ -4894,6 +4912,15 @@ func init() {
               "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
               "format": "int32",
               "maximum": 3600000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
+            "fc_tenant_max_share_pct": {
+              "default": 0,
+              "description": "The most of the service ceiling in force, and of the queue depth, one tenant may hold, in percent (rounded up, at least one). A tenant is the tenant id the request's credential resolved to; requests without one are one tenant. A tenant at its share waits for one of its own units when the pool queues (within its share of the queue), or is refused with 429 admission_tenant_share, while other tenants still admit; waiters held back by their share never make another tenant wait. Inert without fc_max_outstanding. 100 is no share; 0 or omitted leaves the process default (LLB_FC_TENANT_MAX_SHARE_PCT, else no share) in force. Replace and null semantics as fc_max_outstanding.",
+              "format": "int32",
+              "maximum": 100,
               "minimum": 0,
               "type": "integer",
               "x-nullable": false
@@ -38809,6 +38836,14 @@ func init() {
                         "default"
                       ]
                     },
+                    "tenant_max_share_pct": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
                     "ttft_target_ms": {
                       "type": "string",
                       "enum": [
@@ -38829,6 +38864,16 @@ func init() {
                 },
                 "telemetry_stale_ms": {
                   "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "tenant_max_share_pct": {
+                  "description": "The tenant share in force, in percent; 0 or 100 is no share.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "tenants_active": {
+                  "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
                   "type": "integer",
                   "format": "int32"
                 },
@@ -38910,6 +38955,15 @@ func init() {
               "format": "int32",
               "default": 0,
               "maximum": 3600000,
+              "minimum": 0,
+              "x-nullable": false
+            },
+            "fc_tenant_max_share_pct": {
+              "description": "The most of the service ceiling in force, and of the queue depth, one tenant may hold, in percent (rounded up, at least one). A tenant is the tenant id the request's credential resolved to; requests without one are one tenant. A tenant at its share waits for one of its own units when the pool queues (within its share of the queue), or is refused with 429 admission_tenant_share, while other tenants still admit; waiters held back by their share never make another tenant wait. Inert without fc_max_outstanding. 100 is no share; 0 or omitted leaves the process default (LLB_FC_TENANT_MAX_SHARE_PCT, else no share) in force. Replace and null semantics as fc_max_outstanding.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 100,
               "minimum": 0,
               "x-nullable": false
             },
@@ -39803,6 +39857,14 @@ func init() {
                     "default"
                   ]
                 },
+                "tenant_max_share_pct": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
                 "ttft_target_ms": {
                   "type": "string",
                   "enum": [
@@ -39823,6 +39885,16 @@ func init() {
             },
             "telemetry_stale_ms": {
               "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "tenant_max_share_pct": {
+              "description": "The tenant share in force, in percent; 0 or 100 is no share.",
+              "type": "integer",
+              "format": "int32"
+            },
+            "tenants_active": {
+              "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
               "type": "integer",
               "format": "int32"
             },
@@ -39904,6 +39976,15 @@ func init() {
           "format": "int32",
           "default": 0,
           "maximum": 3600000,
+          "minimum": 0,
+          "x-nullable": false
+        },
+        "fc_tenant_max_share_pct": {
+          "description": "The most of the service ceiling in force, and of the queue depth, one tenant may hold, in percent (rounded up, at least one). A tenant is the tenant id the request's credential resolved to; requests without one are one tenant. A tenant at its share waits for one of its own units when the pool queues (within its share of the queue), or is refused with 429 admission_tenant_share, while other tenants still admit; waiters held back by their share never make another tenant wait. Inert without fc_max_outstanding. 100 is no share; 0 or omitted leaves the process default (LLB_FC_TENANT_MAX_SHARE_PCT, else no share) in force. Replace and null semantics as fc_max_outstanding.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100,
           "minimum": 0,
           "x-nullable": false
         },
@@ -40536,6 +40617,14 @@ func init() {
                 "default"
               ]
             },
+            "tenant_max_share_pct": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
             "ttft_target_ms": {
               "type": "string",
               "enum": [
@@ -40556,6 +40645,16 @@ func init() {
         },
         "telemetry_stale_ms": {
           "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "tenant_max_share_pct": {
+          "description": "The tenant share in force, in percent; 0 or 100 is no share.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "tenants_active": {
+          "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
           "type": "integer",
           "format": "int32"
         },
@@ -40644,6 +40743,14 @@ func init() {
           ]
         },
         "telemetry_stale_ms": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "tenant_max_share_pct": {
           "type": "string",
           "enum": [
             "rule",
