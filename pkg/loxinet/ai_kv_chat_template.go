@@ -327,7 +327,8 @@ func kvExtractMessageContent(raw json.RawMessage) (string, bool) {
 // the profile's addGenerationPrompt; continue_final_message and
 // add_special_tokens unless false; documents, reasoning_effort, a
 // per-request chat_template, truncate_prompt_tokens and
-// prompt_token_ids(_b64) whenever set. A field one engine ignores is still
+// prompt_token_ids(_b64) whenever set; and a message with more than one text
+// part, whose join the engines disagree on. A field one engine ignores is still
 // refused: the gateway does not know which engine serves the rule, and a
 // refusal only costs scoring, while acceptance would mis-hash.
 func kvChatExcludedFeature(body string, addGenerationPrompt bool) string {
@@ -378,11 +379,23 @@ func kvChatExcludedFeature(body string, addGenerationPrompt bool) string {
 	for _, m := range msgs {
 		var parts []map[string]json.RawMessage
 		if err := json.Unmarshal(m["content"], &parts); err == nil {
+			texts := 0
 			for _, p := range parts {
 				var typ string
 				if json.Unmarshal(p["type"], &typ) == nil && typ != "" && typ != "text" {
 					return "multimodal"
 				}
+				if typ == "text" {
+					texts++
+				}
+			}
+			// The engines join several text parts differently: vLLM's
+			// string content format uses "\n", SGLang v0.5.18 uses " ", and
+			// vLLM hands templates that iterate content (gemma-3) the list
+			// itself, which they concatenate trimmed. One part or none
+			// renders the same everywhere.
+			if texts > 1 {
+				return "multi_text_part"
 			}
 		}
 	}
