@@ -662,7 +662,7 @@ var (
 	proxyAcceptBlockedTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "loxilb_proxy_accept_blocked_total",
-			Help: "Times the process valve declined to accept because loxilb_proxy_context_inflight had reached loxilb_proxy_accept_bound; the connection waits in the listen backlog. Counted on every poll of the listener while at the bound, so it measures how long the node sat there, not how many connections waited. Any sustained rate is the node at its connection footprint bound.",
+			Help: "Times the process valve paused accepting because loxilb_proxy_context_inflight had reached loxilb_proxy_accept_bound; connections then wait in the listen backlog until a context is released and the listener is re-armed. One count per pause, not per connection: a steady rate is the node reaching its connection footprint bound again and again, and a node that stays at the bound shows as loxilb_proxy_context_inflight at loxilb_proxy_accept_bound.",
 		},
 	)
 	proxyAcceptBound = promauto.NewGauge(

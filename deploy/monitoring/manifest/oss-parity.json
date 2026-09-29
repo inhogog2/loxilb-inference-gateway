@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-09-28T13:01:07+00:00",
-  "source_revision": "a1f8a6365c8558a8185c82f0254220c097c062df",
+  "generated_at": "2026-09-28T23:41:51+00:00",
+  "source_revision": "dd717f7043f1111699c7a512679c98ace7f50464",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },

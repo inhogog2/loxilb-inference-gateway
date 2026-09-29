@@ -840,7 +840,18 @@ if GW_EXTRA_ENV="LLB_PD_MAX_TOTAL_INFLIGHT=12" gw_restart enforce; then
   # Every held request is a client and a backend context; the valve holds
   # accepts back once the count reaches the bound.
   chk_ge VA3 "connection contexts held are counted, up to the bound" 12 "$(wait_metric_ge loxilb_proxy_context_inflight 12 25)"
-  release capVA; release_all
+  # At the bound the valve pauses the listener instead of leaving its backlog
+  # to be reported on every poll round (which counted hundreds of thousands of
+  # hold-backs a second and spun a core). The window spans two republishes of
+  # the collector, so a counter that moves is seen moving.
+  blk0=$(msum loxilb_proxy_accept_blocked_total); sleep 22
+  chk_le VA4 "the listener is paused at the bound, not polled (hold-backs in 22 s)" 100 \
+    "$(awk -v a="$blk0" -v b="$(msum loxilb_proxy_accept_blocked_total)" 'BEGIN { if (a + 0 != a || b + 0 != b) print "unreadable"; else printf "%.0f", b - a }')"
+  # The room the released requests leave re-arms the listener: the requests
+  # still waiting in its backlog are accepted and answered as well.
+  release capVA
+  chk VA5 "every held request is answered once released" 10 "$(wait_codes "$DVA" 200 10 30)"
+  release_all
 else
   echo "  [FAIL] VA0 the gateway did not come back with the valve bound"; nfail=$((nfail+1)); code=1
 fi

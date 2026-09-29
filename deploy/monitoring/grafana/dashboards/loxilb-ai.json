@@ -2763,7 +2763,7 @@
           "id": 63,
           "type": "timeseries",
           "title": "Accept valve: contexts vs bound",
-          "description": "Connection contexts the proxy holds (client and backend legs alike) against the process accept valve's bound (LLB_PD_MAX_TOTAL_INFLIGHT; hidden when 0, unbounded; the contexts are counted only while the valve is on, so both read 0 without it), and how often per second it declined an accept (counted on every poll of the listener at the bound, so a rate of time spent there, not of connections). Declined connections wait in the listen backlog: a steady rate means the node is at its connection footprint bound, before any pool's admission gate sees the request.",
+          "description": "Connection contexts the proxy holds (client and backend legs alike) against the process accept valve's bound (LLB_PD_MAX_TOTAL_INFLIGHT; hidden when 0, unbounded; the contexts are counted only while the valve is on, so both read 0 without it), and how often per second it paused accepting (one per pause at the bound; the release of a context re-arms the listener). Held-back connections wait in the listen backlog: contexts at the bound, or a steady pause rate, mean the node is at its connection footprint bound, before any pool's admission gate sees the request.",
           "gridPos": {
             "h": 7,
             "w": 12,
@@ -2788,7 +2788,7 @@
             {
               "refId": "C",
               "expr": "sum(rate(loxilb_proxy_accept_blocked_total{instance=~\"$instance\"}[$__rate_interval]))",
-              "legendFormat": "held back/s"
+              "legendFormat": "pauses/s"
             }
           ],
           "options": {

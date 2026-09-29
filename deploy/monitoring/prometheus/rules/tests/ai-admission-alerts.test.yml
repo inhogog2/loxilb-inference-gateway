@@ -27,8 +27,10 @@ tests:
         values: '0x60'
       - series: 'loxilb_ai_admission_adapt_state{instance="gw",service="10.0.0.1:80",pool="p",state="frozen"}'
         values: '0x60'
-      - series: 'loxilb_proxy_accept_blocked_total{instance="gw"}'
-        values: '0x60'
+      - series: 'loxilb_proxy_context_inflight{instance="gw"}'
+        values: '11x60'
+      - series: 'loxilb_proxy_accept_bound{instance="gw"}'
+        values: '12x60'
       - series: 'loxilb_ai_admission_anomalies_total{instance="gw",kind="underflow"}'
         values: '0x60'
     alert_rule_test:
@@ -130,8 +132,10 @@ tests:
   # ── accept valve holding connections back ────────────────────────────────
   - interval: 30s
     input_series:
-      - series: 'loxilb_proxy_accept_blocked_total{instance="gw"}'
-        values: '0+5x60'
+      - series: 'loxilb_proxy_context_inflight{instance="gw"}'
+        values: '12x60'
+      - series: 'loxilb_proxy_accept_bound{instance="gw"}'
+        values: '12x60'
     alert_rule_test:
       - alertname: LoxilbProxyAcceptValveBlocking
         eval_time: 20m
@@ -139,9 +143,21 @@ tests:
           - exp_labels: { severity: warning, instance: gw }
             exp_annotations:
               summary: "loxilb holding new connections back at its context bound on gw"
-              description: "loxilb_proxy_context_inflight reached LLB_PD_MAX_TOTAL_INFLIGHT and accepts wait in the listen backlog, before any pool's admission gate. Raise the bound if memory allows, else add gateway instances."
+              description: "loxilb_proxy_context_inflight has held at LLB_PD_MAX_TOTAL_INFLIGHT for 5 minutes: the listeners are paused and new connections wait in the listen backlog, before any pool's admission gate. Raise the bound if memory allows, else add gateway instances."
               dashboard: "LoxiLB / AI Gateway"
               panel: "Accept valve: contexts vs bound"
+
+  # ── no bound: nothing is counted and nothing fires ──────────────────────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_proxy_context_inflight{instance="gw"}'
+        values: '0x60'
+      - series: 'loxilb_proxy_accept_bound{instance="gw"}'
+        values: '0x60'
+    alert_rule_test:
+      - alertname: LoxilbProxyAcceptValveBlocking
+        eval_time: 20m
+        exp_alerts: []
 
   # ── a bookkeeping anomaly ────────────────────────────────────────────────
   - interval: 30s
