@@ -3239,6 +3239,9 @@ func kvExactRuntimeValidate(engine string, kvExactMode uint8, modelName, apiMode
 		if wantChat && (deps.chatRenderer == nil || !deps.chatRenderer(modelName)) {
 			return res, fmt.Errorf("profile %q declares chat for model %q but no validated chat renderer is available — refusing rather than falling back to an untemplated hash", profileID, modelName)
 		}
+		if wantChat && !kvChatTemplateServesEngine(p, eng) {
+			return res, fmt.Errorf("profile %q (model_type %q) declares chat, but engine %q renders this model's chat with the Harmony encoder, not the chat template — a strict chat surface would hash a prompt the engine never builds; declare kvExactApiMode completions or serve it with sglang", profileID, p.ModelType, eng)
+		}
 		ref, err := deps.contractRef(eng)
 		if err != nil {
 			return res, fmt.Errorf("strict KV-exact rule requires a resolvable engine contract for %q: %w", eng, err)

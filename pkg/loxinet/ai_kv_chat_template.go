@@ -65,8 +65,15 @@ var kvChatClock = time.Now
 // passes special_tokens_map into apply_chat_template; a template
 // referencing a token the profile does not declare fails the render loudly
 // instead of rendering different bytes). strftime_now exists only under a
-// declared clock policy.
+// declared clock policy and reads kvChatClock.
 func kvJinjaChatContext(messages []kvChatMessage, pol KvRenderPolicy) map[string]any {
+	return kvJinjaChatContextAt(messages, pol, kvChatClock)
+}
+
+// kvJinjaChatContextAt is kvJinjaChatContext with an explicit clock, so a
+// render pinned to one instant (the attestor re-deriving a probe fixture
+// at the instant its oracle rendered) never touches the shared kvChatClock.
+func kvJinjaChatContextAt(messages []kvChatMessage, pol KvRenderPolicy, clock func() time.Time) map[string]any {
 	msgs := make([]any, 0, len(messages))
 	for _, m := range messages {
 		d := kvJjNewDict()
@@ -87,7 +94,7 @@ func kvJinjaChatContext(messages []kvChatMessage, pol KvRenderPolicy) map[string
 		ctx["eos_token"] = pol.EosToken
 	}
 	if pol.ClockPolicy == KvClockPolicyUTCDate {
-		ctx["strftime_now"] = kvJjStrftimeNow(func() time.Time { return kvChatClock().UTC() })
+		ctx["strftime_now"] = kvJjStrftimeNow(func() time.Time { return clock().UTC() })
 	}
 	return ctx
 }
@@ -114,6 +121,12 @@ func kvCheckClockPolicy(tpl *kvJinjaTemplate, pol *KvRenderPolicy) error {
 // (it would silently mis-hash); it should fall back rather than guess a
 // template.
 func kvRenderChatTemplate(modelName string, messages []kvChatMessage) (string, bool) {
+	return kvRenderChatTemplateAt(modelName, messages, kvChatClock)
+}
+
+// kvRenderChatTemplateAt is kvRenderChatTemplate with an explicit clock for
+// strftime_now (only a clock-declaring profile's template reads it).
+func kvRenderChatTemplateAt(modelName string, messages []kvChatMessage, clock func() time.Time) (string, bool) {
 	e, ok := kvProfileByModel(modelName)
 	if !ok || !kvProfileDeclaresChat(&e.Profile) {
 		return "", false
@@ -122,11 +135,26 @@ func kvRenderChatTemplate(modelName string, messages []kvChatMessage) (string, b
 	if err != nil {
 		return "", false
 	}
-	out, err := tpl.Render(kvJinjaChatContext(messages, e.Profile.RenderPolicy))
+	out, err := tpl.Render(kvJinjaChatContextAt(messages, e.Profile.RenderPolicy, clock))
 	if err != nil || out == "" {
 		return "", false
 	}
 	return out, true
+}
+
+// kvModelTypeGptOss is the config.json model_type the engines serve through
+// the Harmony encoder (vLLM v0.28.0 render_chat, TRT-LLM 1.3.0rc24
+// openai_chat) rather than the chat template. SGLang v0.5.18 renders its chat
+// with the template.
+const kvModelTypeGptOss = "gpt_oss"
+
+// kvChatTemplateServesEngine reports whether engine renders the profile's
+// chat requests with the pinned chat template the gateway executes. When it
+// does not, the gateway's hash describes a prompt the engine never builds —
+// and the engine's /tokenize still uses the template, so the attestation
+// probe cannot notice.
+func kvChatTemplateServesEngine(p *ModelPromptProfile, engine string) bool {
+	return p.ModelType != kvModelTypeGptOss || engine == "sglang"
 }
 
 // kvProfileDeclaresChat reports whether a profile declares the chat surface.

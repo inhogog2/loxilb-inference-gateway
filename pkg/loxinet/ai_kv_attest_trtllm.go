@@ -231,7 +231,7 @@ func (a *kvTrtllmAttest) TokenParityProbe(ep KvAttestEndpoint, info kvAttestRule
 	if err != nil {
 		return KvAttestFinding{Reason: KvAttestReasonFixturesMissing, Detail: err.Error()}
 	}
-	if f := kvFixtureSurfaceCheck(fixtures, info); !f.OK {
+	if f := kvFixtureSetCheck(fixtures, info); !f.OK {
 		return f
 	}
 	for _, fx := range fixtures {
@@ -264,7 +264,14 @@ func kvTrtllmOracleFixtureCheck(fx kvProbeFixture, model string) KvAttestFinding
 			return KvAttestFinding{Reason: KvAttestReasonProbeSchema,
 				Detail: fmt.Sprintf("fixture %s: chat fixture carries no parseable messages", fx.Name)}
 		}
-		rendered, ok := kvRenderChatTemplate(model, msgs)
+		// A clock fixture's banked ids are the oracle's render at
+		// oracleNow; the oracle chain renders at that same instant.
+		clock := kvChatClock
+		if !fx.OracleNow.IsZero() {
+			at := fx.OracleNow
+			clock = func() time.Time { return at }
+		}
+		rendered, ok := kvRenderChatTemplateAt(model, msgs, clock)
 		if !ok || rendered == "" {
 			// Admission refuses a declared chat surface without a validated
 			// renderer; reaching this means the renderer registry no longer
