@@ -692,6 +692,7 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	tmpSvc.FcWarmupMs = int32(lb.Serv.FcWarmupMs)
 	tmpSvc.FcTtftTargetMs = int32(lb.Serv.FcTtftTargetMs)
 	tmpSvc.FcTenantMaxSharePct = int32(lb.Serv.FcTenantMaxSharePct)
+	tmpSvc.FcExposeHeaders = lb.Serv.FcExposeHeaders
 	if eff := lb.Serv.FcEffective; eff != nil {
 		tmpSvc.FcEffective = &models.LoadbalanceEntryServiceArgumentsFcEffective{
 			Mode:                    eff.Mode,
@@ -714,6 +715,7 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 			WarmingEndpoints:        int32(eff.WarmingEndpoints),
 			TenantMaxSharePct:       int32(eff.TenantMaxSharePct),
 			TenantsActive:           int32(eff.TenantsActive),
+			ExposeHeaders:           eff.ExposeHeaders,
 			Source: &models.LoadbalanceEntryServiceArgumentsFcEffectiveSource{
 				Mode:               eff.Source.Mode,
 				MaxOutstanding:     eff.Source.MaxOutstanding,
@@ -727,6 +729,7 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 				WarmupMs:           eff.Source.WarmupMs,
 				TtftTargetMs:       eff.Source.TtftTargetMs,
 				TenantMaxSharePct:  eff.Source.TenantMaxSharePct,
+				ExposeHeaders:      eff.Source.ExposeHeaders,
 			},
 		}
 	}

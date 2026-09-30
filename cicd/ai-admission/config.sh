@@ -25,6 +25,8 @@
 #   :2032  HTTP/1.1  -> l3ep1:8082, :8083   per-endpoint ceiling 8, 20 s warm-up
 #   :2033  HTTP/1.1  -> l3ep1:8080, :8081   API keys required, ceiling 4, tenant share 50 %
 #   :2034  HTTP/1.1  -> l3ep1:8080, :8081   API keys required, ceiling 2, tenant share 50 %, queue
+#   :2035  HTTP/1.1  -> l3ep1:8080, :8081   ceiling 4, admission headers on admitted responses
+#   :2036  HTTP/2    -> l3ep1:8090, :8091   ceiling 4, admission headers on admitted streams
 #   pg-ai-admission (docker bridge): the API-key store the two keyed pools need
 
 source ../common.sh

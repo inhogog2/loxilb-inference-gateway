@@ -738,6 +738,10 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	FcEpMaxInflight int32 `json:"fc_ep_max_inflight,omitempty"`
 
+	// on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.
+	// Enum: [on off inherit]
+	FcExposeHeaders string `json:"fc_expose_headers,omitempty"`
+
 	// The pool-wide ceiling on executing inference requests of the service's model pool. 0 or omitted leaves the process default (LLB_FC_MAX_OUTSTANDING) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.
 	// Maximum: 100000
 	// Minimum: 0
@@ -1032,6 +1036,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	}
 
 	if err := m.validateFcEpMaxInflight(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateFcExposeHeaders(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -1449,6 +1457,51 @@ func (m *LoadbalanceEntryServiceArguments) validateFcEpMaxInflight(formats strfm
 	}
 
 	if err := validate.MaximumInt("serviceArguments"+"."+"fc_ep_max_inflight", "body", int64(m.FcEpMaxInflight), 100000, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsTypeFcExposeHeadersPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["on","off","inherit"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsTypeFcExposeHeadersPropEnum = append(loadbalanceEntryServiceArgumentsTypeFcExposeHeadersPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcExposeHeadersOn captures enum value "on"
+	LoadbalanceEntryServiceArgumentsFcExposeHeadersOn string = "on"
+
+	// LoadbalanceEntryServiceArgumentsFcExposeHeadersOff captures enum value "off"
+	LoadbalanceEntryServiceArgumentsFcExposeHeadersOff string = "off"
+
+	// LoadbalanceEntryServiceArgumentsFcExposeHeadersInherit captures enum value "inherit"
+	LoadbalanceEntryServiceArgumentsFcExposeHeadersInherit string = "inherit"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArguments) validateFcExposeHeadersEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsTypeFcExposeHeadersPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcExposeHeaders(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcExposeHeaders) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateFcExposeHeadersEnum("serviceArguments"+"."+"fc_expose_headers", "body", m.FcExposeHeaders); err != nil {
 		return err
 	}
 
@@ -2418,6 +2471,10 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// Per-endpoint ceiling for the normal role; 0 is unlimited.
 	EpMaxInflight int32 `json:"ep_max_inflight,omitempty"`
 
+	// Whether admitted responses carry the admission headers.
+	// Enum: [on off]
+	ExposeHeaders string `json:"expose_headers,omitempty"`
+
 	// Inference requests executing on the pool right now.
 	Inflight int32 `json:"inflight,omitempty"`
 
@@ -2477,6 +2534,10 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) Validate(formats strfmt.Re
 	}
 
 	if err := m.validateAdaptive(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateExposeHeaders(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -2631,6 +2692,48 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateAdaptive(formats s
 	return nil
 }
 
+var loadbalanceEntryServiceArgumentsFcEffectiveTypeExposeHeadersPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["on","off"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveTypeExposeHeadersPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveTypeExposeHeadersPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveExposeHeadersOn captures enum value "on"
+	LoadbalanceEntryServiceArgumentsFcEffectiveExposeHeadersOn string = "on"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveExposeHeadersOff captures enum value "off"
+	LoadbalanceEntryServiceArgumentsFcEffectiveExposeHeadersOff string = "off"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateExposeHeadersEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveTypeExposeHeadersPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateExposeHeaders(formats strfmt.Registry) error {
+	if swag.IsZero(m.ExposeHeaders) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateExposeHeadersEnum("serviceArguments"+"."+"fc_effective"+"."+"expose_headers", "body", m.ExposeHeaders); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateSource(formats strfmt.Registry) error {
 	if swag.IsZero(m.Source) { // not required
 		return nil
@@ -2715,6 +2818,10 @@ type LoadbalanceEntryServiceArgumentsFcEffectiveSource struct {
 	// Enum: [rule env default]
 	EpMaxInflight string `json:"ep_max_inflight,omitempty"`
 
+	// expose headers
+	// Enum: [rule env default]
+	ExposeHeaders string `json:"expose_headers,omitempty"`
+
 	// max outstanding
 	// Enum: [rule env default]
 	MaxOutstanding string `json:"max_outstanding,omitempty"`
@@ -2765,6 +2872,10 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) Validate(formats str
 	}
 
 	if err := m.validateEpMaxInflight(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateExposeHeaders(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -2939,6 +3050,51 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateEpMaxInfligh
 
 	// value enum
 	if err := m.validateEpMaxInflightEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"ep_max_inflight", "body", m.EpMaxInflight); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeExposeHeadersPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeExposeHeadersPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeExposeHeadersPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateExposeHeadersEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeExposeHeadersPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateExposeHeaders(formats strfmt.Registry) error {
+	if swag.IsZero(m.ExposeHeaders) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateExposeHeadersEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"expose_headers", "body", m.ExposeHeaders); err != nil {
 		return err
 	}
 

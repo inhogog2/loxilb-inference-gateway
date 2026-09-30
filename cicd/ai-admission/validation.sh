@@ -394,7 +394,7 @@ echo "J: the gate's accounting stayed consistent"
 chk J1 "no accounting anomaly (underflow)"      0 "$(msum loxilb_ai_admission_anomalies_total 'kind="underflow"')"
 chk J2 "no accounting anomaly (unknown permit)" 0 "$(msum loxilb_ai_admission_anomalies_total 'kind="unknown_permit"')"
 chk J3 "no request was refused for no capacity" 0 "$(msum loxilb_ai_admission_decisions_total 'reason="no_healthy_capacity"')"
-chk J4 "every pool is exported"                13 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
+chk J4 "every pool is exported"                15 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
 
 # ── Q: the bounded queue, FIFO ──────────────────────────────────────────────
 echo ""
@@ -886,6 +886,68 @@ sleep 11
 tq1=$(decisions $PORT_TQ queued)
 chk TW15 "only A's two and C ever waited"           3 "$( [ "$tq1" -ge 0 ] 2>/dev/null && echo $((tq1 - tq0)) || echo "$tq1")"
 
+# ── XH / XH2: the admission headers on admitted responses ──────────────────
+# :PORT_XH exposes them (ceiling FC_XH_MAX); :PORT_H1 runs on the environment,
+# which leaves them off. Values are read against the pool as the request
+# finds it: two held there, the request itself the third.
+XH_URL="http://$VIP:$PORT_XH/v1/chat/completions"
+xh_send() { # xh_send <dir> <name> <body> [curl args...]: one request, waited for; its code
+  local dir=$1 name=$2 body=$3; shift 3
+  $hexec l3h1 curl -s -N -o "$dir/$name.body" -D "$dir/$name.hdr" -w '%{http_code}' --max-time 20 \
+    "${HDRS[@]}" -H "X-Test-Nonce: capXH$name" -H "X-Request-Id: capXH$name" "$@" \
+    -d "$body" "$XH_URL" > "$dir/$name.code" 2>/dev/null
+  cat "$dir/$name.code"
+}
+xh_vals() { # xh_vals <hdr file> -> "<inflight> <queued> <limit>"
+  local h; h=$(cat "$1" 2>/dev/null)
+  echo "$(hdr_val "$h" X-Loxilb-Admission-Inflight) $(hdr_val "$h" X-Loxilb-Admission-Queued) $(hdr_val "$h" X-Loxilb-Admission-Limit)"
+}
+xh_lines() { grep -ci '^x-loxilb-admission-' "$1" 2>/dev/null || true; }
+echo ""
+echo "XH: :$PORT_XH puts the pool's counts on every admitted response head (ceiling $FC_XH_MAX, two held)"
+DXH=$(mktemp -d)
+hold_burst "$DXH" 2 capXHheld "$XH_URL"
+chk XH1 "two held on the pool"                              2 "$(wait_receipts capXHheld 2 15)"
+chk XH2 "a plain request is admitted"                       200 "$(xh_send "$DXH" plain "$BODY")"
+chk XH3 "its head carries inflight 3, queued 0, limit $FC_XH_MAX" "3 0 $FC_XH_MAX" "$(xh_vals "$DXH/plain.hdr")"
+chk_has XH4 "its body is the backend's"                     '"backend_port"' "$(cat "$DXH/plain.body" 2>/dev/null)"
+SSE_BODY='{"model":"cap-model","stream":true,"messages":[{"role":"user","content":"x"}]}'
+chk XH5 "a streamed request is admitted"                    200 "$(xh_send "$DXH" sse "$SSE_BODY")"
+chk XH6 "its head carries the same three"                   "3 0 $FC_XH_MAX" "$(xh_vals "$DXH/sse.hdr")"
+chk_has XH7 "the head is still an event stream"             text/event-stream "$(cat "$DXH/sse.hdr" 2>/dev/null)"
+# Every event and the terminator arrive whole: the chunks after the head
+# were moved, not rewritten.
+chk XH8 "every event arrived, the terminator last"          "t0 t1 t2 [DONE]" "$(grep -o '"content": "t[0-9]\|\[DONE\]' "$DXH/sse.body" 2>/dev/null | sed 's/.*"t/t/' | tr '\n' ' ' | sed 's/ $//')"
+chk XH9 "a backend's own admission field is replaced"       200 "$(xh_send "$DXH" spoof "$BODY" -H 'X-Test-Spoof-Admission: 1')"
+chk XH10 "one of each, the gateway's values"                "3 3 0 $FC_XH_MAX" "$(xh_lines "$DXH/spoof.hdr") $(xh_vals "$DXH/spoof.hdr")"
+$hexec l3h1 curl -s -o /dev/null -D "$DXH/off.hdr" --max-time 20 "${HDRS[@]}" -H 'X-Test-Nonce: capXHoff' \
+  -d "$BODY" "$H1_URL" >/dev/null 2>&1
+chk XH11 "a pool left on the environment adds none"         0 "$(xh_lines "$DXH/off.hdr")"
+chk XH12 "the rule reads back on, in force from the rule"   "on on rule" "$(lb_get $PORT_XH | jq -r '.serviceArguments | "\(.fc_expose_headers) \(.fc_effective.expose_headers) \(.fc_effective.source.expose_headers)"')"
+# The generated model's enum check refuses it first (its own code, not 400).
+chk_has XH13 "a switch value other than on/off/inherit is refused, naming the field" 'fc_expose_headers in body should be one of' "$(gw_add_rule $PORT_XH ', "fc_expose_headers": "yes"' 8080 8081)"
+# Turned off with the two still held: a gate-only change, applied in place,
+# so the held requests keep running and nothing is drained.
+gw_add_rule $PORT_XH "$(gw_xh_json off)" 8080 8081 >/dev/null
+chk XH14 "turned off, the rule reads back off"              "off off rule" "$(wait_lb_field $PORT_XH '.serviceArguments | "\(.fc_expose_headers) \(.fc_effective.expose_headers) \(.fc_effective.source.expose_headers)"' "off off rule" 10)"
+chk XH15 "the next admitted response carries none"          "200 0" "$(xh_send "$DXH" after "$BODY") $(xh_lines "$DXH/after.hdr")"
+release capXHheld; wait
+chk XH16 "the two held through the change answered 200"     "200 200" "$(cat "$DXH/1.code" 2>/dev/null) $(cat "$DXH/2.code" 2>/dev/null)"
+gw_add_rule $PORT_XH "$(gw_xh_json on)" 8080 8081 >/dev/null
+
+echo ""
+echo "XH2: :$PORT_XH2 puts them on every admitted HTTP/2 stream's response headers"
+XH2_OUT=$($hexec l3h1 python3 "$(pwd)/h2_admit.py" $VIP $PORT_XH2 --streams 3 --delay-ms 2000 --nonce-prefix capXH2 2>&1)
+chk XH2a "three streams admitted"                           3 "$(printf '%s\n' "$XH2_OUT" | jq -r 'select(.summary) | .admitted' 2>/dev/null)"
+printf '%s\n' "$XH2_OUT" | jq -c 'select(.stream) | {stream, status, headers}' 2>/dev/null | sed 's/^/    /'
+# Each stream's values are read as its own response head goes out, while it
+# holds its unit: a stream whose answer already ended has handed its unit
+# back, so a later head may count fewer. Every head carries all three; the
+# first sees all three streams.
+chk XH2b "every admitted stream carries the three, queued 0, limit $FC_XH_MAX" 3 "$(printf '%s\n' "$XH2_OUT" | jq -c "select(.status == \"200\" and (.headers[\"x-loxilb-admission-inflight\"] // \"\" | test(\"^[1-3]$\")) and .headers[\"x-loxilb-admission-queued\"] == \"0\" and .headers[\"x-loxilb-admission-limit\"] == \"$FC_XH_MAX\")" 2>/dev/null | wc -l | tr -d ' ')"
+chk XH2c "the first head counted all three streams"         3 "$(printf '%s\n' "$XH2_OUT" | jq -r 'select(.status == "200") | .headers["x-loxilb-admission-inflight"] // "0"' 2>/dev/null | sort -n | tail -1)"
+chk XH2d "no unit left held"                                0 "$(wait_lb_field $PORT_XH2 '(.serviceArguments.fc_effective | if . == null then "none" else (.inflight // 0) end)' 0 10)"
+
 # ── H: observe mode ─────────────────────────────────────────────────────────
 echo ""
 echo "H: the same load in observe mode is admitted and only counted"
@@ -949,7 +1011,7 @@ else
   echo "  [FAIL] VA0 the gateway did not come back with the valve bound"; nfail=$((nfail+1)); code=1
 fi
 
-rm -rf "$DB" "$DN" "$DC" "$E" "$DG" "$DL" "$DQ" "$DT" "$DX" "$DK" "$DD" "$DM" "$DP" "$DO" "$DU" "$DAD" "$DWU" "$DWU2" "$DVA" "${DH:-/nonexistent}" 2>/dev/null
+rm -rf "${DXH:-/nonexistent}" "$DB" "$DN" "$DC" "$E" "$DG" "$DL" "$DQ" "$DT" "$DX" "$DK" "$DD" "$DM" "$DP" "$DO" "$DU" "$DAD" "$DWU" "$DWU2" "$DVA" "${DH:-/nonexistent}" 2>/dev/null
 
 echo ""
 if [ "$code" -eq 0 ]; then

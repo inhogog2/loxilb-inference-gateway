@@ -209,7 +209,8 @@ typedef struct proxy_fc_svc_stat {
     uint32_t tenants_active;
     uint8_t  tenant_share_pct;
     uint8_t  src_tenant;
-    uint16_t pad3;
+    uint8_t  expose_headers;
+    uint8_t  src_expose;
 } proxy_fc_svc_stat_t;
 /* Pinned to the layout in sockproxy_metrics.h. */
 _Static_assert(sizeof(proxy_fc_svc_stat_t) == 368, "proxy_fc_svc_stat_t size");
