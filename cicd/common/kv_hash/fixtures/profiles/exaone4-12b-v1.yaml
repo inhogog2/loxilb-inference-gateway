@@ -1,0 +1,17 @@
+profileId: exaone4-12b-v1
+baseModel: LGAI-EXAONE/EXAONE-4.0-1.2B
+modelType: exaone4
+tokenizerRevision: 3abf2810673c7c0778df64a73c2d52eab32d91c4
+tokenizerArtifact: sha256/523b110391fc95d5c90ee3eaa05d65d21da1ef25b5766254307aceda9eb24a5b
+tokenizerSha256: 523b110391fc95d5c90ee3eaa05d65d21da1ef25b5766254307aceda9eb24a5b
+templateArtifact: sha256/de64119ec8394ec3619221283a05fc8019c9a319cbdf2a471fe1ee8c36119616
+templateSha256: de64119ec8394ec3619221283a05fc8019c9a319cbdf2a471fe1ee8c36119616
+templateContentFormat: string
+renderPolicy:
+  addGenerationPrompt: true
+  bosToken: "[BOS]"
+  eosToken: "[|endofturn|]"
+supportedApis:
+  - completions
+  - chat
+aliasPolicy: base_model_only

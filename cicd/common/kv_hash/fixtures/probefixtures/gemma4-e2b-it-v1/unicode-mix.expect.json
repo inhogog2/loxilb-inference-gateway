@@ -1,0 +1,17 @@
+{
+ "requestSha256": "4fb27c04be568ebe2d1c7ebf0e7e322f55a53c38ccfe21dcfea8db8c2b1c3aa6",
+ "expectedTokenIds": [
+  79597,
+  63334,
+  2426,
+  236787,
+  33443,
+  120362,
+  83732,
+  43758,
+  237389,
+  79433,
+  236761
+ ],
+ "api": "completions"
+}

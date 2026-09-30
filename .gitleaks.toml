@@ -44,6 +44,14 @@ paths = [
   # any other file is still caught.
   '''^pkg/aikey/cache_isolation_test\.go$''',
   '''^pkg/aikey/plane_isolation_test\.go$''',
+  # Generated kv model profiles (cicd/common/kv_hash/gen_model_profiles.py):
+  # tokenizerRevision is a public hub git sha and tokenizerSha256 the content
+  # hash of a public tokenizer.json; the generic-api-key rule reads
+  # "tokenizer...: <hex>" as a token assignment. The files are regenerated
+  # byte-identically from pinned inputs, so no hand-written value lands there.
+  # A path entry, not an [[allowlists]] block: CI's gitleaks 8.24.3 ignores
+  # [[allowlists]], and newer releases refuse to mix it with this table.
+  '''^cicd/common/kv_hash/fixtures/profiles/[^/]+\.yaml$''',
 ]
 # cfg-persist-roundtrip's OTLP secret-split fixture. The suite POSTs a dummy
 # OTLP auth header ("rt-otlp-secret-…") precisely so validation.sh can prove
