@@ -288,6 +288,28 @@ the jitter the body hints, so a burst of refusals does not return as one
 burst of retries. Every non-admit decision is also a `sec.ai.deny` record on
 the audit trail with the service, the model and the decision.
 
+### The same headers on admitted responses
+
+With `fc_expose_headers` `on` (or `LLB_FC_EXPOSE_HEADERS=on` and the rule
+declaring nothing), every admitted inference response carries the three
+admission headers too, so a client can slow down before it is refused:
+`X-Loxilb-Admission-Inflight` and `X-Loxilb-Admission-Queued` are the pool's
+executing and waiting requests as the response head goes out (the request
+itself counted), and `X-Loxilb-Admission-Limit` the service ceiling in force
+(the adaptive one while the pool adapts; `0` when the pool has none). They
+go on the response head on HTTP/1.1 and HTTP/2, streamed (`text/event-stream`,
+chunked) responses included; the body is never touched. Fields of those
+names sent by the backend are replaced. A pool in `observe` mode reports
+them too, since it counts its requests; requests the gate does not count
+(non-inference paths, a pool in `off` mode) carry none. On HTTP/1.1 a
+response head the backend split across several reads is sent without them.
+
+A rule refuses `fc_expose_headers` `on` with a `sockMapMode` of `both` or
+`response` (`400`): those responses go from the backend to the client in the
+kernel and the gateway never sees them. Set process-wide with
+`LLB_FC_EXPOSE_HEADERS=on`, the headers appear only on the responses the
+gateway relays.
+
 ## Maintenance drain
 
 `PUT /netlox/v1/maintenance {"enabled": true}` now reaches the data path:

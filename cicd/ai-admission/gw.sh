@@ -21,6 +21,8 @@ PORT_TT=2031          # the same two, an adaptive ceiling of 8 on their time to 
 PORT_WU=2032          # two backends of its own, per-endpoint ceiling 8, a 20 s warm-up
 PORT_TS=2033          # the same two backends, keyed: ceiling 4, tenant share 50 %, no queue
 PORT_TQ=2034          # the same two backends, keyed: ceiling 2, tenant share 50 %, a queue
+PORT_XH=2035          # the same two backends, ceiling 4, admission headers on admitted responses
+PORT_XH2=2036         # the two h2c backends, ceiling 4, admission headers on admitted streams
 FC_P_MAX=4
 FC_P_STALE_MS=45000
 FC_U_MAX=2
@@ -34,6 +36,7 @@ FC_WU_MS=20000
 FC_TS_MAX=4
 FC_TQ_MAX=2
 FC_TS_PCT=50          # half: two units of :PORT_TS a tenant, one of :PORT_TQ and two of its queue
+FC_XH_MAX=4
 FC_Q_DEPTH=4
 # The pool's wait is long enough that a waiter outlives the 10 s metric
 # republish the rows poll between parking it and releasing a unit; row T
@@ -155,6 +158,8 @@ gw_tt_json() { echo ", \"fc_max_outstanding\": $FC_TT_MAX, \"fc_adaptive\": \"on
 gw_wu_json() { echo ", \"fc_ep_max_inflight\": $FC_WU_EP, \"fc_warmup_ms\": $FC_WU_MS"; }
 # gw_ts_json: the :PORT_TS rule, keyed, a ceiling shared among tenants
 gw_ts_json() { echo ", \"api_key_auth\": \"required\", \"fc_max_outstanding\": $FC_TS_MAX, \"fc_tenant_max_share_pct\": $FC_TS_PCT"; }
+# gw_xh_json <on|off>: the :PORT_XH / :PORT_XH2 rules, a ceiling and the admission headers switch
+gw_xh_json() { echo ", \"fc_max_outstanding\": $FC_XH_MAX, \"fc_expose_headers\": \"$1\""; }
 # gw_tq_json: the :PORT_TQ rule, the same with a queue
 gw_tq_json() { echo ", \"api_key_auth\": \"required\", \"fc_max_outstanding\": $FC_TQ_MAX, \"fc_tenant_max_share_pct\": $FC_TS_PCT$(gw_queue_json $FC_Q_DEPTH $FC_Q_WAIT_MS)"; }
 
@@ -172,6 +177,8 @@ gw_add_rules() {
   gw_add_rule $PORT_WU  "$(gw_wu_json)"                                          8082 8083 || return 1
   gw_add_rule $PORT_TS  "$(gw_ts_json)"                                          8080 8081 || return 1
   gw_add_rule $PORT_TQ  "$(gw_tq_json)"                                          8080 8081 || return 1
+  gw_add_rule $PORT_XH  "$(gw_xh_json on)"                                       8080 8081 || return 1
+  gw_add_rule $PORT_XH2 ", \"backend_protocol\": \"http2\"$(gw_xh_json on)"      8090 8091 || return 1
   sleep 2
 }
 

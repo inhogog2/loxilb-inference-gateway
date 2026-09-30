@@ -4678,6 +4678,14 @@ func init() {
                   "format": "int32",
                   "type": "integer"
                 },
+                "expose_headers": {
+                  "description": "Whether admitted responses carry the admission headers.",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "type": "string"
+                },
                 "inflight": {
                   "description": "Inference requests executing on the pool right now.",
                   "format": "int32",
@@ -4737,6 +4745,14 @@ func init() {
                       "type": "string"
                     },
                     "ep_max_inflight": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "expose_headers": {
                       "enum": [
                         "rule",
                         "env",
@@ -4858,6 +4874,16 @@ func init() {
               "maximum": 100000,
               "minimum": 0,
               "type": "integer",
+              "x-nullable": false
+            },
+            "fc_expose_headers": {
+              "description": "on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "type": "string",
               "x-nullable": false
             },
             "fc_max_outstanding": {
@@ -38721,6 +38747,14 @@ func init() {
                   "type": "integer",
                   "format": "int32"
                 },
+                "expose_headers": {
+                  "description": "Whether admitted responses carry the admission headers.",
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ]
+                },
                 "inflight": {
                   "description": "Inference requests executing on the pool right now.",
                   "type": "integer",
@@ -38781,6 +38815,14 @@ func init() {
                       ]
                     },
                     "ep_max_inflight": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "expose_headers": {
                       "type": "string",
                       "enum": [
                         "rule",
@@ -38900,6 +38942,16 @@ func init() {
               "default": 0,
               "maximum": 100000,
               "minimum": 0,
+              "x-nullable": false
+            },
+            "fc_expose_headers": {
+              "description": "on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
               "x-nullable": false
             },
             "fc_max_outstanding": {
@@ -39742,6 +39794,14 @@ func init() {
               "type": "integer",
               "format": "int32"
             },
+            "expose_headers": {
+              "description": "Whether admitted responses carry the admission headers.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off"
+              ]
+            },
             "inflight": {
               "description": "Inference requests executing on the pool right now.",
               "type": "integer",
@@ -39802,6 +39862,14 @@ func init() {
                   ]
                 },
                 "ep_max_inflight": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "expose_headers": {
                   "type": "string",
                   "enum": [
                     "rule",
@@ -39921,6 +39989,16 @@ func init() {
           "default": 0,
           "maximum": 100000,
           "minimum": 0,
+          "x-nullable": false
+        },
+        "fc_expose_headers": {
+          "description": "on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off",
+            "inherit"
+          ],
           "x-nullable": false
         },
         "fc_max_outstanding": {
@@ -40502,6 +40580,14 @@ func init() {
           "type": "integer",
           "format": "int32"
         },
+        "expose_headers": {
+          "description": "Whether admitted responses carry the admission headers.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
+        },
         "inflight": {
           "description": "Inference requests executing on the pool right now.",
           "type": "integer",
@@ -40562,6 +40648,14 @@ func init() {
               ]
             },
             "ep_max_inflight": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "expose_headers": {
               "type": "string",
               "enum": [
                 "rule",
@@ -40695,6 +40789,14 @@ func init() {
           ]
         },
         "ep_max_inflight": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "expose_headers": {
           "type": "string",
           "enum": [
             "rule",

@@ -1082,6 +1082,14 @@ type LbServiceArg struct {
 	FcTenantMaxSharePct uint32 `json:"fc_tenant_max_share_pct,omitempty"`
 	// FcTenantMaxSharePctPresent is the presence bit for replace semantics.
 	FcTenantMaxSharePctPresent bool `json:"-"`
+	// FcExposeHeaders - "on" puts the admission headers (inflight, queued,
+	// limit) on every admitted inference response; "off" leaves responses
+	// as the backend sent them. Empty (or "inherit" on input) runs on
+	// LLB_FC_EXPOSE_HEADERS. Refused with a sockMapMode that accelerates the
+	// response direction.
+	FcExposeHeaders string `json:"fc_expose_headers,omitempty"`
+	// FcExposeHeadersPresent is the presence bit for replace semantics.
+	FcExposeHeadersPresent bool `json:"-"`
 	// FcEffective - the capacity gate's resolved state on the rule's pool,
 	// read from the data plane for GET only. Never persisted, never read
 	// on input.
@@ -1590,6 +1598,9 @@ type FcEffectiveArg struct {
 	// TenantsActive counts tenants holding a unit or waiting right now.
 	TenantMaxSharePct uint32 `json:"tenant_max_share_pct"`
 	TenantsActive     uint32 `json:"tenants_active"`
+	// ExposeHeaders is "on" when admitted responses carry the admission
+	// headers, else "off".
+	ExposeHeaders string `json:"expose_headers"`
 	// Source names where each value in force came from: "rule", "env" or
 	// "default".
 	Source FcEffectiveSource `json:"source"`
@@ -1609,6 +1620,7 @@ type FcEffectiveSource struct {
 	WarmupMs           string `json:"warmup_ms"`
 	TtftTargetMs       string `json:"ttft_target_ms"`
 	TenantMaxSharePct  string `json:"tenant_max_share_pct"`
+	ExposeHeaders      string `json:"expose_headers"`
 }
 
 // LbRuleMod - Info related to a load-balancer entry

@@ -4199,6 +4199,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if err != nil {
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
 	}
+	if err := fcExposeSockMapErr(&serv, nextFcCfg, sockMapCode); err != nil {
+		return RuleArgsErr, err
+	}
 	if err := resolveCHWBLContract(&serv, eRule, lBActs.endPoints); err != nil {
 		return RuleUnknownServiceErr, err
 	}
@@ -6636,6 +6639,7 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.FcWarmupMs = r.fcCfg.warmupMs
 	nWork.FcTtftTargetMs = r.fcCfg.ttftTargetMs
 	nWork.FcTenantSharePct = uint8(r.fcCfg.tenantSharePct)
+	nWork.FcExposeHeaders = r.fcCfg.exposeHeaders
 	nWork.CbEnable = r.cbEnable
 	nWork.KvExactMode = r.kvExactMode // KV-cache exact routing
 	nWork.KvBlockSize = r.kvBlockSize

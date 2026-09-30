@@ -69,6 +69,22 @@ func FcAdaptiveToRule(v string) (uint8, error) {
 		"fc_adaptive must be one of on, off or inherit")
 }
 
+// FcExposeHeadersToRule maps a rule's fc_expose_headers to the data plane's
+// encoding (enum fc_rule_expose), shifted like the adaptive switch. Empty and
+// "inherit" both mean the process default; anything else is refused.
+func FcExposeHeadersToRule(v string) (uint8, error) {
+	switch v {
+	case "", "inherit":
+		return FcRuleAdaptiveInherit, nil
+	case "off":
+		return FcRuleAdaptiveOff, nil
+	case "on":
+		return FcRuleAdaptiveOn, nil
+	}
+	return 0, NewValidationError("fc_expose_headers",
+		"fc_expose_headers must be one of on, off or inherit")
+}
+
 // FcAdaptiveFromRule is FcAdaptiveToRule's inverse for the read-back: the
 // process default reads as empty, so it is omitted.
 func FcAdaptiveFromRule(a uint8) string {

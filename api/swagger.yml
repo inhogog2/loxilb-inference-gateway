@@ -10549,6 +10549,22 @@ definitions:
               omitted leaves the process default (LLB_FC_TENANT_MAX_SHARE_PCT,
               else no share) in force. Replace and null semantics as
               fc_max_outstanding.
+          fc_expose_headers:
+            type: string
+            x-nullable: false
+            enum: ["on", "off", "inherit"]
+            description: >-
+              on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and
+              X-Loxilb-Admission-Limit on the head of every admitted inference
+              response (HTTP/1 and HTTP/2, streamed ones included), the same three
+              a capacity refusal carries: the pool's executing units and waiting
+              requests as the response head goes out, and the service ceiling in
+              force (0 is none). Fields of those names from the backend are
+              replaced. off leaves responses as the backend sent them; inherit, or
+              omitted on create, runs on the process default
+              (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or
+              response, where the gateway never sees the response. Replace and
+              null semantics as fc_mode.
           fc_effective:
             type: object
             readOnly: true
@@ -10648,6 +10664,10 @@ definitions:
                 type: integer
                 format: int32
                 description: Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.
+              expose_headers:
+                type: string
+                enum: ["on", "off"]
+                description: Whether admitted responses carry the admission headers.
               source:
                 type: object
                 description: >-
@@ -10689,6 +10709,9 @@ definitions:
                     type: string
                     enum: [rule, env, default]
                   tenant_max_share_pct:
+                    type: string
+                    enum: [rule, env, default]
+                  expose_headers:
                     type: string
                     enum: [rule, env, default]
           kvExactMode:
