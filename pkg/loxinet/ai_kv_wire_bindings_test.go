@@ -597,3 +597,23 @@ func TestKvLocalCapabilityRegistryConstants(t *testing.T) {
 		t.Error("registry identity constants must be non-empty")
 	}
 }
+
+// TestKvWireMapV2DecodeBlockSize: the event's own block_size reaches the
+// echo wire check; a value that is not a positive integer is ignored (the
+// contract block size stays in force) and never rejects the batch.
+func TestKvWireMapV2DecodeBlockSize(t *testing.T) {
+	for _, c := range []struct {
+		raw  interface{}
+		want uint32
+	}{{int64(32), 32}, {uint8(16), 16}, {nil, 0}, {int64(0), 0}, {"32", 0}, {1.5, 0}} {
+		ev := kvWireMapStored([]interface{}{int64(42)}, []interface{}{int64(7)})
+		ev["block_size"] = c.raw
+		batch, err := kvWireDecodeMapV2(kvWireMustMarshal(t, kvWireBatchFixture(nil, ev)))
+		if err != nil {
+			t.Fatalf("block_size %v: decode refused the batch: %v", c.raw, err)
+		}
+		if got := batch.Events[0].BlockSize; got != c.want {
+			t.Fatalf("block_size %v: decoded %d, want %d", c.raw, got, c.want)
+		}
+	}
+}

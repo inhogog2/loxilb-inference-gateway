@@ -315,6 +315,12 @@ func kvWireDecodeMapEvent(raw interface{}) (kvEvent, error) {
 		if v, present := m["extra_keys"]; present && !kvPerBlockFieldEmpty(v) {
 			ev.ExtraKeys = true
 		}
+		// block_size is read for the echo wire check only; a value that is
+		// not a positive integer leaves the contract block size in force
+		// there and never costs the batch its routing inventory.
+		if bs := extractTokenIDs([]interface{}{m["block_size"]}); len(bs) == 1 && bs[0] > 0 {
+			ev.BlockSize = bs[0]
+		}
 		return ev, nil
 	case "BlockRemoved":
 		hashes, err := extractBlockHashes(m["block_hashes"])

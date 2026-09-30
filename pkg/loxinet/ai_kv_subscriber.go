@@ -414,6 +414,12 @@ type kvEvent struct {
 	Tokens    []uint32
 	Lora      bool
 	ExtraKeys bool
+	// BlockSize is the event's own block_size when the engine sends one
+	// (0 otherwise). vLLM emits one BlockStored per KV-cache group, and a
+	// hybrid model's sliding-window groups can use a multiple of the
+	// contract block size: each such block carries the hash of the LAST
+	// contract block it covers.
+	BlockSize uint32
 }
 
 // decodeKVEventBatch decodes a msgpack-encoded KVEventBatch.
