@@ -39,9 +39,25 @@ SNAP=$(snapshot "$MODEL" "$REV")
 # gemma-3 (0.5.18, L4): the prefill member's prefill CUDA graph ("breakable" backend) pads a ragged prefill batch,
 # and flashinfer's ragged prefill then raises "q.shape[0] (48) does not match qo_indptr[-1] (39)" on the first
 # real prefill; the scheduler dies and the engine exits. Disabling only the prefill graph keeps decode CUDA graphs.
+# EXAONE-4 (0.5.18): Exaone4ForCausalLM accepts only the fa3, triton or trtllm_mha attention backends, and fa3
+# needs Hopper; on Ada the default leaves none selected and the launch asserts.
+# OLMo-2 (0.5.18): the decode member's decode CUDA graph capture fails ("Capture cuda graph failed:
+# scheduler_metadata must have shape (metadata_size)") and the engine exits before readiness.
 case $ENG/$SGL_VERSION/$PROF in
 sglang/0.5.18/gemma3-1b-it-v1) SGL_PROFILE_ARGS="--cuda-graph-backend-prefill=disabled" ;;
+sglang/0.5.18/exaone4-12b-v1) SGL_PROFILE_ARGS="--attention-backend triton" ;;
+sglang/0.5.18/olmo2-0425-1b-v1) SGL_PROFILE_ARGS="--disable-cuda-graph" ;;
 *) SGL_PROFILE_ARGS="" ;;
+esac
+# Per-version, per-profile vLLM launch arguments, each measured.
+# Qwen3.6 / Qwen3.8 27B-FP8 (0.28.0, one L40S): hybrid Mamba; the default 256 sequences exceed the Mamba cache
+# blocks left after the weights ("max_num_seqs (256) exceeds available Mamba cache blocks (180)"), and the NIXL
+# connector refuses to start without the DS conv-state layout ("3-read Mamba conv transfer requires DS conv state
+# layout. Set VLLM_SSM_CONV_STATE_LAYOUT=DS").
+case $ENG/$VLLM_VERSION/$PROF in
+vllm/0.28.0/qwen36-27b-fp8-v1|vllm/0.28.0/qwen38-27b-fp8-v1)
+  VLLM_PROFILE_ARGS="--max-num-seqs 64" VLLM_PROFILE_ENV="-e VLLM_SSM_CONV_STATE_LAYOUT=DS" ;;
+*) VLLM_PROFILE_ARGS="" VLLM_PROFILE_ENV="" ;;
 esac
 TOKMNT="" TOKP=${SGL_TOKPATCH:-auto}
 case $TOKP in auto|0|1) ;; *) echo "SGL_TOKPATCH must be auto|0|1"; exit 64 ;; esac
@@ -77,11 +93,11 @@ esac
 if [ "$ENG" = vllm ]; then
   $SSH root@"$NODE" "docker rm -f $NAME >/dev/null 2>&1; docker run -d --name $NAME --gpus all --ipc=host --network host --ulimit memlock=-1 \
     -e UCX_TLS=tcp -e UCX_NET_DEVICES=all -e PYTHONHASHSEED=0 -e VLLM_KV_EVENTS_USE_INT_BLOCK_HASHES=1 -e HF_HUB_OFFLINE=1 \
-    -e HF_HOME=$HF_CACHE -e VLLM_NIXL_SIDE_CHANNEL_HOST=$NODE -e VLLM_NIXL_SIDE_CHANNEL_PORT=5600 \
+    -e HF_HOME=$HF_CACHE -e VLLM_NIXL_SIDE_CHANNEL_HOST=$NODE -e VLLM_NIXL_SIDE_CHANNEL_PORT=5600 $VLLM_PROFILE_ENV \
     -v $HF_CACHE:$HF_CACHE $VLLM_IMAGE --model $MODEL --revision $REV --tokenizer-revision $REV \
     --served-model-name $MODEL --host 0.0.0.0 --port $EPORT --max-model-len 4096 --gpu-memory-utilization 0.85 \
     --enable-prefix-caching --prefix-caching-hash-algo sha256_cbor --block-size 16 --prefix-match-unit 16 --enforce-eager \
-    --kv-transfer-config '$KVT' $EVX ${VLLM_EXTRA:-}" >/dev/null
+    --kv-transfer-config '$KVT' $EVX $VLLM_PROFILE_ARGS ${VLLM_EXTRA:-}" >/dev/null
 else
   $SSH root@"$NODE" "docker rm -f $NAME >/dev/null 2>&1; docker run -d --name $NAME --gpus all --network host --ipc=host --shm-size 16g \
     -v $HF_CACHE:$HF_CACHE $TOKMNT -e HF_HOME=$HF_CACHE -e HF_HUB_OFFLINE=1 $SGL_IMAGE \

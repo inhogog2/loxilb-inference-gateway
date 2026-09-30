@@ -79,8 +79,23 @@ the prefill member's prefill CUDA graph pads a ragged prefill batch, flashinfer 
 `q.shape[0] (48) does not match qo_indptr[-1] (39)` on the first real prefill, and the engine exits. Decode
 CUDA graphs stay on. `engine.sh stop` saves each engine's log under `EVROOT/engine-logs/` before removing it.
 
+Other measured per-version, per-profile launch arguments (`engine.sh`; the failure each one prevents was observed on the bed):
+
+| Engine / version | Profile | Argument | Without it |
+|---|---|---|---|
+| SGLang 0.5.18 | exaone4-12b-v1 | `--attention-backend triton` | Exaone4ForCausalLM accepts only fa3 / triton / trtllm_mha; fa3 needs Hopper, so on Ada the launch asserts |
+| SGLang 0.5.18 | olmo2-0425-1b-v1 | `--disable-cuda-graph` | decode member exits before readiness: `Capture cuda graph failed: scheduler_metadata must have shape (metadata_size)` |
+| vLLM 0.28.0 | qwen36-27b-fp8-v1, qwen38-27b-fp8-v1 | `--max-num-seqs 64` | hybrid Mamba on one 48 GB GPU: `max_num_seqs (256) exceeds available Mamba cache blocks` |
+| vLLM 0.28.0 | qwen36-27b-fp8-v1, qwen38-27b-fp8-v1 | env `VLLM_SSM_CONV_STATE_LAYOUT=DS` | NIXL connector start fails: `3-read Mamba conv transfer requires DS conv state layout` |
+
 ## Regenerating the fixtures
 
 Profiles, manifests and probe fixtures are generated from pinned inputs by
 `cicd/common/kv_hash/gen_model_profiles.py <fixtures_dir> <artifacts_dir>` (artifacts = per-model
 `tokenizer.json` + `config.json`). Regeneration is a profile-revision event: re-run this scenario afterwards.
+
+The vLLM fixture set of an openai-format template leaves out every chat case whose render changes when each
+content takes vLLM's shape (a string becomes one text part): the gateway refuses such requests at serve time,
+so banking their string-shape ids would hold a strict vLLM rule below READY for good (gemma-4's system turns).
+The `sglang/` subset keeps them, since SGLang hands the template a string content as a string, and leaves out
+every chat case ending on an assistant turn instead.
