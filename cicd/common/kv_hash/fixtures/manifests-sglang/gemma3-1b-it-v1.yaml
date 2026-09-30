@@ -1,0 +1,4 @@
+profileId: gemma3-1b-it-v1
+imageDigest: "sha256:9e148f5ac788e856a06166bd6347a831831eb9fcfab4d1770874823a7c29a1a1"
+engineVersion: "0.5.18"
+modelRevision: "dcc83ea841ab6100d6b47a070329e1ba4cf78752"

@@ -1,0 +1,1 @@
+{"model": "ibm-granite/granite-4.2-3b", "messages": [{"role": "user", "content": "  leading and trailing spaces  "}, {"role": "assistant", "content": "\nnewline-wrapped reply\n"}, {"role": "user", "content": "final\nmulti-line\nquestion"}]}
