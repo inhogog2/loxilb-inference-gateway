@@ -27,6 +27,9 @@
 //              capacity unit comes back when it reads one; without it the
 //              unit stays with the connection until its next request or its
 //              close, so a holder that keeps its connection never frees it
+//   ?rpause=N  leave the request body unread for N ms. The socket stops being
+//              read, its receive window closes, and whatever the proxy still
+//              has to send piles up in the proxy's backend-side cache
 // A backend that closes part way through a response is ?abort=: it promises
 // twice what it sends.
 // A HEAD request gets the GET headers and no body.
@@ -83,6 +86,16 @@ var server = http.createServer(function (req, res) {
     hash.update(chunk);
     len += chunk.length;
   });
+  // ?rpause=ms is the request-side counterpart of ?rdelay=: a backend slow to
+  // take the request rather than slow to answer it. Paused, the request stream
+  // stops Node reading the socket once its own small buffer is full, so a large
+  // body stays in the proxy's cache for the backend. A client that half-closes
+  // then does so while the proxy still owes the backend part of the request.
+  var rpause = query(req.url, 'rpause');
+  if (rpause) {
+    req.pause();
+    setTimeout(function () { req.resume(); }, rpause);
+  }
   req.on('end', function () {
     // ?rdelay=ms holds the RESPONSE back by ms before anything is written — the
     // whole answer, not just the FIN (?delay=, below, is the ?abort= FIN knob).

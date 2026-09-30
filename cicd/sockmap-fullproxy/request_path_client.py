@@ -51,6 +51,14 @@ on OK.
                                     GET /stall?<query>, then read NOTHING for secs
                                     (receive window 0), then read everything;
                                     reports what was still delivered
+  halfupload <host> <port> <bytes> <rpause_ms> [half] [lull]
+                                    POST a <bytes> body to a backend that leaves it
+                                    unread for rpause_ms, then shutdown(SHUT_WR)
+                                    (half=0: no FIN, the control). With lull, pause
+                                    300ms after the first lull bytes. Expects the
+                                    backend to have received the whole body and
+                                    the answer to arrive; reports when the body
+                                    was written and when the connection ended
   queuehalf <host> <port> <hold_ms> <first|keepalive> [fin_ms] [model]
                                     against an AI-gateway rule whose pool holds
                                     ONE request: a holder takes the unit for
@@ -827,6 +835,57 @@ def mode_stall(host, port, query, secs, half=1, rcvbuf=4096):
     return _body_verdict(body, want, time.time() - t0, how)
 
 
+def mode_halfupload(host, port, nbytes, rpause, half=1, lull=0):
+    """A half-close that lands while the proxy still owes the backend part of
+    the request.
+
+    The other half-* modes send a request that fits the socket buffers, so by
+    the time the FIN arrives the proxy has handed the backend every byte. Here
+    the backend leaves the body unread for rpause ms, the rest of it waits in
+    the proxy's cache for the backend, and the FIN reaches the proxy on top of
+    that. Which shape the proxy then sees depends on how much of the body is
+    cached: below the cache's high-water mark the client is still being read
+    and the FIN goes down the EOF path; above it the client is paused and the
+    FIN is seen while it waits. The size alone does not decide it (the kernel
+    buffers on the way take a share first), so the harness tells the two apart
+    from the proxy's log, not from nbytes.
+
+    The proxy checks its cache against the high-water mark once per read
+    event, and one event can read a great deal, so a client that writes the
+    whole body at once can run the cache well past the mark without ever being
+    paused. lull makes the pause reachable: the client stops for 300ms after
+    the first lull bytes, the proxy's read event ends, and the next one finds
+    the cache over the mark.
+
+    The body is application/octet-stream, the proxy's streamed-upload path.
+    sendall() can block while the proxy is paused; the report says when it
+    returned, which is when the FIN left."""
+    s = connect(host, port)
+    s.settimeout(rpause / 1000.0 + 30)
+    payload = pattern(nbytes)
+    path = '/halfupload?rpause=%d' % rpause
+    head, body = request('POST', path, host, payload, 'application/octet-stream')
+    t0 = time.time()
+    if 0 < lull < len(body):
+        s.sendall(head + body[:lull])
+        time.sleep(0.3)
+        s.sendall(body[lull:])
+    else:
+        s.sendall(head + body)
+    sent = (time.time() - t0) * 1000
+    if half:
+        s.shutdown(socket.SHUT_WR)
+    status, got, at = _outcome(Reader(s), t0)
+    s.close()
+    if status is None:
+        return 'FAIL cut at %.0fms (%s), body of %d written by %.0fms, backend reads after %dms' % (
+            at, got, nbytes, sent, rpause)
+    err = check(status, got, path, payload)
+    if err:
+        return 'FAIL %s at %.0fms' % (err, at)
+    return 'OK answered at %.0fms, body of %d written by %.0fms' % (at, nbytes, sent)
+
+
 def ai_request(path, host, model, content):
     """An inference request: the capacity gate counts only a POST to a known
     inference path, and an AI-gateway rule routes on the model it names."""
@@ -941,6 +1000,7 @@ MODES = {'split': mode_split, 'stream': mode_stream, 'pipeline': mode_pipeline,
          'halfpartial': mode_halfpartial, 'halfcork': mode_halfcork,
          'halfafter': mode_halfafter, 'slowread': mode_slowread,
          'stall': mode_stall, 'queuehalf': mode_queuehalf,
+         'halfupload': mode_halfupload,
          'keepalive': mode_keepalive, 'echo': mode_echo, 'chunked': mode_chunked,
          'sizes': mode_sizes, 'special': mode_special, 'abort': mode_abort,
          'idle': mode_idle, 'volume': mode_volume}

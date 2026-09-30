@@ -28,6 +28,14 @@ Fault knobs (admin server, loopback :9100, one-shot each):
                              (origin-computed CLIENT error, e.g. a prompt
                              over the context window — the gateway must
                              relay this body verbatim, not mask it as 502)
+  POST /admin/late-next?s=N
+                          -> (prefill) the next successful prefill marks the KV
+                             transfer done at once but answers N seconds later,
+                             so decode is already streaming to the client when
+                             the gateway finishes draining the prefill answer
+  POST /admin/long-next?chunks=N&bytes=B&gap=MS
+                          -> (decode) the next SSE answer streams N chunks of B
+                             content bytes, MS apart, instead of six short ones
   GET  /admin/status      -> armed flags + request count
 
 Log grammar (validation.sh greps these; keep stable):
@@ -40,6 +48,8 @@ Log grammar (validation.sh greps these; keep stable):
   INJECT-500 reqid=<id> room=<room>
   INJECT-DIE reqid=<id> room=<room>
   INJECT-400 reqid=<id> room=<room>
+  PREFILL-LATE room=<room> s=<s> / PREFILL-LATE-ANSWER room=<room>
+  DECODE-LONG room=<room> chunks=<n> bytes=<b> gap=<ms>
   errors: TRIPLE-MISSING / PORT-MISMATCH / HOST-MISMATCH / ROOM-RANGE-ERROR /
           TRIPLE-MISMATCH / JOIN-FAILED
 
@@ -67,6 +77,8 @@ _request_count = 0
 _fail_next = False
 _die_next = False
 _reject_next = False
+_late_next = 0.0        # seconds; 0 = off
+_long_next = None       # (chunks, bytes, gap_ms) or None
 _knob_lock = threading.Lock()
 
 # Prefill-side rendezvous state: room -> {"join": <decode triple dict>|None,
@@ -265,6 +277,14 @@ class MockSGLangHandler(BaseHTTPRequestHandler):
             _rooms[room]["done"] = True
             _rooms_cond.notify_all()
         _log(f"RENDEZVOUS-OK room={room}")
+        global _late_next
+        with _knob_lock:
+            late, _late_next = _late_next, 0.0
+        if late > 0:
+            # Transfer marked done above: decode streams while this waits.
+            _log(f"PREFILL-LATE room={room} s={late}")
+            time.sleep(late)
+            _log(f"PREFILL-LATE-ANSWER room={room}")
         self._send_json(200, {
             "id": f"chatcmpl-prefill-{room}",
             "object": "chat.completion",
@@ -351,7 +371,16 @@ class MockSGLangHandler(BaseHTTPRequestHandler):
         self.send_header("X-SG-Decode-Ep", str(_args.ep_idx))
         self.close_connection = True
         self.end_headers()
+        global _long_next
+        with _knob_lock:
+            long_, _long_next = _long_next, None
         tokens = ["Hello", " from", " mock", " SGLang", " decode", "."]
+        gap = 0.05
+        if long_:
+            n, nbytes, gap_ms = long_
+            tokens = ["x" * nbytes] * n
+            gap = gap_ms / 1000.0
+            _log(f"DECODE-LONG room={room} chunks={n} bytes={nbytes} gap={gap_ms}")
         for i, tok in enumerate(tokens):
             chunk = {
                 "id": f"chatcmpl-decode-{room}",
@@ -365,7 +394,7 @@ class MockSGLangHandler(BaseHTTPRequestHandler):
             }
             self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
             self.wfile.flush()
-            time.sleep(0.05)
+            time.sleep(gap)
         final = {
             "id": f"chatcmpl-decode-{room}",
             "object": "chat.completion.chunk",
@@ -450,8 +479,22 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        global _fail_next, _die_next, _reject_next
-        if self.path == "/admin/fail-next":
+        global _fail_next, _die_next, _reject_next, _late_next, _long_next
+        q = urllib.parse.urlparse(self.path)
+        args = {k: v[0] for k, v in urllib.parse.parse_qs(q.query).items()}
+        if q.path == "/admin/late-next":
+            with _knob_lock:
+                _late_next = float(args.get("s", "0"))
+            _log(f"admin: late-next ARMED s={_late_next}")
+            self._reply({"late_next": _late_next})
+        elif q.path == "/admin/long-next":
+            with _knob_lock:
+                _long_next = (int(args.get("chunks", "0")),
+                              int(args.get("bytes", "0")),
+                              int(args.get("gap", "50")))
+            _log(f"admin: long-next ARMED {_long_next}")
+            self._reply({"long_next": list(_long_next)})
+        elif self.path == "/admin/fail-next":
             with _knob_lock:
                 _fail_next = True
             _log("admin: fail-next ARMED")
@@ -471,6 +514,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 _fail_next = False
                 _die_next = False
                 _reject_next = False
+                _late_next = 0.0
+                _long_next = None
             _log("admin: knobs RESET")
             self._reply({"fail_next": False, "die_next": False,
                          "reject_next": False})
