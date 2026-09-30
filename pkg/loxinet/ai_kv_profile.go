@@ -40,6 +40,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/loxilb-io/loxilb/pkg/enginecontract"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -145,6 +146,13 @@ type ModelPromptProfile struct {
 	// mistral_common, instead of the chat template, so admission refuses a
 	// strict chat surface for such a profile on those engines.
 	ModelType string `yaml:"modelType,omitempty"`
+	// EngineQuirks records engine × model behaviour measured on a live
+	// engine that the gateway must honour, keyed by engine-contract profile
+	// id (engine-contracts/contracts.yaml). The key set is closed: every key
+	// must be a compiled contract profile and every entry must set at least
+	// one quirk, so a misspelled engine or an empty entry fails at parse
+	// time instead of silently never applying.
+	EngineQuirks map[string]KvEngineQuirks `yaml:"engineQuirks,omitempty"`
 	// SupportedApis declares the request surfaces this profile serves
 	// ("chat", "completions"). Non-empty.
 	SupportedApis []string `yaml:"supportedApis"`
@@ -158,6 +166,26 @@ type ModelPromptProfile struct {
 	// Values come from the closed vocabulary kvProfileKnownFeatures.
 	SupportedFeatures []string `yaml:"supportedFeatures,omitempty"`
 	ExcludedFeatures  []string `yaml:"excludedFeatures,omitempty"`
+}
+
+// KvEngineQuirks is one engine contract's measured behaviour for one model.
+// Each value is measured per model on the live engine, not derived from the
+// model's files: whether an engine applies a tokenizer setting depends on how
+// it loads the tokenizer (a multimodal processor path can differ from the
+// text path for the same files).
+type KvEngineQuirks struct {
+	// CompletionsBos: the engine encodes this model's completions prompts
+	// with a BOS the gateway's tokenizer does not add (SGLang v0.5.18
+	// restores tokenizer_config.json's add_bos_token, which transformers v5
+	// drops, and rebuilds the post-processor). Chat is unaffected: such
+	// templates write the BOS themselves and the engines encode the rendered
+	// text without specials. Admission refuses a strict completions surface.
+	CompletionsBos bool `yaml:"completionsBos,omitempty"`
+}
+
+// kvEngineQuirksSet reports whether q sets any quirk.
+func kvEngineQuirksSet(q KvEngineQuirks) bool {
+	return q != KvEngineQuirks{}
 }
 
 var kvSha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -220,6 +248,14 @@ func (p *ModelPromptProfile) Validate() error {
 		}
 	} else if p.TemplateSha256 != "" {
 		return errors.New("kv-profile: templateSha256 without templateArtifact")
+	}
+	for id, q := range p.EngineQuirks {
+		if _, ok := enginecontract.ProfileByID(id); !ok {
+			return fmt.Errorf("kv-profile: engineQuirks key %q is not an engine-contract profile", id)
+		}
+		if !kvEngineQuirksSet(q) {
+			return fmt.Errorf("kv-profile: engineQuirks.%s sets no quirk", id)
+		}
 	}
 	if len(p.SupportedApis) == 0 {
 		return errors.New("kv-profile: supportedApis must be non-empty")

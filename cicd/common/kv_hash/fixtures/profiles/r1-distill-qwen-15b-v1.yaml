@@ -1,6 +1,9 @@
 profileId: r1-distill-qwen-15b-v1
 baseModel: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
 modelType: qwen2
+engineQuirks:
+  sglang-kv-rank-v1:
+    completionsBos: true
 tokenizerRevision: ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562
 tokenizerArtifact: sha256/88145e3c3249adc2546ede277e9819d6e405e19072456e4b521cbc724bd60773
 tokenizerSha256: 88145e3c3249adc2546ede277e9819d6e405e19072456e4b521cbc724bd60773

@@ -3246,6 +3246,9 @@ func kvExactRuntimeValidate(engine string, kvExactMode uint8, modelName, apiMode
 		if err != nil {
 			return res, fmt.Errorf("strict KV-exact rule requires a resolvable engine contract for %q: %w", eng, err)
 		}
+		if wantCompletions && p.EngineQuirks[ref.ID].CompletionsBos {
+			return res, fmt.Errorf("profile %q declares completions, but engine %q (contract %s) encodes this model's completions prompts with a BOS the gateway's tokenizer does not add (engineQuirks.%s.completionsBos) — a strict completions surface would hash a prompt the engine never builds; declare kvExactApiMode chat", profileID, eng, ref.ID, ref.ID)
+		}
 		res.Strict = true
 		res.APIChat = wantChat
 		res.APICompletions = wantCompletions

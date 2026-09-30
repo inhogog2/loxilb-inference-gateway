@@ -337,6 +337,51 @@ func TestKvExactAdmissionMistralCommonChatRefusal(t *testing.T) {
 	}
 }
 
+// TestKvExactAdmissionCompletionsBosQuirkRefusal: the profile records that
+// the SGLang contract encodes a completions prompt with a BOS the gateway's
+// tokenizer does not add — strict completions bound to that contract is
+// refused (explicitly or through the profile's declared surfaces), chat stays
+// admitted there, and a rule bound to any other contract admits both.
+func TestKvExactAdmissionCompletionsBosQuirkRefusal(t *testing.T) {
+	p := testProfile([]string{"chat", "completions"}, KvAliasPolicyBaseModelOnly, nil)
+	p.BaseModel = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+	p.EngineQuirks = map[string]KvEngineQuirks{"sglang-kv-rank-v1": {CompletionsBos: true}}
+	contracts := map[string]string{"vllm": "vllm-kv-map-v2", "sglang": "sglang-kv-rank-v1", "trtllm": "trtllm-kv-http-v1"}
+	deps := admissionDeps(func(d *kvExactAdmissionDeps) {
+		d.profileByID = func(id string) (*ModelPromptProfile, uint64, bool) { return p, 7, id == p.ProfileID }
+		d.contractRef = func(eng string) (KvEngineContractRef, error) {
+			return KvEngineContractRef{ID: contracts[eng], Gen: 1}, nil
+		}
+	})
+	for _, mode := range []string{"", KvExactApiCompletions, KvExactApiBoth} {
+		_, err := kvExactRuntimeValidate("sglang", 3, p.BaseModel, mode, p.ProfileID, deps)
+		if err == nil || !strings.Contains(err.Error(), "encodes this model's completions prompts with a BOS") {
+			t.Fatalf("sglang api %q: strict completions must be refused, got %v", mode, err)
+		}
+	}
+	res, err := kvExactRuntimeValidate("sglang", 3, p.BaseModel, KvExactApiChat, p.ProfileID, deps)
+	if err != nil || !res.APIChat || res.APICompletions {
+		t.Fatalf("sglang chat: the template writes the BOS itself and must stay admitted, got %+v %v", res, err)
+	}
+	for _, eng := range []string{"", "vllm", "trtllm"} {
+		res, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, "", p.ProfileID, deps)
+		if err != nil || !res.APIChat || !res.APICompletions {
+			t.Fatalf("engine %q: encodes without the BOS like the gateway, both surfaces must stay admitted, got %+v %v", eng, res, err)
+		}
+	}
+	// The quirk is keyed by the contract the rule resolves, not the engine
+	// family: an SGLang rule resolving another contract is not refused.
+	contracts["sglang"] = "sglang-kv-rank-v2"
+	if res, err := kvExactRuntimeValidate("sglang", 3, p.BaseModel, "", p.ProfileID, deps); err != nil || !res.APICompletions {
+		t.Fatalf("sglang on another contract: completions must stay admitted, got %+v %v", res, err)
+	}
+	contracts["sglang"] = "sglang-kv-rank-v1"
+	p.EngineQuirks = nil
+	if res, err := kvExactRuntimeValidate("sglang", 3, p.BaseModel, "", p.ProfileID, deps); err != nil || !res.APICompletions {
+		t.Fatalf("sglang without the quirk: completions must stay admitted, got %+v %v", res, err)
+	}
+}
+
 // TestKvExactAdmissionFailClosedWithoutContractSource: strict admission with
 // no engine-contract registry registered must refuse — never compose a
 // binding over an unproven contract identity.
