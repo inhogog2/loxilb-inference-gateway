@@ -25,9 +25,27 @@ VLLM_IMAGE='vllm/vllm-openai@sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050
 VLLM_VERSION=0.28.0
 SGL_IMAGE='lmsysorg/sglang@sha256:9e148f5ac788e856a06166bd6347a831831eb9fcfab4d1770874823a7c29a1a1'
 SGL_VERSION=0.5.18
+# SGLang /v1/tokenize fix (engine.sh SGL_TOKPATCH). The action is chosen by the sha256 of the serving_tokenize.py
+# the image itself ships, never by a version string: rebuilt, post-release and forked images are identified
+# exactly, and a file nobody has reviewed is refused. The committed fix file is SGLang v0.5.19's, unmodified.
+SGL_TOKPATCH_TARGET=/sgl-workspace/sglang/python/sglang/srt/entrypoints/openai/serving_tokenize.py
+SGL_TOKPATCH_FILE_SHA=7ef745d2d1ba1bee722a3ddc3ec0feb700a6e0aef40645ad67b7d04876e921f2
+# sgl_tokpatch_plan <stock sha256> — mount | fixed | nochat | unknown
+sgl_tokpatch_plan() {
+  case $1 in
+  # v0.5.12 - v0.5.18 (one identical file): /v1/tokenize answers 500 when model_max_length is int(1e30).
+  f1791dbe89245cf80f2ae3c3f052e944c0b602deaf45909a31d2e4aabfc95711) echo mount ;;
+  # v0.5.19 - v0.5.20: fixed upstream (sgl-project/sglang#37054); this IS the committed file.
+  7ef745d2d1ba1bee722a3ddc3ec0feb700a6e0aef40645ad67b7d04876e921f2) echo fixed ;;
+  # v0.5.4 - v0.5.11: /v1/tokenize has no `messages` form, so a strict chat rule cannot attest at all.
+  9202c10bc6bf8f5e93d869b99efe036948e3b7dbe87abadb7be2eb079849cfed) echo nochat ;;
+  *) echo unknown ;;
+  esac
+}
 
 SCENARIO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIX="${SCENARIO_DIR}/../common/kv_hash/fixtures"
+SGL_TOKPATCH_FILE="${SCENARIO_DIR}/sglang-tokenize-fix/serving_tokenize.py"
 LB="${GW_API}/config/loadbalancer"
 MET="${GW_API}/metrics"
 

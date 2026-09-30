@@ -3297,32 +3297,6 @@ echo "             climbing with the stream count."
 # up to pallocChunkPages), never less. So a round is a heap event only when
 # the page heap grew by at least 4096 kB.
 #
-# 🚨 THE WINDOW'S EDGES ARE READ AS A PAIR, NOT ONE AFTER THE OTHER.
-#
-# The next red on a clean branch scored rounds 128 4 0 0 0 4 = +136 kB against
-# the 128 kB ceiling, with the runtime's bookkeeping reported as +0 kB and no
-# mapping in the maps diff larger than 8 kB. A rerun of the same commit scored
-# 128 0 0 0 0 4 and passed, because there the bookkeeping read +128 kB and was
-# subtracted. Same chunk, same round -- the first scored one. It is one runtime
-# bookkeeping chunk mapped in the instant AFTER the data-segment read that
-# opens the window and BEFORE the bookkeeping read and the maps snapshot
-# beside it, so it was in neither baseline but in the data segment's growth:
-# scored and never subtracted. The metrics scrape that takes that bookkeeping
-# reading is itself one of the things that can map the chunk.
-#
-# The ordering alone cannot fix this: whichever counter is read first, a chunk
-# mapped between the two reads is attributed to the wrong side. So the reading
-# that opens the window is now the data segment BRACKETED by the bookkeeping --
-# read, data segment, read -- and it is used only when the two bookkeeping
-# reads agree, so nothing the runtime took for itself can have landed between
-# them. When they disagree, the window does not open on that reading: the event
-# is printed and the next quiet round tries again. The reading that closes
-# the window is bracketed the same way, and a disagreement there restarts the
-# window exactly like a heap event. Nothing is subtracted that was not reported
-# by the runtime inside the window, and the ceiling is unchanged. A runtime that
-# maps a chunk at every reading never opens or closes a window and fails as
-# unsettled.
-#
 # An UNSETTLED run is a failed MEASUREMENT, not a detected leak, and says so.
 # So is a round that could not be read, and a series shorter than the rounds
 # actually driven: an oracle that cannot obtain its reading has shown nothing.
@@ -3374,8 +3348,6 @@ H2L_THREAD_EVENTS=""
 H2L_SETTLED_AT=0
 H2L_HEAP_EVENTS=""
 H2L_HEAP_RESTARTS=0
-H2L_EDGE_EVENTS=""      # bookkeeping that moved across an opening or closing read
-H2L_EDGE_RESTARTS=0
 h2l_num() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 H2L_HA_PREV=$(gw_go_pageheap_kb)
 H2L_PREV=$(gw_vmdata_kb)
@@ -3400,11 +3372,6 @@ while [ "$H2L_ROUNDS" -lt "$H2L_ROUND_CAP" ]; do
   H2L_HA=$(gw_go_pageheap_kb)
   H2L_NOW=$(gw_vmdata_kb)
   H2L_HB=$(gw_go_pageheap_kb)
-  # ...and on that closing round the bookkeeping is read again after it, so
-  # the closing data-segment read is bracketed by the pair (see the header).
-  if [ "$H2L_PHASE" = measure ] && [ $((H2L_WINDOW + 1)) -ge "$H2L_MEAS_ROUNDS" ]; then
-    H2L_BOOK3B=$(gw_go_bookkeeping_kb)
-  fi
   H2L_THR=$(gw_threads)
   H2L_TASKS_NOW=$(gw_tasks)
   # Did the runtime map memory inside the interval this round's VmData step covers,
@@ -3470,28 +3437,13 @@ while [ "$H2L_ROUNDS" -lt "$H2L_ROUND_CAP" ]; do
       H2L_STREAK=0
     fi
     if [ "$H2L_STREAK" -ge "$H2L_SETTLE_NEED" ]; then
-      # settled: the scored window opens on a data-segment reading bracketed
-      # by two bookkeeping reads that agree (see the header)
-      h2l_ba=$(gw_go_bookkeeping_kb)
-      h2l_open=$(gw_vmdata_kb)
-      h2l_bb=$(gw_go_bookkeeping_kb)
-      if ! h2l_num "$h2l_open"; then
-        H2L_READ_OK=0
-        break
-      fi
-      if h2l_num "$h2l_ba" && h2l_num "$h2l_bb" && [ "$h2l_bb" -ne "$h2l_ba" ]; then
-        # not opened here; the next quiet round tries again
-        H2L_EDGE_EVENTS="$H2L_EDGE_EVENTS round $H2L_ROUNDS (opening): Go bookkeeping $h2l_ba -> $h2l_bb kB across the read;"
-        H2L_STREAK=$((H2L_SETTLE_NEED - 1))
-        continue
-      fi
+      # settled: the scored window opens on this reading
       H2L_PHASE=measure
       H2L_SETTLED_AT=$H2L_ROUNDS
-      H2L_PREV=$h2l_open
-      H2L_DATA0=$h2l_open
+      H2L_DATA0=$H2L_NOW
       H2L_RSS0=$(gw_rss_kb)
       H2L_THR0=$H2L_THR
-      H2L_BOOK0=$h2l_bb
+      H2L_BOOK0=$(gw_go_bookkeeping_kb)
       H2L_HEAP0=$(gw_go_heap_kb)
       gw_maps_snapshot .h2l_maps_before
     fi
@@ -3500,15 +3452,6 @@ while [ "$H2L_ROUNDS" -lt "$H2L_ROUND_CAP" ]; do
   H2L_DELTAS="$H2L_DELTAS $H2L_D"
   H2L_WINDOW=$((H2L_WINDOW + 1))
   if [ "$H2L_WINDOW" -ge "$H2L_MEAS_ROUNDS" ]; then
-    if h2l_num "$H2L_BOOK3" && h2l_num "$H2L_BOOK3B" && [ "$H2L_BOOK3B" -ne "$H2L_BOOK3" ]; then
-      H2L_EDGE_EVENTS="$H2L_EDGE_EVENTS round $H2L_ROUNDS (closing): Go bookkeeping $H2L_BOOK3 -> $H2L_BOOK3B kB across the read;"
-      H2L_EDGE_RESTARTS=$((H2L_EDGE_RESTARTS + 1))
-      H2L_PHASE=warm
-      H2L_DELTAS=""
-      H2L_WINDOW=0
-      H2L_STREAK=0
-      continue
-    fi
     H2L_DONE=1
     H2L_DATA3=$H2L_NOW
     H2L_THR3=$H2L_THR
@@ -3545,11 +3488,6 @@ if [ -n "$H2L_HEAP_EVENTS" ]; then
   echo "         the runtime maps its heap in 4 MiB chunks when its pacer decides; the"
   echo "         scored window was restarted $H2L_HEAP_RESTARTS time(s) on it. A heap that grows"
   echo "         every round never settles and fails below"
-fi
-if [ -n "$H2L_EDGE_EVENTS" ]; then
-  echo "         window-edge events (the runtime mapped bookkeeping across the reading that"
-  echo "         opens or closes the window):$H2L_EDGE_EVENTS"
-  echo "         such a reading is not used; the scored window was restarted $H2L_EDGE_RESTARTS time(s) on a closing one"
 fi
 note_case "H2-LIFE-003"
 if [ "$H2L_READ_OK" != 1 ]; then

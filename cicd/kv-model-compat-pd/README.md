@@ -50,6 +50,35 @@ matters too: launched with a hub id, SGLang 0.5.18 (transformers 5.12.1) builds 
 bare byte-level pre-tokenizer instead of `tokenizer.json`'s split rule, so both `/v1/tokenize` and the chat
 serving path produce different ids from the pinned tokenizer and attestation fails closed.
 
+## SGLang tokenize fix
+
+SGLang 0.5.12 - 0.5.18's `/v1/tokenize` answers 500 for gemma-3, granite-4.2 and gpt-oss: their tokenizer's
+`model_max_length` is transformers' `int(1e30)` sentinel, which orjson cannot encode. The token-parity probe
+fails closed on the 500, so a strict rule on these models never reaches READY. Upstream fixed it in 0.5.19.
+
+`engine.sh` reads the sha256 of the `serving_tokenize.py` the image ships and acts on the table in `env.sh`
+(`sgl_tokpatch_plan`), never on a version string:
+
+| Image file | Releases | `SGL_TOKPATCH=auto` (default) |
+|---|---|---|
+| `f1791dbe…` | 0.5.12 - 0.5.18 | mount [`sglang-tokenize-fix/`](sglang-tokenize-fix/README.md) (v0.5.19's file) read-only |
+| `7ef745d2…` | 0.5.19 - 0.5.20 | launch unchanged (already fixed) |
+| `9202c10b…` | 0.5.4 - 0.5.11 | refuse: no chat form of `/v1/tokenize`, so strict chat cannot attest |
+| anything else | — | refuse until the file is reviewed and a row is added |
+
+`SGL_TOKPATCH=1` requires the mount; `SGL_TOKPATCH=0` never mounts. A `sglang-notokpatch:<profileId>` leg
+runs with `0` and must fail at the probe with the engine's 500: the fix's red twin. The mounted file's
+sha256 is checked on the node before launch and inside the running container after readiness.
+
+Supporting another SGLang release takes three pinned pieces: an image whose file has a row in the table
+above, a `manifests-sglang` set carrying its `engineVersion` (the identity probe compares it exactly), and
+the per-version launch arguments in `engine.sh`, re-measured with one live leg per model.
+
+gemma-3 on SGLang 0.5.18 also needs `--cuda-graph-backend-prefill=disabled` (set per profile in `engine.sh`):
+the prefill member's prefill CUDA graph pads a ragged prefill batch, flashinfer then raises
+`q.shape[0] (48) does not match qo_indptr[-1] (39)` on the first real prefill, and the engine exits. Decode
+CUDA graphs stay on. `engine.sh stop` saves each engine's log under `EVROOT/engine-logs/` before removing it.
+
 ## Regenerating the fixtures
 
 Profiles, manifests and probe fixtures are generated from pinned inputs by
