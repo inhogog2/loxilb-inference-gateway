@@ -61,7 +61,7 @@ build, pin `LOXILB_DOCKER_IMAGE` to the locally-built image.
 
 | Leg | What it pins |
 |---|---|
-| A | typed rules accepted; every KV/P/D shape rejected for llamacpp (`kvExactMode`, `pd_disagg_mode`, non-default `kvZmqPort`/`kvDpRankCount`/`kvBlockSize`, any explicit `kvHashAlgo`) |
+| A | typed rules accepted; every KV/P/D shape rejected for llamacpp (`kvExactMode`, `pd_disagg_mode`, non-default `kvZmqPort`/`kvDpRankCount`/`kvBlockSize`, any explicit `kvHashAlgo`), each scored by the refusal message of the check that owns it — the bodies are otherwise valid (`kvExactMode:3` with a model name; P/D with a prefill and a decode endpoint), so a generic shape check cannot answer for the llamacpp guard |
 | B | non-stream + stream happy path with receipts and `[DONE]`; unknown fields tolerated (200); malformed JSON relayed as the engine's **500** |
 | C | ping-through-VIP: `":"` comment frames relayed mid-stream during a scripted stall, stream completes |
 | D | **system-prompt keying, positive**: system-prompt families pin to one EP each, warm `cached_tokens` receipts, `[PREFIX_EXTRACTED]` in the dp log |
