@@ -33,6 +33,32 @@ on OK.
   halfpartial <host> <port>         half a request, then shutdown(SHUT_WR); the
                                     connection goes away and the service keeps
                                     serving a fresh one
+  halfcork  <host> <port> [ms]      request and FIN in ONE segment (TCP_CORK), so
+                                    the FIN is there before the proxy pairs the
+                                    connection; backend holds ms (default 500);
+                                    expects an answer
+  halfafter <host> <port> [ms] [after]
+                                    FIN after ms (default 20) past the request,
+                                    once the proxy has paired the connection;
+                                    backend holds ms (default 500); expects an
+                                    answer
+  slowread  <host> <port> <query> <rate> [half] [rcvbuf]
+                                    GET /slowread?<query>, read at rate bytes/s
+                                    through a rcvbuf-byte receive buffer (default
+                                    65536); half=1 half-closes after the request.
+                                    Expects every promised byte; reports the time
+  stall     <host> <port> <query> <secs> [half] [rcvbuf]
+                                    GET /stall?<query>, then read NOTHING for secs
+                                    (receive window 0), then read everything;
+                                    reports what was still delivered
+  queuehalf <host> <port> <hold_ms> <first|keepalive> [fin_ms] [model]
+                                    against an AI-gateway rule whose pool holds
+                                    ONE request: a holder takes the unit for
+                                    hold_ms, then a second request parks behind it
+                                    and half-closes fin_ms later. first parks the
+                                    connection's first request, keepalive its
+                                    second. fin_ms < 0 sends no FIN (the control).
+                                    Expects the parked request answered
   keepalive <host> <port> <secs> <interval_ms>
                                     one request per interval on one connection
   echo      <host> <port>           one connection, a fixed request sequence
@@ -60,6 +86,7 @@ import hashlib
 import json
 import socket
 import sys
+import threading
 import time
 
 TIMEOUT = 10
@@ -613,6 +640,283 @@ def mode_halfpartial(host, port):
     return 'OK partial request closed (answer: %s), service intact' % answer
 
 
+def mode_halfcork(host, port, ms=500):
+    """The FIN reaches the proxy with the request, before it pairs anything.
+
+    halfclose's FIN leaves a few microseconds after the request, so whether it
+    lands before or after the proxy installs the socket pair is a race. Corked,
+    the request stays in the send queue and shutdown(SHUT_WR) puts the FIN on
+    that same segment: by the time the proxy reads the request, the socket has
+    already received the FIN. The request must fit one segment for that, which
+    a bodyless GET does on any link.
+
+    Same backend hold as halfslow, for the same reason: an answer that beats
+    the proxy's deferred-close bound cannot show whether the proxy waited."""
+    s = socket.create_connection((host, port), timeout=TIMEOUT)
+    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_CORK, 1)
+    path = '/halfcork?rdelay=%d' % ms
+    head, _ = request('GET', path, host)
+    t0 = time.time()
+    s.sendall(head)
+    s.shutdown(socket.SHUT_WR)
+    return _half_verdict(s, t0, path, ms)
+
+
+def _half_verdict(s, t0, path, ms):
+    """The answer, or when and how the connection ended without one: a cut
+    near 0ms and one near the proxy's deferred-close bound are different
+    layers of the same defect."""
+    status, got, at = _outcome(Reader(s), t0)
+    s.close()
+    if status is None:
+        return 'FAIL cut at %.0fms (%s), backend holds %dms' % (at, got, ms)
+    err = check(status, got, path)
+    return 'FAIL ' + err if err else 'OK answered at %.0fms' % at
+
+
+def mode_halfafter(host, port, ms=500, after=20):
+    """The FIN reaches the proxy after it has paired the connection, but early:
+    after ms past the request, while the backend is still holding the answer
+    for ms.
+
+    The backend connect is sub-millisecond on this testbed, so 20ms is well past
+    the pairing and still well inside the 100ms that separates a half-close's
+    FIN from a cancel's. That is the population a close-time fix cannot reach
+    without undoing the pairing, which is what makes it a separate case from
+    halfcork."""
+    s = connect(host, port)
+    path = '/halfafter?rdelay=%d' % ms
+    head, _ = request('GET', path, host)
+    t0 = time.time()
+    s.sendall(head)
+    time.sleep(after / 1000.0)
+    s.shutdown(socket.SHUT_WR)
+    return _half_verdict(s, t0, path, ms)
+
+
+def _query_int(query, key):
+    for part in query.split('&'):
+        k, _, v = part.partition('=')
+        if k == key and v.isdigit():
+            return int(v)
+    return None
+
+
+def _small_rcvbuf_connect(host, port, rcvbuf, timeout):
+    """Connects with the receive buffer fixed BEFORE the handshake: the window
+    scale is chosen then, and a buffer set afterwards still lets the window
+    open as far as autotuning had taken it."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if rcvbuf:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+    s.settimeout(timeout)
+    s.connect((host, port))
+    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    return s
+
+
+def _read_head(r):
+    """Returns (status, promised length or None) and leaves the body bytes
+    already received in r.buf."""
+    while b'\r\n\r\n' not in r.buf:
+        r._fill()
+    head, r.buf = r.buf.split(b'\r\n\r\n', 1)
+    r.head = head
+    lines = head.decode('latin-1').split('\r\n')
+    promised = None
+    for line in lines[1:]:
+        k, _, v = line.partition(':')
+        if k.strip().lower() == 'content-length':
+            promised = int(v.strip())
+    return int(lines[0].split()[1]), promised
+
+
+def _body_verdict(body, want, t, how):
+    """The common report of the slow-reader cases: how much of the promised
+    body arrived, whether it is the pattern's correct prefix, and when."""
+    bad = _prefix_verdict(body, len(body))
+    if bad is not None:
+        return 'FAIL body differs at offset %d of %d received at %.1fs' % (bad, len(body), t)
+    if want is not None and len(body) == want:
+        return 'OK %d bytes at %.1fs' % (want, t)
+    return 'FAIL cut after %d of %s bytes at %.1fs (%s)' % (
+        len(body), want if want is not None else '?', t, how)
+
+
+def mode_slowread(host, port, query, rate, half=0, rcvbuf=65536):
+    """A client that keeps reading, slower than the backend writes.
+
+    The body is ?bytes= of the pattern under whatever else the query asks the
+    backend for (?close=, ?chunk=&gap=, or ?abort= for a backend that leaves
+    part way). A close-delimited body has no length, so the expected length is
+    the query's bytes=. The receive buffer is fixed small so the backlog sits
+    in the proxy rather than in this socket, and the report carries the time
+    the answer ended: the cases this serves are told apart by WHEN a cut
+    happens, not only whether it does."""
+    s = _small_rcvbuf_connect(host, port, rcvbuf, 60)
+    r = Reader(s)
+    path = '/slowread?%s' % query
+    head, _ = request('GET', path, host)
+    t0 = time.time()
+    s.sendall(head)
+    if half:
+        s.shutdown(socket.SHUT_WR)
+    try:
+        status, promised = _read_head(r)
+    except (OSError, EOFError) as e:
+        return 'FAIL cut before the headers completed at %.1fs (%s)' % (time.time() - t0, e)
+    if status != 200:
+        return 'FAIL status %d' % status
+    want = promised if promised is not None else _query_int(query, 'bytes')
+    body, r.buf = r.buf, b''
+    how = 'EOF'
+    start = time.time()
+    try:
+        while want is None or len(body) < want:
+            allowance = int(rate * (time.time() - start)) - len(body)
+            if allowance <= 0:
+                time.sleep(0.01)
+                continue
+            chunk = s.recv(min(65536, allowance))
+            if not chunk:
+                break
+            body += chunk
+    except socket.timeout:
+        how = 'no byte for 60s'
+    except OSError as e:
+        how = type(e).__name__
+    s.close()
+    return _body_verdict(body, want, time.time() - t0, how)
+
+
+def mode_stall(host, port, query, secs, half=1, rcvbuf=4096):
+    """A client that stops reading: its receive window closes and stays shut
+    for secs. Then it reads everything as fast as it can and reports what was
+    still delivered — a proxy that gave up on it during the stall has closed
+    its end, so what arrives is the bytes that were already in the kernel and
+    then an EOF (or a reset) short of the promised length."""
+    s = _small_rcvbuf_connect(host, port, rcvbuf, 30)
+    r = Reader(s)
+    path = '/stall?%s' % query
+    head, _ = request('GET', path, host)
+    t0 = time.time()
+    s.sendall(head)
+    if half:
+        s.shutdown(socket.SHUT_WR)
+    time.sleep(secs)
+    try:
+        status, promised = _read_head(r)
+    except (OSError, EOFError) as e:
+        return 'FAIL cut before the headers completed, read at %.1fs (%s)' % (time.time() - t0, e)
+    if status != 200:
+        return 'FAIL status %d' % status
+    want = promised if promised is not None else _query_int(query, 'bytes')
+    body, r.buf = r.buf, b''
+    how = 'EOF'
+    try:
+        while want is None or len(body) < want:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            body += chunk
+    except socket.timeout:
+        how = 'no byte for 30s'
+    except OSError as e:
+        how = type(e).__name__
+    s.close()
+    return _body_verdict(body, want, time.time() - t0, how)
+
+
+def ai_request(path, host, model, content):
+    """An inference request: the capacity gate counts only a POST to a known
+    inference path, and an AI-gateway rule routes on the model it names."""
+    body = json.dumps({'model': model,
+                       'messages': [{'role': 'user', 'content': content}]}).encode()
+    head, body = request('POST', path, host, body, 'application/json')
+    return head + body, body
+
+
+def _outcome(r, t0):
+    """(status, body, ms since t0) for one response, or (None, what ended it,
+    ms since t0) when none arrived."""
+    try:
+        status, _, body = r.response_full()
+        return status, body, (time.time() - t0) * 1000
+    except socket.timeout:
+        return None, 'timeout', (time.time() - t0) * 1000
+    except EOFError:
+        return None, 'EOF', (time.time() - t0) * 1000
+    except OSError as e:
+        return None, type(e).__name__, (time.time() - t0) * 1000
+
+
+def mode_queuehalf(host, port, hold_ms, entry, fin_ms=0, model='hc-model'):
+    """A request that half-closes while it waits in the service queue.
+
+    The rule's pool must admit ONE request at a time and queue the rest. A
+    holder takes that unit for hold_ms; the request under test arrives behind
+    it, parks, and half-closes fin_ms after it was sent. Two ways into the park,
+    because the proxy parks them at different places: the first request of a
+    connection parks before the connection has a backend leg, a keep-alive
+    request parks after the previous request released its leg.
+
+    The report carries both times. A parked request that is cut near fin_ms was
+    dropped while it waited; one cut near hold_ms was dropped when it resumed;
+    one answered near hold_ms waited and was served. Every response carries a
+    usage object, as an inference backend's does: that is what hands the unit
+    back when the response completes. A negative fin_ms sends no
+    FIN at all: the control, which shows the park itself serves the request."""
+    kept = None
+    if entry == 'keepalive':
+        kept = connect(host, port)
+        kr = Reader(kept)
+        kept.sendall(ai_request('/v1/chat/completions?qh=warm&usage=1', host, model, 'warm')[0])
+        status, _ = kr.response()
+        if status != 200:
+            return 'FAIL the warm-up request was answered %d' % status
+    elif entry != 'first':
+        return 'FAIL entry must be first or keepalive, not %r' % entry
+    holder = connect(host, port)
+    holder.settimeout(hold_ms / 1000.0 + 15)
+    hr = Reader(holder)
+    th = time.time()
+    holder.sendall(ai_request('/v1/chat/completions?qh=holder&usage=1&rdelay=%d' % hold_ms,
+                              host, model, 'holder')[0])
+    # Read on its own thread: its answer is due while the parked request is
+    # still waiting, and the time it lands is the time the unit came back.
+    held = []
+    ht = threading.Thread(target=lambda: held.append(_outcome(hr, th)))
+    ht.start()
+    # The holder's request is admitted within a millisecond on this testbed;
+    # this only has to be long enough that the parked request comes second.
+    time.sleep(0.3)
+    s = kept if kept is not None else connect(host, port)
+    s.settimeout(hold_ms / 1000.0 + 15)
+    r = kr if kept is not None else Reader(s)
+    path = '/v1/chat/completions?qh=%s&usage=1' % entry
+    wire, payload = ai_request(path, host, model, entry)
+    t0 = time.time()
+    s.sendall(wire)
+    if fin_ms > 0:
+        time.sleep(fin_ms / 1000.0)
+    if fin_ms >= 0:
+        s.shutdown(socket.SHUT_WR)
+    status, got, ms = _outcome(r, t0)
+    s.close()
+    ht.join()
+    holder.close()
+    hstatus, hgot, hms = held[0]
+    hold = 'holder %s at %.0fms' % (hstatus if hstatus else hgot, hms)
+    if status is None:
+        return 'FAIL parked %s request lost: %s at %.0fms, FIN at %dms (%s)' % (
+            entry, got, ms, fin_ms, hold)
+    err = check(status, got, path, payload)
+    if err:
+        return 'FAIL parked %s request: %s at %.0fms (%s)' % (entry, err, ms, hold)
+    return 'OK parked %s request answered at %.0fms, FIN at %dms (%s)' % (
+        entry, ms, fin_ms, hold)
+
+
 def mode_idle(host, port, secs):
     """Connects, sends nothing for secs, then uses the connection. A connection
     that has not sent a request has no socket pair, so it is NOT accelerated: an
@@ -634,7 +938,9 @@ MODES = {'split': mode_split, 'stream': mode_stream, 'pipeline': mode_pipeline,
          'halfclose': mode_halfclose, 'halfslow': mode_halfslow,
          'halfsplit': mode_halfsplit, 'halfmid': mode_halfmid,
          'halfinflight': mode_halfinflight, 'halfprefix': mode_halfprefix,
-         'halfpartial': mode_halfpartial,
+         'halfpartial': mode_halfpartial, 'halfcork': mode_halfcork,
+         'halfafter': mode_halfafter, 'slowread': mode_slowread,
+         'stall': mode_stall, 'queuehalf': mode_queuehalf,
          'keepalive': mode_keepalive, 'echo': mode_echo, 'chunked': mode_chunked,
          'sizes': mode_sizes, 'special': mode_special, 'abort': mode_abort,
          'idle': mode_idle, 'volume': mode_volume}

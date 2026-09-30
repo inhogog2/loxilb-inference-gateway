@@ -16,6 +16,19 @@
 //              proxy's deferred-close bound)
 //   ?split=N   with ?bytes=: send N bytes at once, the rest after ?rdelay= ms,
 //              under the promised Content-Length (a response cut mid-stream)
+//   ?chunk=N&gap=M
+//              with ?bytes= and no ?split=: send the body N bytes at a time,
+//              M ms apart, under the promised Content-Length (slow generation)
+//   ?close=1   with ?bytes=: Connection: close — the backend closes once the
+//              body is out
+//   ?close=2   with ?bytes=: close-delimited — no Content-Length, no chunking;
+//              the backend's close is what ends the body
+//   ?usage=1   add an OpenAI usage object to the JSON echo. A gateway's
+//              capacity unit comes back when it reads one; without it the
+//              unit stays with the connection until its next request or its
+//              close, so a holder that keeps its connection never frees it
+// A backend that closes part way through a response is ?abort=: it promises
+// twice what it sends.
 // A HEAD request gets the GET headers and no body.
 //
 // PATTERN is sha256("sockmap-pattern") in hex, repeated — the client derives the
@@ -42,6 +55,25 @@ function pattern(n) {
 function query(url, key) {
   var m = url.match(new RegExp('[?&]' + key + '=([0-9]+)'));
   return m ? parseInt(m[1], 10) : null;
+}
+
+// Writes body n bytes at a time, gap ms apart, ending with the last piece. A
+// client that goes away stops the timer instead of writing into a dead socket.
+function paced(res, body, n, gap) {
+  var off = 0;
+  (function next() {
+    if (res.destroyed) {
+      return;
+    }
+    var end = Math.min(off + n, body.length);
+    if (end === body.length) {
+      res.end(body.slice(off));
+      return;
+    }
+    res.write(body.slice(off, end));
+    off = end;
+    setTimeout(next, gap);
+  })();
 }
 
 var server = http.createServer(function (req, res) {
@@ -107,8 +139,23 @@ var server = http.createServer(function (req, res) {
       var bytes = query(req.url, 'bytes');
       if (bytes !== null) {
         var body = pattern(bytes);
-        res.writeHead(200, { 'Content-Type': 'application/octet-stream',
-                             'Content-Length': String(body.length) });
+        // ?close= is how a response reaches the proxy's backend-EOF path: this
+        // server otherwise keeps every connection alive, so the proxy never
+        // sees the backend leave while it still owes the client bytes.
+        var close = query(req.url, 'close');
+        var hdrs = { 'Content-Type': 'application/octet-stream' };
+        if (close === 2) {
+          // With no length and chunking off, Node sends the body raw and
+          // closes after it: the close is the only end marker.
+          res.useChunkedEncodingByDefault = false;
+          hdrs['Connection'] = 'close';
+        } else {
+          hdrs['Content-Length'] = String(body.length);
+          if (close === 1) {
+            hdrs['Connection'] = 'close';
+          }
+        }
+        res.writeHead(200, hdrs);
         if (req.method === 'HEAD') {
           res.end();
           return;
@@ -116,6 +163,14 @@ var server = http.createServer(function (req, res) {
         if (split !== null && split > 0 && split < body.length) {
           res.write(body.slice(0, split));
           setTimeout(function () { res.end(body.slice(split)); }, rdelay || 0);
+          return;
+        }
+        // ?chunk=&gap= paces the WHOLE body, where ?split= makes one pause.
+        // It is the slow-generation shape: the proxy's client-side cache fills
+        // and empties once per chunk instead of once per response.
+        var chunk = query(req.url, 'chunk');
+        if (chunk !== null && chunk > 0 && chunk < body.length) {
+          paced(res, body, chunk, query(req.url, 'gap') || 0);
           return;
         }
         res.end(body);
@@ -126,9 +181,13 @@ var server = http.createServer(function (req, res) {
       Object.keys(req.headers).sort().forEach(function (k) {
         headers[k] = req.headers[k];
       });
-      var json = JSON.stringify({ name: name, method: req.method, path: req.url,
-                                  len: len, sha256: hash.digest('hex'),
-                                  headers: headers });
+      var echo = { name: name, method: req.method, path: req.url,
+                   len: len, sha256: hash.digest('hex'), headers: headers };
+      if (query(req.url, 'usage') === 1) {
+        // Last, so it sits in the tail the gateway scans for it.
+        echo.usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+      }
+      var json = JSON.stringify(echo);
       res.writeHead(200, { 'Content-Type': 'application/json',
                            'Content-Length': Buffer.byteLength(json) });
       if (req.method === 'HEAD') {
