@@ -1,0 +1,17 @@
+profileId: r1-distill-qwen-15b-v1
+baseModel: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+modelType: qwen2
+tokenizerRevision: ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562
+tokenizerArtifact: sha256/88145e3c3249adc2546ede277e9819d6e405e19072456e4b521cbc724bd60773
+tokenizerSha256: 88145e3c3249adc2546ede277e9819d6e405e19072456e4b521cbc724bd60773
+templateArtifact: sha256/56a1447ad31926fdc21fb07e56e5642bd9c850c4f52d8c8af7bbe5f079a84f5f
+templateSha256: 56a1447ad31926fdc21fb07e56e5642bd9c850c4f52d8c8af7bbe5f079a84f5f
+templateContentFormat: string
+renderPolicy:
+  addGenerationPrompt: true
+  bosToken: "<｜begin▁of▁sentence｜>"
+  eosToken: "<｜end▁of▁sentence｜>"
+supportedApis:
+  - completions
+  - chat
+aliasPolicy: base_model_only

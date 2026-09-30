@@ -1,0 +1,1 @@
+{"model": "google/gemma-4-E2B-it", "messages": [{"role": "user", "content": "  leading and trailing spaces  "}, {"role": "assistant", "content": "\nnewline-wrapped reply\n"}, {"role": "user", "content": "final\nmulti-line\nquestion"}]}

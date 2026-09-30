@@ -1,0 +1,1 @@
+{"model": "google/gemma-3-1b-it", "messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello! How can I help?"}]}
