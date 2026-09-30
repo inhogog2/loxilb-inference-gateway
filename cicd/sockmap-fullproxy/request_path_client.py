@@ -55,7 +55,12 @@ on OK.
                                     POST a <bytes> body to a backend that leaves it
                                     unread for rpause_ms, then shutdown(SHUT_WR)
                                     (half=0: no FIN, the control). With lull, pause
-                                    300ms after the first lull bytes. Expects the
+                                    300ms after the first lull bytes; that reaches
+                                    the paused shape only when lull is past the
+                                    proxy's cache high-water mark plus what the
+                                    kernel buffers take (about 13MB), the rest of
+                                    the body fits those buffers (a few MB), and
+                                    rpause_ms outlasts the writes. Expects the
                                     backend to have received the whole body and
                                     the answer to arrive; reports when the body
                                     was written and when the connection ended
@@ -855,7 +860,14 @@ def mode_halfupload(host, port, nbytes, rpause, half=1, lull=0):
     whole body at once can run the cache well past the mark without ever being
     paused. lull makes the pause reachable: the client stops for 300ms after
     the first lull bytes, the proxy's read event ends, and the next one finds
-    the cache over the mark.
+    the cache over the mark. Three things have to hold for that. The first
+    lull bytes must leave more than the mark in the cache once the kernel
+    buffers on the way have taken their share (lull of about 13MB against a
+    12MB mark). The rest of the body must fit the client's send buffer and the
+    proxy's receive buffer, so sendall() returns and the FIN goes out while the
+    proxy is paused; a larger rest blocks until the backend reads again, and
+    the rest and the FIN then arrive in one read event down the EOF path. And
+    rpause must outlast the client's writes.
 
     The body is application/octet-stream, the proxy's streamed-upload path.
     sendall() can block while the proxy is paused; the report says when it
@@ -866,20 +878,30 @@ def mode_halfupload(host, port, nbytes, rpause, half=1, lull=0):
     path = '/halfupload?rpause=%d' % rpause
     head, body = request('POST', path, host, payload, 'application/octet-stream')
     t0 = time.time()
-    if 0 < lull < len(body):
-        s.sendall(head + body[:lull])
-        time.sleep(0.3)
-        s.sendall(body[lull:])
-    else:
-        s.sendall(head + body)
-    sent = (time.time() - t0) * 1000
-    if half:
-        s.shutdown(socket.SHUT_WR)
+    try:
+        if 0 < lull < len(body):
+            s.sendall(head + body[:lull])
+            time.sleep(0.3)
+            s.sendall(body[lull:])
+        else:
+            s.sendall(head + body)
+        sent = (time.time() - t0) * 1000
+        if half:
+            s.shutdown(socket.SHUT_WR)
+    except OSError as e:
+        # The proxy can drop the connection while this is still writing; say
+        # when, rather than leave main() to report the bare exception.
+        s.close()
+        return 'FAIL write %s at %.0fms, backend reads after %dms' % (
+            type(e).__name__, (time.time() - t0) * 1000, rpause)
     status, got, at = _outcome(Reader(s), t0)
     s.close()
     if status is None:
-        return 'FAIL cut at %.0fms (%s), body of %d written by %.0fms, backend reads after %dms' % (
-            at, got, nbytes, sent, rpause)
+        # The FIN left when the writes returned: the cut measured from it is
+        # the figure to compare against the proxy's close bounds.
+        fin = ', FIN+%.0fms' % (at - sent) if half else ''
+        return 'FAIL cut at %.0fms (%s%s), body of %d written by %.0fms, backend reads after %dms' % (
+            at, got, fin, nbytes, sent, rpause)
     err = check(status, got, path, payload)
     if err:
         return 'FAIL %s at %.0fms' % (err, at)

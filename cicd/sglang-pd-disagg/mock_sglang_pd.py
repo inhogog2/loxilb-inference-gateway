@@ -244,6 +244,7 @@ class MockSGLangHandler(BaseHTTPRequestHandler):
         """Block until decode joins the room (this is the load-bearing wait:
         a sequential proxy never gets here past the timeout), verify the
         decode-side triple copy, mark the 'KV transfer' done, respond."""
+        global _late_next
         room = triple["bootstrap_room"]
         deadline = time.monotonic() + _args.rendezvous_timeout
         start = time.monotonic()
@@ -277,7 +278,6 @@ class MockSGLangHandler(BaseHTTPRequestHandler):
             _rooms[room]["done"] = True
             _rooms_cond.notify_all()
         _log(f"RENDEZVOUS-OK room={room}")
-        global _late_next
         with _knob_lock:
             late, _late_next = _late_next, 0.0
         if late > 0:
@@ -364,6 +364,7 @@ class MockSGLangHandler(BaseHTTPRequestHandler):
             })
 
     def _send_sse(self, room):
+        global _long_next
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -371,7 +372,6 @@ class MockSGLangHandler(BaseHTTPRequestHandler):
         self.send_header("X-SG-Decode-Ep", str(_args.ep_idx))
         self.close_connection = True
         self.end_headers()
-        global _long_next
         with _knob_lock:
             long_, _long_next = _long_next, None
         tokens = ["Hello", " from", " mock", " SGLang", " decode", "."]
@@ -518,7 +518,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 _long_next = None
             _log("admin: knobs RESET")
             self._reply({"fail_next": False, "die_next": False,
-                         "reject_next": False})
+                         "reject_next": False, "late_next": 0.0,
+                         "long_next": None})
         else:
             self.send_response(404)
             self.end_headers()
@@ -527,7 +528,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         if self.path == "/admin/status":
             with _knob_lock:
                 self._reply({"role": _args.role, "request_count": _request_count,
-                             "fail_next": _fail_next, "die_next": _die_next})
+                             "fail_next": _fail_next, "die_next": _die_next,
+                             "reject_next": _reject_next, "late_next": _late_next,
+                             "long_next": list(_long_next) if _long_next else None})
         else:
             self.send_response(404)
             self.end_headers()
