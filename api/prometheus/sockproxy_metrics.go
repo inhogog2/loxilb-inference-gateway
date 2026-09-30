@@ -125,6 +125,26 @@ typedef struct proxy_metrics_snapshot {
     uint64_t proxy_context_inflight;
     uint64_t proxy_accept_blocked;
     uint64_t proxy_accept_bound;
+
+    // Half-close observation (sockproxy_hc.c): [entry][stream][bound],
+    // [entry][outcome], [path][early and owed], [family], [stream][bound].
+    // TAIL-APPEND ONLY — twin-declared in loxilb-ebpf/common/sockproxy_metrics.h
+    // and proxy_metrics_stub.c; keep ALL THREE in lockstep, same commit
+    // (TestProxyMetricsSnapshotLockstep).
+    uint64_t hc_fin_gap_bucket[4][3][15];
+    uint64_t hc_fin_gap_sum_us[4][3];
+    uint64_t hc_fin_gap_count[4][3];
+    uint64_t hc_fin_total[7][5];
+    uint64_t hc_accel_early_fin;
+    uint64_t hc_tls_fin[3][2];
+    uint64_t hc_client_reset;
+    uint64_t hc_user_agent[13];
+    uint64_t hc_first_gap_bucket[3][15];
+    uint64_t hc_first_gap_sum_us[3];
+    uint64_t hc_first_gap_count[3];
+    uint64_t hc_max_gap_bucket[3][15];
+    uint64_t hc_max_gap_sum_us[3];
+    uint64_t hc_max_gap_count[3];
 } proxy_metrics_snapshot_t;
 
 // C function from sockproxy.c
@@ -967,6 +987,52 @@ func calculateBackpressureRatio(metrics C.proxy_metrics_snapshot_t) float64 {
 	return float64(metrics.cache_backpressure_active) / total
 }
 
+// hcHistFromC reads one cumulative histogram out of the snapshot's arrays.
+func hcHistFromC(buckets *[hcBounds]C.uint64_t, sumUs, count C.uint64_t) hcHist {
+	var h hcHist
+	for i := range h.buckets {
+		h.buckets[i] = uint64(buckets[i])
+	}
+	h.count = uint64(count)
+	h.sumSecs = float64(sumUs) / 1e6
+	return h
+}
+
+// halfCloseFromC copies the half-close observation out of a snapshot. It
+// lives here because C types are visible only in the file that imports "C";
+// the rest is in halfclose_metrics.go.
+func halfCloseFromC(m *C.proxy_metrics_snapshot_t) halfCloseSnapshot {
+	var s halfCloseSnapshot
+	for e := 0; e < hcEntrySampled; e++ {
+		for st := 0; st < hcStreams; st++ {
+			s.finGap[e][st] = hcHistFromC(&m.hc_fin_gap_bucket[e][st],
+				m.hc_fin_gap_sum_us[e][st], m.hc_fin_gap_count[e][st])
+		}
+	}
+	for e := 0; e < hcEntries; e++ {
+		for o := 0; o < hcOutcomes; o++ {
+			s.finTotal[e][o] = uint64(m.hc_fin_total[e][o])
+		}
+	}
+	s.accelEarlyFin = uint64(m.hc_accel_early_fin)
+	for p := 0; p < hcTLSPaths; p++ {
+		for b := 0; b < 2; b++ {
+			s.tlsFin[p][b] = uint64(m.hc_tls_fin[p][b])
+		}
+	}
+	s.clientReset = uint64(m.hc_client_reset)
+	for f := 0; f < hcUAFamilies; f++ {
+		s.userAgent[f] = uint64(m.hc_user_agent[f])
+	}
+	for st := 0; st < hcStreams; st++ {
+		s.firstGap[st] = hcHistFromC(&m.hc_first_gap_bucket[st],
+			m.hc_first_gap_sum_us[st], m.hc_first_gap_count[st])
+		s.maxGap[st] = hcHistFromC(&m.hc_max_gap_bucket[st],
+			m.hc_max_gap_sum_us[st], m.hc_max_gap_count[st])
+	}
+	return s
+}
+
 // ============================================================================
 // RunSockproxyMetrics - Periodic Collection Goroutine
 // ============================================================================
@@ -1073,6 +1139,10 @@ func RunSockproxyMetrics(ctx context.Context) {
 		ttfbRaw.count = uint64(current.latency_count)
 		ttfbRaw.sumSecs = float64(current.latency_sum_us) / 1e6
 		updateTtfbStore(ttfbRaw)
+
+		// Half-close observation: cumulative C-side state for
+		// halfCloseCollector, merged the same way.
+		updateHalfCloseStore(halfCloseFromC(&current))
 
 		// 3c. P/D buffer overflow counter
 		if current.pd_kv_params_overflow >= prevSockproxyMetrics.pd_kv_params_overflow {

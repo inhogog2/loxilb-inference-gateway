@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-09-28T23:41:51+00:00",
-  "source_revision": "dd717f7043f1111699c7a512679c98ace7f50464",
+  "generated_at": "2026-09-30T07:30:01+00:00",
+  "source_revision": "1caec3ef0d1314d885c0d3378a6789f2fe911ce3",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 286,
+  "gateway_families": 294,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 251,
+  "absent": 259,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -3023,6 +3023,17 @@
    }
   },
   {
+   "name": "loxilb_proxy_client_reset_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
    "name": "loxilb_proxy_context_inflight",
    "owner": "loxilb",
    "class": "default",
@@ -3086,6 +3097,72 @@
    "gateway": {
     "type": "counter",
     "labels": []
+   }
+  },
+  {
+   "name": "loxilb_proxy_halfclose_accel_early_fin_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_proxy_halfclose_fin_gap_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "histogram",
+    "labels": [
+     "entry",
+     "stream"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_proxy_halfclose_fin_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "entry",
+     "outcome"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_proxy_halfclose_tls_fin_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "early_owed",
+     "path"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_proxy_halfclose_user_agent_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "family"
+    ]
    }
   },
   {
@@ -3303,6 +3380,32 @@
      "port",
      "proto",
      "vip"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_proxy_response_first_write_gap_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "histogram",
+    "labels": [
+     "stream"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_proxy_response_max_write_gap_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "histogram",
+    "labels": [
+     "stream"
     ]
    }
   },
