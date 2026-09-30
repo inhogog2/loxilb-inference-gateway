@@ -9,11 +9,13 @@
 #              Every admitted rule is deleted at once.
 #   pd         strict P/D chat legs, each run TWICE (engine pair launched per model, stopped after):
 #                vllm   gemma3-1b-it-v1  phi4-mini-instruct-v1  granite42-3b-v1
-#                sglang phi4-mini-instruct-v1
-#              Not in the list, with the reason: SGLang 0.5.18 x {gemma-3, granite-4.2, gpt-oss} — the engine's
-#              /v1/tokenize answers 500 for tokenizers whose model_max_length is 1e30 (fixed upstream in 0.5.19), so
-#              the token-parity probe fails closed and the rule can never reach READY.
-#              Override with PD_LEGS="vllm:<profileId> sglang:<profileId> ...".
+#                sglang phi4-mini-instruct-v1  gemma3-1b-it-v1  granite42-3b-v1
+#              SGLang legs launch with SGL_TOKPATCH=auto (engine.sh): an image whose /v1/tokenize answers 500 for
+#              tokenizers with model_max_length int(1e30) (0.5.12 - 0.5.18) gets the upstream fix mounted, a fixed
+#              image launches unchanged, any other image is refused. `sglang-notokpatch:<profileId>` forces
+#              SGL_TOKPATCH=0: on an affected image that leg must FAIL at the probe (the fix's red twin).
+#              gpt-oss-20b needs a 48 GB GPU per member: run it with PD_LEGS on such a pair.
+#              Override with PD_LEGS="vllm:<profileId> sglang:<profileId> sglang-notokpatch:<profileId> ...".
 #   all        preflight, admission, pd (default)
 set -u
 source "$(dirname "$0")/env.sh"
@@ -67,15 +69,18 @@ admission() {
 }
 
 pd() {
-  local legs=${PD_LEGS:-"vllm:gemma3-1b-it-v1 vllm:phi4-mini-instruct-v1 vllm:granite42-3b-v1 sglang:phi4-mini-instruct-v1"}
-  local leg eng prof run
+  local legs=${PD_LEGS:-"vllm:gemma3-1b-it-v1 vllm:phi4-mini-instruct-v1 vllm:granite42-3b-v1
+    sglang:phi4-mini-instruct-v1 sglang:gemma3-1b-it-v1 sglang:granite42-3b-v1"}
+  local leg eng prof run patch
   for leg in $legs; do
-    eng=${leg%%:*}; prof=${leg##*:}
-    echo "=== pd: ${eng} x ${prof} ==="
-    if ! { ./engine.sh start "$eng" prefill "$prof" && ./engine.sh start "$eng" decode "$prof"; }; then
-      check "pd ${eng} ${prof}: engine pair up" 1
+    eng=${leg%%:*}; prof=${leg##*:}; patch=auto
+    [ "$eng" = sglang-notokpatch ] && { eng=sglang; patch=0; }
+    echo "=== pd: ${leg%%:*} x ${prof} ==="
+    if ! { SGL_TOKPATCH=$patch ./engine.sh start "$eng" prefill "$prof" &&
+           SGL_TOKPATCH=$patch ./engine.sh start "$eng" decode "$prof"; }; then
+      check "pd ${leg%%:*} ${prof}: engine pair up" 1
     else
-      for run in 1 2; do ./leg.sh "$eng" "$prof"; check "pd ${eng} ${prof} run ${run}" $?; done
+      for run in 1 2; do ./leg.sh "$eng" "$prof"; check "pd ${leg%%:*} ${prof} run ${run}" $?; done
     fi
     ./engine.sh stop "$eng" prefill "$prof"; ./engine.sh stop "$eng" decode "$prof"
   done
