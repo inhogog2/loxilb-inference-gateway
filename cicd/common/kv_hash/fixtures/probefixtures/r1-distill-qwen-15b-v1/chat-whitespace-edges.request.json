@@ -1,0 +1,1 @@
+{"model": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", "messages": [{"role": "user", "content": "  leading and trailing spaces  "}, {"role": "assistant", "content": "\nnewline-wrapped reply\n"}, {"role": "user", "content": "final\nmulti-line\nquestion"}]}

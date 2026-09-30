@@ -1,0 +1,18 @@
+profileId: gptoss-20b-v1
+baseModel: openai/gpt-oss-20b
+modelType: gpt_oss
+tokenizerRevision: 6cee5e81ee83917806bbde320786a8fb61efebee
+tokenizerArtifact: sha256/0614fe83cadab421296e664e1f48f4261fa8fef6e03e63bb75c20f38e37d07d3
+tokenizerSha256: 0614fe83cadab421296e664e1f48f4261fa8fef6e03e63bb75c20f38e37d07d3
+templateArtifact: sha256/a4c9919cbbd4acdd51ccffe22da049264b1b73e59055fa58811a99efbd7c8146
+templateSha256: a4c9919cbbd4acdd51ccffe22da049264b1b73e59055fa58811a99efbd7c8146
+templateContentFormat: string
+renderPolicy:
+  addGenerationPrompt: true
+  bosToken: "<|startoftext|>"
+  eosToken: "<|return|>"
+  clockPolicy: utc-date
+supportedApis:
+  - completions
+  - chat
+aliasPolicy: base_model_only

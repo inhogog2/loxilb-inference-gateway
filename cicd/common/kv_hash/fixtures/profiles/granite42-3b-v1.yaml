@@ -1,0 +1,17 @@
+profileId: granite42-3b-v1
+baseModel: ibm-granite/granite-4.2-3b
+modelType: granite
+tokenizerRevision: e459acceac81e5fe67c07d9cfc72329a332e7eb1
+tokenizerArtifact: sha256/883975314d58743726347caaf2c32ac89afd5ad57222cffbc4f052f2ab27b2d7
+tokenizerSha256: 883975314d58743726347caaf2c32ac89afd5ad57222cffbc4f052f2ab27b2d7
+templateArtifact: sha256/f0ba43f79b3cabca5e5a7584c77aec92f49feae45cdf7779c87d9fc54cd90258
+templateSha256: f0ba43f79b3cabca5e5a7584c77aec92f49feae45cdf7779c87d9fc54cd90258
+templateContentFormat: string
+renderPolicy:
+  addGenerationPrompt: true
+  bosToken: "<s>"
+  eosToken: "<|im_end|>"
+supportedApis:
+  - completions
+  - chat
+aliasPolicy: base_model_only
