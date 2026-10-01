@@ -1,6 +1,11 @@
 profileId: qwen38-27b-fp8-v1
 baseModel: Qwen/Qwen3.8-27B-FP8
 modelType: qwen3_5
+engineQuirks:
+  sglang-kv-rank-v1:
+    cacheChunk: 64
+  vllm-kv-map-v2:
+    challengeLastBlock: true
 tokenizerRevision: 017b9c7af6b5689d5dd426a76e0bc077eb5ca20a
 tokenizerArtifact: sha256/0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3
 tokenizerSha256: 0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3
