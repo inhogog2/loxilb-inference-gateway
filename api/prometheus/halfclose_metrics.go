@@ -43,7 +43,7 @@ import (
 const (
 	hcEntrySampled = 4  // entries whose FIN carries a gap sample
 	hcEntries      = 7  // enum hc_entry
-	hcOutcomes     = 5  // enum hc_outcome
+	hcOutcomes     = 6  // enum hc_outcome
 	hcStreams      = 3  // enum hc_stream
 	hcTLSPaths     = 3  // enum hc_tls_path
 	hcUAFamilies   = 13 // enum hc_ua
@@ -52,7 +52,7 @@ const (
 
 var (
 	hcEntryLabels   = [hcEntries]string{"eof", "connect_wait", "setup_park", "fc_park", "qos", "backpressure", "other_pause"}
-	hcOutcomeLabels = [hcOutcomes]string{"owed", "idle", "partial", "tls", "accel"}
+	hcOutcomeLabels = [hcOutcomes]string{"owed", "idle", "partial", "residue", "tls", "accel"}
 	hcStreamLabels  = [hcStreams]string{"unknown", "true", "false"}
 	hcTLSPathLabels = [hcTLSPaths]string{"ktls", "close_notify", "unexpected_eof"}
 	hcUALabels      = [hcUAFamilies]string{"none", "curl", "python_requests", "python_httpx",
@@ -185,7 +185,7 @@ var halfCloseFinGapDesc = prometheus.NewDesc(
 
 var halfCloseFinDesc = prometheus.NewDesc(
 	"loxilb_proxy_halfclose_fin_total",
-	"Client FINs, counted once each where first seen. outcome: owed (an answer was still owed; the case loxilb_proxy_halfclose_fin_gap_seconds samples), idle (nothing owed: an ordinary close), partial (the request was not complete when the FIN came, or reads were paused mid-request by the byte shaper, relay backpressure or another pause: counted, never sampled), tls (a TLS connection), accel (the kernel was given a direction of the connection, so the proxy's answer count is not reliable there). entry adds qos, backpressure and other_pause, the paused-read places.",
+	"Client FINs, counted once each where first seen. outcome: owed (an answer was still owed; the case loxilb_proxy_halfclose_fin_gap_seconds samples), idle (nothing owed: an ordinary close), partial (the request was not complete when the FIN came and nothing was owed, or reads were paused mid-request by the byte shaper, relay backpressure or another pause: counted, never sampled), residue (an answer was still owed and the next request was still arriving: a pipeline's remainder, counted only), tls (a TLS connection), accel (the kernel was given a direction of the connection, so the proxy's answer count is not reliable there). entry adds qos, backpressure and other_pause, the paused-read places.",
 	[]string{"entry", "outcome"}, nil,
 )
 
@@ -215,7 +215,7 @@ var halfCloseUserAgentDesc = prometheus.NewDesc(
 
 var proxyResponseFirstWriteGapDesc = prometheus.NewDesc(
 	"loxilb_proxy_response_first_write_gap_seconds",
-	"Per response, the time from handing the request to the backend to the first successful write of the response to the client socket. Taken on connections whose bytes the kernel never carried, once the response has reached the client's socket; responses the backend ends by closing are not sampled. stream is as in loxilb_proxy_halfclose_fin_gap_seconds.",
+	"Per response, the time from handing the request to the backend to the first successful write of the response to the client socket. Taken on plaintext connections whose bytes the kernel never carried, once the response has reached the client's socket. stream is as in loxilb_proxy_halfclose_fin_gap_seconds.",
 	[]string{"stream"}, nil,
 )
 
