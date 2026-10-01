@@ -8,7 +8,8 @@
 # `model` runs, for one model on one engine:
 #   1. the prefill/decode fleet from PREFILLS / DECODES (launch arguments from ../kv-model-compat-pd/engine.sh);
 #   2. a long-prefix corpus sized for THIS model's tokenizer (TARGET_TOKENS prompt tokens) and a short-prefix one;
-#   3. a capacity calibration: closed-loop, cold (unique prefixes, nothing seeded), through the round-robin rule.
+#   3. a capacity calibration: closed-loop, cold (unique prefixes, nothing seeded), through the round-robin rule,
+#      at the highest concurrency of 32, 16, 8, 4 at which every request completes.
 #      Rates do not carry over between models or GPUs, so the offered rates are fractions of this number;
 #   4. three points (point.sh): long prefix at 40 % and at 80 % of the calibrated rate, and the short-prefix
 #      control at 80 %. The control has no cache benefit to win: it bounds the routing overhead and the noise.
@@ -50,7 +51,6 @@ corpora() {
   echo "$reps" > "$BASE/prefix-repetitions.txt"
   python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-long.jsonl" --families "$FAMILIES" --owners "${#PNODES[@]}" --prefix-repetitions "$reps"
   python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-short.jsonl" --families "$FAMILIES" --owners "${#PNODES[@]}" --shape short
-  python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-cal.jsonl" --families $((FAMILIES * 2)) --owners "${#PNODES[@]}" --prefix-repetitions "$reps" --salt "cal$(date +%s)-"
 }
 calibrate() {
   [ -s "$BASE/calibration.json" ] && { echo "  calibration already banked"; return 0; }
@@ -63,15 +63,28 @@ eps += [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 2} f
 print(json.dumps({"serviceArguments": {"externalIP": vip, "port": int(port), "protocol": "tcp", "sel": 0, "mode": 4, "host": vip,
       "probeRetries": 1, "pd_disagg_mode": True, "sse_mode": True, "model_name": model, "kvExactMode": 0}, "endpoints": eps}))
 PY
-  local http; http=$(curl -s -m 10 -o "$BASE/cal-rule-create.json" -w "%{http_code}" -X POST "${LB}" -H 'Content-Type: application/json' --data-binary "@$BASE/cal-rule.json")
-  [ "$http" = 200 ] || { echo "CAL_RULE_CREATE_FAILED $http"; return 1; }
-  sleep 5
-  python3 "$AB_DIR/bench.py" --corpus "$BASE/corpus-cal.jsonl" --output "$BASE/cal-requests.jsonl" --url "http://${VIP}:${PORT}" \
-    --model "$MODEL" --arm baseline --repetition 0 --max-tokens "$MAX_TOKENS" --concurrency "${CAL_CONCURRENCY:-32}"
-  local rc=$?
-  curl -s -m 10 -o /dev/null -X DELETE "${LB}/hosturl/${VIP}/externalipaddress/${VIP}/port/${PORT}/protocol/tcp?model_name=${enc}"
-  [ $rc = 0 ] || { echo "CAL_REQUESTS_INCOMPLETE"; return 1; }
-  python3 - "$BASE/cal-requests.jsonl" "$BASE/calibration.json" <<'PY'
+  # Closed loop at falling concurrency until every request completes. Too many cold prefills at once is not a
+  # capacity number: the decode engines pull each prefix late, the prefill engine's KV lease runs out, and the
+  # engine ends those streams with no token. Every attempt gets a fleet with nothing queued and prefixes used
+  # nowhere else.
+  local http c rc=1
+  for c in ${CAL_CONCURRENCY:-32 16 8 4}; do
+    python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-cal.jsonl" --families $((FAMILIES * 2)) --owners "${#PNODES[@]}" \
+      --prefix-repetitions "$(cat "$BASE/prefix-repetitions.txt")" --salt "cal$c-$(date +%s)-"
+    http=$(curl -s -m 10 -o "$BASE/cal-rule-create.json" -w "%{http_code}" -X POST "${LB}" -H 'Content-Type: application/json' --data-binary "@$BASE/cal-rule.json")
+    [ "$http" = 200 ] || { echo "CAL_RULE_CREATE_FAILED $http"; return 1; }
+    sleep 5
+    python3 "$AB_DIR/bench.py" --corpus "$BASE/corpus-cal.jsonl" --output "$BASE/cal-requests.jsonl" --url "http://${VIP}:${PORT}" \
+      --model "$MODEL" --arm baseline --repetition 0 --max-tokens "$MAX_TOKENS" --concurrency "$c" --timeout 120
+    rc=$?
+    curl -s -m 10 -o /dev/null -X DELETE "${LB}/hosturl/${VIP}/externalipaddress/${VIP}/port/${PORT}/protocol/tcp?model_name=${enc}"
+    [ $rc = 0 ] && { echo "$c" > "$BASE/cal-concurrency.txt"; break; }
+    cp "$BASE/cal-requests.jsonl" "$BASE/cal-requests-c$c-incomplete.jsonl"
+    echo "  calibration at concurrency $c: $(grep -c '"completed": false' "$BASE/cal-requests.jsonl") incomplete requests; fleet restart, next step"
+    fleet_up >/dev/null || { echo "CAL_FLEET_RESTART_FAILED"; return 1; }
+  done
+  [ $rc = 0 ] || { echo "CAL_REQUESTS_INCOMPLETE at every concurrency"; return 1; }
+  python3 - "$BASE/cal-requests.jsonl" "$BASE/calibration.json" "$BASE/cal-concurrency.txt" <<'PY'
 import json, statistics, sys
 r = [json.loads(l) for l in open(sys.argv[1])]
 dur = max(x["ended_at_unix"] for x in r) - min(x["started_at_unix"] for x in r)
@@ -79,6 +92,7 @@ rps = len(r) / dur
 out = {"requests": len(r), "duration_sec": round(dur, 2), "cold_closed_loop_rps": round(rps, 2),
        "ttft_p50_ms": round(statistics.median(x["ttft_ms"] for x in r), 1),
        "prompt_tokens_median": statistics.median(x["prompt_tokens"] for x in r),
+       "concurrency": int(open(sys.argv[3]).read()),
        "rate_low": max(0.5, round(rps * 0.4 * 2) / 2), "rate_high": max(1.0, round(rps * 0.8 * 2) / 2)}
 json.dump(out, open(sys.argv[2], "w"), indent=1); print("  calibration:", json.dumps(out))
 PY

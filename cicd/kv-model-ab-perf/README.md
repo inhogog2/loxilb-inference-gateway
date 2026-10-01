@@ -46,7 +46,7 @@ with the typed line and leaves no summary.
 | exact arm: one connected KV subscriber per prefill engine | `KV_SUBSCRIBERS` |
 | exact arm: tier-1.5 hits rise by exactly the number of timed requests | `EXACT_HITS` |
 | exact arm: the fall-through counter does not move | `EXACT_FALLTHROUGH` |
-| exact arm: every prefill engine served its owners' share (its own request counter) | `EXACT_PREFILL_SHARE` |
+| exact arm: every prefill engine served its owners' share (its own request counter), give or take the requests the gateway reports as spilled past a loaded owner | `EXACT_PREFILL_SHARE` |
 | baseline arm: tier-1.5 hits do not move | `BASELINE_HITS` |
 | baseline arm: every prefill engine served at least 80 % of an equal share | `BASELINE_NOT_SPREAD` |
 | three repetitions, every request present in both arms, no duplicate | `POINT_VOID` (analysis) |

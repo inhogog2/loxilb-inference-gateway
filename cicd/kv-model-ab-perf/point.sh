@@ -116,19 +116,23 @@ arm() { # arm <repetition> exact|baseline
     [ "$h" = 0 ] || { echo "BASELINE_HITS +$h (the baseline rule must not route by cache)"; return 1; }
   fi
   # Where the requests went, from the prefill engines' own counters. Every owner has the same number of
-  # families, so the exact arm puts an equal share on every prefill (a couple of gateway probe requests may
-  # ride on top); the baseline arm must spread too, or it is not a round-robin baseline.
-  local share=$(( NREQ / ${#PNODES[@]} )) s spread=""
+  # families, so the exact arm puts an equal share on every prefill, except for the requests the gateway itself
+  # reports as spilled past a loaded owner (bounded load; a spill is still a tier-1.5 hit). The baseline arm
+  # must spread too, or it is not a round-robin baseline.
+  local share=$(( NREQ / ${#PNODES[@]} )) s spread="" off
+  local sp=$(( $(msum "$d/after-gateway.prom" loxilb_pd_kv_tier15_spills_total) - $(msum "$d/before-gateway.prom" loxilb_pd_kv_tier15_spills_total) ))
+  echo "$sp" > "$d/tier15-spill-delta.txt"
   for n in "${PNODES[@]}"; do
     s=$(served "$d" "$n") || return 1; spread+="$n=$s "
     if [ "$a" = exact ]; then
-      [ "$s" -ge "$share" ] && [ "$s" -le $((share + 2)) ] || { echo "EXACT_PREFILL_SHARE $n served $s, want $share"; return 1; }
+      off=$(( s > share ? s - share : share - s ))
+      [ "$off" -le $((sp + 2)) ] || { echo "EXACT_PREFILL_SHARE $n served $s, want $share (spills +$sp)"; return 1; }
     else
       [ "$s" -ge $((share * 8 / 10)) ] || { echo "BASELINE_NOT_SPREAD $n served $s of $NREQ"; return 1; }
     fi
   done
   echo "$spread" > "$d/prefill-served.txt"
-  echo "    arm $a ok: $NREQ requests, tier-1.5 hits +$h, fall-through +$f, prefill served: $spread"
+  echo "    arm $a ok: $NREQ requests, tier-1.5 hits +$h, fall-through +$f, spills +$sp, prefill served: $spread"
   del_rule
 }
 
