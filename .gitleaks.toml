@@ -52,6 +52,10 @@ paths = [
   # A path entry, not an [[allowlists]] block: CI's gitleaks 8.24.3 ignores
   # [[allowlists]], and newer releases refuse to mix it with this table.
   '''^cicd/common/kv_hash/fixtures/profiles/[^/]+\.yaml$''',
+  # The supported-models manifest and its weights indexes pin the same public
+  # values (hub revisions, sha256 of public tokenizer/template/weight files).
+  '''^scripts/models/validated-models\.yaml$''',
+  '''^scripts/models/weights/[^/]+\.index$''',
 ]
 # cfg-persist-roundtrip's OTLP secret-split fixture. The suite POSTs a dummy
 # OTLP auth header ("rt-otlp-secret-…") precisely so validation.sh can prove
