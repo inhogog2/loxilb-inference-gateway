@@ -354,7 +354,7 @@ func (a *kvSglangAttest) challengeOnce(ep KvAttestEndpoint, info kvAttestRuleInf
 	}
 	nonceHex := hex.EncodeToString(nonce[:])
 
-	prompt, wantTokens, err := kvChallengeBuildPrompt(info.modelName, nonceHex, blockSize, info.challenge)
+	prompt, wantTokens, err := kvChallengeBuildPrompt(info, nonceHex, blockSize)
 	if err != nil {
 		return nil, KvAttestFinding{Reason: KvAttestReasonChallengeFailed, Detail: err.Error()}
 	}
@@ -367,13 +367,9 @@ func (a *kvSglangAttest) challengeOnce(ep KvAttestEndpoint, info kvAttestRuleInf
 	w := kvHashWatchRegister(info.svcID, ep.EpIdx, expected, wantTokens, blockSize, info.challenge)
 	defer kvHashWatchUnregister(w)
 
-	promptJSON, err := kvChallengePromptJSON(info.modelName, prompt, info.challenge)
-	if err != nil {
-		return nil, KvAttestFinding{Reason: KvAttestReasonChallengeFailed, Detail: err.Error()}
-	}
 	url := fmt.Sprintf("http://%s:%d/v1/completions", ep.IP, ep.Port)
-	reqBody := fmt.Sprintf(`{"model":%q,"prompt":%s,"max_tokens":1,"temperature":0}`,
-		info.modelName, promptJSON)
+	reqBody := fmt.Sprintf(`{"model":%q,"prompt":%q,"max_tokens":1,"temperature":0}`,
+		info.modelName, prompt)
 	var decodeDone chan KvAttestFinding
 	if info.pdMode {
 		// A disaggregation-mode prefill refuses bootstrap-less inference
@@ -395,8 +391,8 @@ func (a *kvSglangAttest) challengeOnce(ep KvAttestEndpoint, info kvAttestRuleInf
 		if bootPort == 0 {
 			bootPort = kvSglangBootstrapPortDefault
 		}
-		reqBody = fmt.Sprintf(`{"model":%q,"prompt":%s,"max_tokens":1,"temperature":0,"bootstrap_host":%q,"bootstrap_port":%d,"bootstrap_room":%d}`,
-			info.modelName, promptJSON, ep.IP, bootPort, room)
+		reqBody = fmt.Sprintf(`{"model":%q,"prompt":%q,"max_tokens":1,"temperature":0,"bootstrap_host":%q,"bootstrap_port":%d,"bootstrap_room":%d}`,
+			info.modelName, prompt, ep.IP, bootPort, room)
 		dep := info.decodeEPs[0]
 		durl := fmt.Sprintf("http://%s:%d/v1/completions", dep.IP, dep.Port)
 		decodeDone = make(chan KvAttestFinding, 1)

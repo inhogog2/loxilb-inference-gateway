@@ -166,6 +166,12 @@ type ModelPromptProfile struct {
 	// Values come from the closed vocabulary kvProfileKnownFeatures.
 	SupportedFeatures []string `yaml:"supportedFeatures,omitempty"`
 	ExcludedFeatures  []string `yaml:"excludedFeatures,omitempty"`
+
+	// completionsBosID is renderPolicy.bosToken resolved to its id in the
+	// pinned tokenizer. Set at registry load, and only for a profile that
+	// records completionsBos on some contract; never read from the document.
+	completionsBosID uint32
+	completionsBosOK bool
 }
 
 // KvEngineQuirks is one engine contract's measured behaviour for one model.
@@ -179,9 +185,9 @@ type KvEngineQuirks struct {
 	// restores tokenizer_config.json's add_bos_token, which transformers v5
 	// drops, and rebuilds the post-processor). Chat is unaffected: such
 	// templates write the BOS themselves and the engines encode the rendered
-	// text without specials. Admission refuses a strict completions surface,
-	// and the SGLang echo challenge posts its prompt as token ids, which the
-	// engine leaves as they are.
+	// text without specials. The engine's encoder module reproduces it
+	// (ai_kv_encode_<engine>.go); the BOS id is renderPolicy.bosToken
+	// resolved in the pinned tokenizer, so the profile must set that token.
 	CompletionsBos bool `yaml:"completionsBos,omitempty"`
 	// ChallengeLastBlock: the engine stores only some of the challenge
 	// prompt's blocks, always including its last full block (vLLM v0.28.0
@@ -272,6 +278,9 @@ func (p *ModelPromptProfile) Validate() error {
 		}
 		if !kvEngineQuirksSet(q) {
 			return fmt.Errorf("kv-profile: engineQuirks.%s sets no quirk", id)
+		}
+		if q.CompletionsBos && p.RenderPolicy.BosToken == "" {
+			return fmt.Errorf("kv-profile: engineQuirks.%s.completionsBos needs renderPolicy.bosToken (the token the engine prepends)", id)
 		}
 	}
 	if len(p.SupportedApis) == 0 {

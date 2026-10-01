@@ -81,6 +81,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/loxilb-io/loxilb/pkg/enginecontract"
 )
 
 const (
@@ -99,6 +101,21 @@ const (
 // would attest the wrong tokenizer). Tests override.
 var kvTrtllmOracleEncodeFn = func(text, model string, max int, addSpecials bool) []uint32 {
 	return kvTokenizeWithCache(text, model, max, addSpecials)
+}
+
+// kvTrtllmOracleEncodeCompletions encodes a completions fixture prompt
+// through the rule's engine encoder over the oracle seam. A rule info
+// without a contract resolves the TensorRT-LLM family default.
+func kvTrtllmOracleEncodeCompletions(info kvAttestRuleInfo, text string) ([]uint32, error) {
+	e := info.challenge.encoding
+	if e.contractID == "" {
+		ref, err := enginecontract.CurrentRef("trtllm")
+		if err != nil {
+			return nil, err
+		}
+		e.contractID = ref.ID
+	}
+	return kvEncodeCompletions(kvBaseTokenizeFn(kvTrtllmOracleEncodeFn), e, text, info.modelName, kvTrtllmOracleMaxTokens)
 }
 
 // kvTrtllmAttest implements kvAttestAdapter for the TensorRT-LLM family.
@@ -219,8 +236,8 @@ type kvTrtllmFixtureReq struct {
 
 // TokenParityProbe runs the approved-oracle parity check (file header): every
 // committed TRT fixture's banked token IDs must be reproduced by the
-// gateway's own render/encode chain — completions encode with specials (the
-// kvBridgeTokenize contract), chat renders through the validated template
+// gateway's own render/encode chain — completions encode through the engine's
+// encoder module (the kvBridgeTokenize contract), chat renders through the validated template
 // and encodes without (the kvBridgeTokenizeChat contract). The endpoint is
 // not consulted (it has no tokenize surface); its live cross-check is the
 // echo challenge's token comparison. The green finding is Oracle-marked so
@@ -236,7 +253,7 @@ func (a *kvTrtllmAttest) TokenParityProbe(ep KvAttestEndpoint, info kvAttestRule
 	}
 	fixtures = kvFixturesForRule(fixtures, info)
 	for _, fx := range fixtures {
-		if f := kvTrtllmOracleFixtureCheck(fx, info.modelName); !f.OK {
+		if f := kvTrtllmOracleFixtureCheck(fx, info); !f.OK {
 			return f
 		}
 	}
@@ -246,7 +263,8 @@ func (a *kvTrtllmAttest) TokenParityProbe(ep KvAttestEndpoint, info kvAttestRule
 
 // kvTrtllmOracleFixtureCheck re-derives one fixture through the oracle chain
 // and compares the FULL token array against the banked expectation.
-func kvTrtllmOracleFixtureCheck(fx kvProbeFixture, model string) KvAttestFinding {
+func kvTrtllmOracleFixtureCheck(fx kvProbeFixture, info kvAttestRuleInfo) KvAttestFinding {
+	model := info.modelName
 	var req kvTrtllmFixtureReq
 	if err := json.Unmarshal(fx.RequestBytes, &req); err != nil {
 		return KvAttestFinding{Reason: KvAttestReasonProbeSchema,
@@ -289,7 +307,12 @@ func kvTrtllmOracleFixtureCheck(fx kvProbeFixture, model string) KvAttestFinding
 			return KvAttestFinding{Reason: KvAttestReasonProbeSchema,
 				Detail: fmt.Sprintf("fixture %s: completions fixture carries no prompt", fx.Name)}
 		}
-		got = kvTrtllmOracleEncodeFn(*req.Prompt, model, kvTrtllmOracleMaxTokens, true)
+		// The engine's encoder module, as the tokenize bridge serves it.
+		var err error
+		if got, err = kvTrtllmOracleEncodeCompletions(info, *req.Prompt); err != nil {
+			return KvAttestFinding{Reason: KvAttestReasonProfileResolution,
+				Detail: fmt.Sprintf("fixture %s: completions encoding: %v", fx.Name, err)}
+		}
 	default:
 		return KvAttestFinding{Reason: KvAttestReasonProbeSchema,
 			Detail: fmt.Sprintf("fixture %s: unknown api %q", fx.Name, fx.API)}
@@ -346,7 +369,7 @@ func (a *kvTrtllmAttest) HashChallenge(ep KvAttestEndpoint, info kvAttestRuleInf
 	}
 	nonceHex := hex.EncodeToString(nonce[:])
 
-	prompt, wantTokens, err := kvChallengeBuildPrompt(info.modelName, nonceHex, blockSize, info.challenge)
+	prompt, wantTokens, err := kvChallengeBuildPrompt(info, nonceHex, blockSize)
 	if err != nil {
 		return KvAttestFinding{Reason: KvAttestReasonChallengeFailed, Detail: err.Error()}
 	}

@@ -19,7 +19,8 @@ Written under <fixtures>: profiles/<id>.yaml, manifests/<id>.yaml (vLLM), manife
 probefixtures/<id>/ (completions fixtures from gen_probe_fixtures.py + chat fixtures from
 gen_chat_probe_fixtures.py) and probefixtures/<id>/sglang/, the same set minus every chat case that ends on
 an assistant turn: SGLang renders a trailing assistant message as a user turn, and the gateway refuses such
-strict chat requests, so the engine is never asked to agree on that render.
+strict chat requests, so the engine is never asked to agree on that render. Where a profile records
+completionsBos for the SGLang contract, the subset's completions fixtures bank the BOS the engine prepends.
 
 For an openai-format template the top (vLLM) set also leaves out every chat case whose render depends on the
 content shape: vLLM hands such a template a string content as one text part (null as []), the gateway renders
@@ -70,7 +71,8 @@ def sha256_file(path):
 
 # Engine x model behaviour measured on the live engine, keyed by engine-contract profile id
 # (engine-contracts/contracts.yaml); only quirks that are set are listed, the gateway refuses an empty entry.
-# completionsBos: the engine encodes the completions prompt with a BOS that the gateway's tokenizer does not add.
+# completionsBos: the engine encodes a TEXT completions prompt with a BOS that the tokenizer file does not add; the
+#   gateway's encoder for that engine prepends it, and the engine's completions fixtures bank it (BOS_SUBSETS).
 #   SGLang v0.5.18 restores tokenizer_config.json's add_bos_token (transformers v5 drops it) and rebuilds the
 #   post-processor; vLLM v0.28.0 does not. Measured (/v1/completions return_token_ids and /v1/tokenize on the
 #   pinned snapshot), not derived: gemma-4 also asks for a BOS through a v4 Gemma class and SGLang's standalone
@@ -124,6 +126,34 @@ def profile_yaml(pid, g, mtype, toksha, tplsha, fmt, clock):
         lines.append("  clockPolicy: utc-date")
     lines += ["supportedApis:", "  - completions", "  - chat", "aliasPolicy: base_model_only"]
     return "\n".join(lines) + "\n"
+
+
+# The fixture subset an engine contract probes, for the contracts whose completionsBos fact changes the banked ids.
+BOS_SUBSETS = {"sglang-kv-rank-v1": "sglang"}
+
+
+def special_token_id(tokenizer_json, content):
+    """The id of exactly one special added token — the rule the gateway resolves renderPolicy.bosToken by."""
+    with open(tokenizer_json, encoding="utf-8") as f:
+        hits = [t for t in json.load(f).get("added_tokens", []) if t.get("content") == content]
+    if len(hits) != 1 or not hits[0].get("special") or not isinstance(hits[0].get("id"), int):
+        sys.exit(f"{tokenizer_json}: {content!r} does not resolve to one special added token")
+    return hits[0]["id"]
+
+
+def bank_completions_bos(sub, bos_id):
+    """Prefix every completions fixture of an engine subset with the BOS the engine adds to a text prompt."""
+    for fn in sorted(os.listdir(sub)):
+        path = os.path.join(sub, fn)
+        if not fn.endswith(".expect.json"):
+            continue
+        with open(path) as f:
+            d = json.load(f)
+        if d.get("api") != "completions":
+            continue
+        d["expectedTokenIds"] = [bos_id] + d["expectedTokenIds"]
+        with open(path, "w") as f:
+            json.dump(d, f, indent=1)
 
 
 def sglang_subset(out):
@@ -228,6 +258,11 @@ def main():
         if r.returncode:
             sys.exit(f"{pid}: chat fixtures refused: {r.stderr.strip()}")
         sglang_subset(out)
+        for contract, quirks in ENGINE_QUIRKS.get(pid, {}).items():
+            if quirks.get("completionsBos"):
+                if contract not in BOS_SUBSETS or not g["bos_token"]:
+                    sys.exit(f"{pid}: completionsBos on {contract} needs a fixture subset and a bos_token")
+                bank_completions_bos(os.path.join(out, BOS_SUBSETS[contract]), special_token_id(tok, g["bos_token"]))
         dropped = drop_vllm_shape_dependent(out, g) if fmt == "openai" else []
         n = len([fn for fn in os.listdir(out) if fn.endswith(".json")])
         print(f"{pid}: type={mtype} format={fmt} clock={clock} tokenizer={toksha[:12]} "

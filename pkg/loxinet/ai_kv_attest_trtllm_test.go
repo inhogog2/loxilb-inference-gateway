@@ -618,7 +618,7 @@ func kvCommittedChatFixturesParity(t *testing.T, slug, profileDir, fixtureSub, s
 		if fx.API != "chat" {
 			t.Fatalf("fixture %s: api %q, want chat", base, fx.API)
 		}
-		if f := kvTrtllmOracleFixtureCheck(fx, servedModel); !f.OK {
+		if f := kvTrtllmOracleFixtureCheck(fx, kvAttestRuleInfo{modelName: servedModel}); !f.OK {
 			t.Fatalf("fixture %s failed the oracle chain: %s %s", base, f.Reason, f.Detail)
 		}
 		checked++
@@ -631,7 +631,7 @@ func kvCommittedChatFixturesParity(t *testing.T, slug, profileDir, fixtureSub, s
 		fx := loadPair(t, "chat-user-only")
 		fx.ExpectedIDs = append([]int64(nil), fx.ExpectedIDs...)
 		fx.ExpectedIDs[len(fx.ExpectedIDs)-1]++
-		f := kvTrtllmOracleFixtureCheck(fx, servedModel)
+		f := kvTrtllmOracleFixtureCheck(fx, kvAttestRuleInfo{modelName: servedModel})
 		if f.OK || f.Reason != KvAttestReasonTokenMismatch {
 			t.Fatalf("drifted banked ids must fail token comparison: OK=%v %s", f.OK, f.Reason)
 		}

@@ -391,7 +391,9 @@ func kvTokenizeFixtureProbe(client *http.Client, url string, fx kvProbeFixture, 
 		// The banked ids must still be the gateway's own render at
 		// oracleNow: a stale or edited fixture fails here, before the
 		// engine is asked anything.
-		if f := kvTrtllmOracleFixtureCheck(fx, model); !f.OK {
+		// Only chat fixtures carry oracleNow, so this check never reaches
+		// the completions encoder and needs no engine contract.
+		if f := kvTrtllmOracleFixtureCheck(fx, kvAttestRuleInfo{modelName: model}); !f.OK {
 			return f
 		}
 		derivedAt = kvChatClock().UTC()
