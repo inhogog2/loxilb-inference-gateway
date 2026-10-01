@@ -354,3 +354,85 @@ func TestKvHashWatchConcurrentObservers(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// kvEchoFeedHybrid plays vLLM's per-KV-cache-group emission for a hybrid
+// model: a sliding-window group whose blocks span two contract blocks (each
+// carrying the hash of the LAST contract block it covers) arrives first,
+// then the full-attention group at the contract block size. mutate edits the
+// sliding-window event before delivery.
+func kvEchoFeedHybrid(t *testing.T, svcID uint32, epIdx int, mutate func(ev *kvEvent)) {
+	t.Helper()
+	go func() {
+		w := kvEchoAwaitWatch(svcID, epIdx)
+		if w == nil {
+			return
+		}
+		hashes, tokens := kvEchoWatchExpectation(w)
+		const k = 2
+		sw := kvEvent{Type: kvEventBlockStored, BlockSize: k * kvEchoTestBS}
+		for i := k - 1; i < len(hashes); i += k {
+			sw.Hashes = append(sw.Hashes, hashes[i])
+		}
+		sw.Tokens = append([]uint32(nil), tokens[:len(sw.Hashes)*k*kvEchoTestBS]...)
+		if mutate != nil {
+			mutate(&sw)
+		}
+		kvHashWatchObserve(svcID, epIdx, 0, sw)
+		kvHashWatchObserve(svcID, epIdx, 0, kvEvent{Type: kvEventBlockStored, Hashes: hashes,
+			Tokens: tokens, BlockSize: kvEchoTestBS})
+	}()
+}
+
+// TestKvEchoChallengeHybridGroupEvents: a sliding-window group event whose
+// block_size is a multiple of the contract size is checked against the
+// contract blocks it covers, so a hybrid model's challenge resolves.
+func TestKvEchoChallengeHybridGroupEvents(t *testing.T) {
+	kvEchoTestSetup(t)
+	_, ep := kvEchoTestServer(t, "m-echo", 200)
+	info := kvEchoInfo()
+	kvEchoFeedHybrid(t, info.svcID, ep.EpIdx, nil)
+	if f := newKvVllmAttest().HashChallenge(ep, info); !f.OK {
+		t.Fatalf("hybrid-group challenge failed: %s %s", f.Reason, f.Detail)
+	}
+}
+
+// TestKvEchoChallengeHybridGroupWrongTokensFails: the FIRST contract block
+// inside a wider event block is verified too — a flipped token there fails
+// the challenge (a check that compared only the last contract block, or
+// skipped wide events, would pass it).
+func TestKvEchoChallengeHybridGroupWrongTokensFails(t *testing.T) {
+	kvEchoTestSetup(t)
+	_, ep := kvEchoTestServer(t, "m-echo", 200)
+	info := kvEchoInfo()
+	kvEchoFeedHybrid(t, info.svcID, ep.EpIdx, func(ev *kvEvent) {
+		ev.Tokens[1] ^= 0xFFFF
+	})
+	f := newKvVllmAttest().HashChallenge(ep, info)
+	if f.OK || f.Reason != KvAttestReasonChallengeFailed || !strings.Contains(f.Detail, "token mismatch") {
+		t.Fatalf("finding = %+v, want challenge_failed on a token mismatch in the wide block", f)
+	}
+}
+
+// TestKvEchoChallengeEventBlockSizeRefusals: an event block_size that is not
+// a multiple of the contract size, or a wide block that would start before
+// the first challenge block, fails the challenge.
+func TestKvEchoChallengeEventBlockSizeRefusals(t *testing.T) {
+	for _, c := range []struct {
+		name, want string
+		mutate     func(ev *kvEvent)
+	}{
+		{"not a multiple", "not a multiple of the contract block size", func(ev *kvEvent) { ev.BlockSize = kvEchoTestBS + 1 }},
+		{"starts before block 0", "ends before it", func(ev *kvEvent) { ev.BlockSize = 2 * kvEchoTestBS }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			kvEchoTestSetup(t)
+			_, ep := kvEchoTestServer(t, "m-echo", 200)
+			info := kvEchoInfo()
+			kvEchoFeed(t, info.svcID, ep.EpIdx, c.mutate)
+			f := newKvVllmAttest().HashChallenge(ep, info)
+			if f.OK || f.Reason != KvAttestReasonChallengeFailed || !strings.Contains(f.Detail, c.want) {
+				t.Fatalf("finding = %+v, want challenge_failed %q", f, c.want)
+			}
+		})
+	}
+}
