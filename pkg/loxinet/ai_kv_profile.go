@@ -181,6 +181,21 @@ type KvEngineQuirks struct {
 	// templates write the BOS themselves and the engines encode the rendered
 	// text without specials. Admission refuses a strict completions surface.
 	CompletionsBos bool `yaml:"completionsBos,omitempty"`
+	// ChallengeLastBlock: the engine stores only some of the challenge
+	// prompt's blocks, always including its last full block (vLLM v0.28.0
+	// Mamba cache mode "align" on a hybrid model: the attention block grows
+	// to the Mamba page, and only block boundaries plus the prompt's last
+	// full block are cached). The echo challenge then passes on the last
+	// block alone: its hash is chained over the whole prefix, so a match
+	// proves every block before it. Other echoed challenge blocks are still
+	// checked.
+	ChallengeLastBlock bool `yaml:"challengeLastBlock,omitempty"`
+	// CacheChunk: the engine caches a prompt of n tokens only up to
+	// floor((n-1)/CacheChunk)*CacheChunk (SGLang v0.5.18 on a hybrid-GDN
+	// model: 64). The echo challenge grows past one chunk and expects the
+	// blocks below that boundary. Must be a multiple of the rule's block
+	// size; a challenge on any other block size fails.
+	CacheChunk uint32 `yaml:"cacheChunk,omitempty"`
 }
 
 // kvEngineQuirksSet reports whether q sets any quirk.

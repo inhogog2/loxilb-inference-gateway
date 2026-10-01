@@ -77,8 +77,17 @@ def sha256_file(path):
 #   get_tokenizer adds one, yet the served multimodal path does not (its P/D leg attests with BOS-less
 #   completions fixtures). A model missing here fails the SGLang P/D leg's completions probe (token_mismatch,
 #   one token long), never silently.
+# challengeLastBlock: the engine caches only some of the echo challenge's blocks, always including the prompt's
+#   last full block. vLLM v0.28.0 on a hybrid-GDN model (Qwen3.5 family) runs Mamba cache mode "align": the
+#   attention block grows to the Mamba page (784 tokens for Qwen3.6-27B-FP8, kv auto, TP 1), and only block
+#   boundaries plus the prompt's last full 16-token block are cached (measured: KV events for 48..2400-token
+#   prompts). The block hashes stay 16-granular and chained, so the last block's hash proves the prefix.
+# cacheChunk: the engine caches a prompt of n tokens only up to floor((n-1)/G)*G. SGLang v0.5.18 on a hybrid-GDN
+#   model with page 16: G = 64 (measured: 350 -> 320, 690 -> 640, 1010 -> 960, 1090 -> 1088 cached tokens).
+# Qwen3.8 shares the architecture but is listed only after its own measurement.
 ENGINE_QUIRKS = {
     "r1-distill-qwen-15b-v1": {"sglang-kv-rank-v1": {"completionsBos": True}},
+    "qwen36-27b-fp8-v1": {"sglang-kv-rank-v1": {"cacheChunk": 64}, "vllm-kv-map-v2": {"challengeLastBlock": True}},
 }
 
 
@@ -86,7 +95,7 @@ def quirks_yaml(pid):
     lines = []
     for contract, quirks in sorted(ENGINE_QUIRKS.get(pid, {}).items()):
         lines.append(f"  {contract}:")
-        lines += [f"    {k}: true" for k, v in sorted(quirks.items()) if v]
+        lines += [f"    {k}: {'true' if v is True else v}" for k, v in sorted(quirks.items()) if v]
     return ["engineQuirks:"] + lines if lines else []
 
 

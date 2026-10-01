@@ -3102,6 +3102,9 @@ type kvExactAdmissionResult struct {
 	// contract install packs these into the data-plane contract word's api_mode byte.
 	APIChat        bool
 	APICompletions bool
+	// Quirks are the profile's measured behaviour for the resolved engine
+	// contract (strict rules only); the echo challenge is planned from them.
+	Quirks KvEngineQuirks
 }
 
 // kvExactRuntimeValidate turns the cross-process KV-exact parity inputs into
@@ -3252,6 +3255,7 @@ func kvExactRuntimeValidate(engine string, kvExactMode uint8, modelName, apiMode
 		res.Strict = true
 		res.APIChat = wantChat
 		res.APICompletions = wantCompletions
+		res.Quirks = p.EngineQuirks[ref.ID]
 		res.Comps = KvExactBindingComponents{
 			Profile:               KvModelProfileRef{ID: p.ProfileID, Gen: gen},
 			Contract:              ref,
@@ -4673,6 +4677,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 				zmqPort:         eRule.kvZmqPort,
 				pdMode:          eRule.pdDisaggMode,
 				pdBootstrapPort: eRule.pdBootstrapPort,
+				challenge:       kvChallengePlanFor(kvAdmission.Quirks),
 				decodeEPs:       kvAttestDecodeEPs(eRule.pdDisaggMode, lBActs.endPoints),
 			}, attEps)
 			// A restore replay allocates NOTHING (same split as the create
@@ -4992,6 +4997,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			zmqPort:         r.kvZmqPort,
 			pdMode:          r.pdDisaggMode,
 			pdBootstrapPort: r.pdBootstrapPort,
+			challenge:       kvChallengePlanFor(kvAdmission.Quirks),
 			decodeEPs:       kvAttestDecodeEPs(r.pdDisaggMode, lBActs.endPoints),
 		}, attEps)
 	}

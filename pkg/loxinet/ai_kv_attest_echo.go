@@ -95,6 +95,12 @@ type kvHashWatch struct {
 	// wantTokens is the gateway's own tokenization of the challenge prompt
 	// (full blocks only), for the §6.2 token_id cross-check.
 	wantTokens []uint32
+	// lastBlock ends the watch on the last expected block alone (see
+	// kvChallengePlan); every other expected block that arrives is still
+	// checked.
+	lastBlock  bool
+	lastIdx    int
+	finished   bool
 	failReason string
 	failDetail string
 
@@ -112,7 +118,7 @@ func kvHashWatchKey(svcID uint32, epIdx int) uint64 {
 
 // kvHashWatchRegister arms a watch for the expected hash chain.
 func kvHashWatchRegister(svcID uint32, epIdx int, expected []uint64,
-	wantTokens []uint32, blockSize uint32) *kvHashWatch {
+	wantTokens []uint32, blockSize uint32, plan kvChallengePlan) *kvHashWatch {
 	w := &kvHashWatch{
 		svcID:      svcID,
 		epIdx:      epIdx,
@@ -120,6 +126,8 @@ func kvHashWatchRegister(svcID uint32, epIdx int, expected []uint64,
 		hashIndex:  make(map[uint64]int, len(expected)),
 		pending:    len(expected),
 		wantTokens: wantTokens,
+		lastBlock:  plan.lastBlock,
+		lastIdx:    len(expected) - 1,
 		ranks:      make(map[int]bool, 1),
 		done:       make(chan struct{}),
 	}
@@ -176,7 +184,7 @@ func kvHashWatchObserve(svcID uint32, epIdx int, rank int, ev kvEvent) {
 func (w *kvHashWatch) observe(rank int, ev kvEvent) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.pending == 0 || w.failReason != "" {
+	if w.finished || w.failReason != "" {
 		return
 	}
 	bs := int(w.blockSize)
@@ -233,8 +241,14 @@ func (w *kvHashWatch) observe(rank int, ev kvEvent) {
 		delete(w.hashIndex, h)
 		w.pending--
 		w.ranks[rank] = true
+		if w.lastBlock && idx == w.lastIdx {
+			w.finished = true
+		}
 	}
 	if w.pending == 0 {
+		w.finished = true
+	}
+	if w.finished {
 		close(w.done)
 	}
 }
@@ -248,6 +262,18 @@ func (w *kvHashWatch) fail(reason, detail string) {
 	w.failReason = reason
 	w.failDetail = detail
 	close(w.done)
+}
+
+// kvChallengeEchoedDetail describes a passed challenge; a last-block pass
+// says so, since fewer blocks than the prompt holds were echoed.
+func kvChallengeEchoedDetail(w *kvHashWatch, nExpected int, nonceHex string) string {
+	w.mu.Lock()
+	echoed := nExpected - w.pending
+	w.mu.Unlock()
+	if w.lastBlock && echoed < nExpected {
+		return fmt.Sprintf("last of %d challenge blocks echoed, %d in all (nonce %s)", nExpected, echoed, nonceHex[:8])
+	}
+	return fmt.Sprintf("%d challenge blocks echoed (nonce %s)", nExpected, nonceHex[:8])
 }
 
 func (w *kvHashWatch) result() (string, string) {
@@ -303,16 +329,43 @@ var kvChallengeTokenizeFn = func(text, model string, max int) []uint32 {
 	return kvTokenizeWithCache(text, model, max, true)
 }
 
+// kvChallengePlan shapes one echo challenge from the profile's measured
+// engine quirks for the rule's contract. The zero value is the default
+// challenge: a prompt of at least two full blocks, every full block echoed.
+type kvChallengePlan struct {
+	// cacheChunk > 0: the engine caches only floor((n-1)/cacheChunk)*
+	// cacheChunk tokens of an n-token prompt, so the prompt grows past a
+	// chunk and the expected blocks stop at that boundary.
+	cacheChunk uint32
+	// lastBlock: the engine caches only some blocks, always including the
+	// prompt's last full block; the watch ends on that block alone.
+	lastBlock bool
+}
+
+// kvChallengePlanFor derives the challenge plan from a profile's quirks.
+func kvChallengePlanFor(q KvEngineQuirks) kvChallengePlan {
+	return kvChallengePlan{cacheChunk: q.CacheChunk, lastBlock: q.ChallengeLastBlock}
+}
+
 // kvChallengeBuildPrompt builds the nonce-unique challenge prompt: the nonce
 // lands in the FIRST block (the stem+nonce prefix tokenizes well inside any
 // realistic block size) and filler repeats until the tokenization spans at
 // least two FULL blocks. Returns the prompt and its full-block token
-// sequence (len == nBlocks*blockSize).
-func kvChallengeBuildPrompt(model, nonceHex string, blockSize uint32) (string, []uint32, error) {
+// sequence (len == nBlocks*blockSize). With a cache chunk the prompt grows
+// until the engine's cached prefix, floor((n-1)/chunk)*chunk tokens, holds
+// two full blocks, and the sequence stops at that boundary.
+func kvChallengeBuildPrompt(model, nonceHex string, blockSize uint32, plan kvChallengePlan) (string, []uint32, error) {
 	if blockSize == 0 {
 		blockSize = 16
 	}
+	chunk := int(plan.cacheChunk)
+	if chunk > 0 && chunk%int(blockSize) != 0 {
+		return "", nil, fmt.Errorf("profile cacheChunk %d is not a multiple of the rule's block size %d", chunk, blockSize)
+	}
 	need := int(2 * blockSize)
+	if chunk > 0 {
+		need = (need+chunk-1)/chunk*chunk + 1
+	}
 	var sb strings.Builder
 	sb.WriteString(kvChallengeStem)
 	sb.WriteString(nonceHex)
@@ -323,6 +376,9 @@ func kvChallengeBuildPrompt(model, nonceHex string, blockSize uint32) (string, [
 		}
 		if len(toks) >= need {
 			full := (len(toks) / int(blockSize)) * int(blockSize)
+			if chunk > 0 {
+				full = (len(toks) - 1) / chunk * chunk
+			}
 			return sb.String(), toks[:full], nil
 		}
 		sb.WriteString(kvChallengeFiller)
@@ -351,7 +407,7 @@ func (a *kvVllmAttest) HashChallenge(ep KvAttestEndpoint, info kvAttestRuleInfo)
 	if blockSize == 0 {
 		blockSize = 16
 	}
-	prompt, wantTokens, err := kvChallengeBuildPrompt(info.modelName, nonceHex, blockSize)
+	prompt, wantTokens, err := kvChallengeBuildPrompt(info.modelName, nonceHex, blockSize, info.challenge)
 	if err != nil {
 		return KvAttestFinding{Reason: KvAttestReasonChallengeFailed, Detail: err.Error()}
 	}
@@ -363,7 +419,7 @@ func (a *kvVllmAttest) HashChallenge(ep KvAttestEndpoint, info kvAttestRuleInfo)
 
 	// Register the expectation BEFORE issuing the inference (§6.2 step 2 —
 	// the watch must be armed when the engine publishes).
-	w := kvHashWatchRegister(info.svcID, ep.EpIdx, expected, wantTokens, blockSize)
+	w := kvHashWatchRegister(info.svcID, ep.EpIdx, expected, wantTokens, blockSize, info.challenge)
 	defer kvHashWatchUnregister(w)
 
 	url := fmt.Sprintf("http://%s:%d/v1/completions", ep.IP, ep.Port)
@@ -386,7 +442,7 @@ func (a *kvVllmAttest) HashChallenge(ep KvAttestEndpoint, info kvAttestRuleInfo)
 			return KvAttestFinding{Reason: reason, Detail: detail}
 		}
 		return KvAttestFinding{OK: true,
-			Detail: fmt.Sprintf("%d challenge blocks echoed (nonce %s)", len(expected), nonceHex[:8])}
+			Detail: kvChallengeEchoedDetail(w, len(expected), nonceHex)}
 	case <-time.After(kvChallengeTimeout()):
 		return KvAttestFinding{Reason: KvAttestReasonChallengeTimeout,
 			Detail: fmt.Sprintf("expected hashes not observed within %v", kvChallengeTimeout())}
