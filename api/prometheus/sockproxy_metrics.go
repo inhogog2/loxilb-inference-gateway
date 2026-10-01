@@ -145,6 +145,21 @@ typedef struct proxy_metrics_snapshot {
     uint64_t hc_max_gap_bucket[3][15];
     uint64_t hc_max_gap_sum_us[3];
     uint64_t hc_max_gap_count[3];
+
+    // Half-close holds (sockproxy_hold.c): gauges, then counters; hold_ended
+    // by enum sp_hold_end, hold_expired by [answer had begun][enum hc_stream].
+    // TAIL-APPEND ONLY — same three-way lockstep as the block above.
+    uint64_t hold_held;
+    uint64_t hold_oldest_ms;
+    uint64_t hold_allowed;
+    uint64_t hold_cap_sec;
+    uint64_t hold_begun;
+    uint64_t hold_ended[7];
+    uint64_t hold_expired[2][3];
+    uint64_t hold_refused_residue;
+    uint64_t hold_reentry;
+    uint64_t hold_empty_out;
+    uint64_t hold_accel_skipped;
 } proxy_metrics_snapshot_t;
 
 // C function from sockproxy.c
@@ -1033,6 +1048,31 @@ func halfCloseFromC(m *C.proxy_metrics_snapshot_t) halfCloseSnapshot {
 	return s
 }
 
+// holdFromC copies the half-close hold state out of a snapshot; the rest is
+// in halfclose_hold_metrics.go.
+func holdFromC(m *C.proxy_metrics_snapshot_t) holdSnapshot {
+	s := holdSnapshot{
+		held:           uint64(m.hold_held),
+		oldestMs:       uint64(m.hold_oldest_ms),
+		allowed:        uint64(m.hold_allowed),
+		capSec:         uint64(m.hold_cap_sec),
+		begun:          uint64(m.hold_begun),
+		refusedResidue: uint64(m.hold_refused_residue),
+		reentry:        uint64(m.hold_reentry),
+		emptyOut:       uint64(m.hold_empty_out),
+		accelSkipped:   uint64(m.hold_accel_skipped),
+	}
+	for r := 0; r < holdEndReasons; r++ {
+		s.ended[r] = uint64(m.hold_ended[r])
+	}
+	for b := 0; b < 2; b++ {
+		for st := 0; st < hcStreams; st++ {
+			s.expired[b][st] = uint64(m.hold_expired[b][st])
+		}
+	}
+	return s
+}
+
 // ============================================================================
 // RunSockproxyMetrics - Periodic Collection Goroutine
 // ============================================================================
@@ -1143,6 +1183,7 @@ func RunSockproxyMetrics(ctx context.Context) {
 		// Half-close observation: cumulative C-side state for
 		// halfCloseCollector, merged the same way.
 		updateHalfCloseStore(halfCloseFromC(&current))
+		updateHoldStore(holdFromC(&current))
 
 		// 3c. P/D buffer overflow counter
 		if current.pd_kv_params_overflow >= prevSockproxyMetrics.pd_kv_params_overflow {
