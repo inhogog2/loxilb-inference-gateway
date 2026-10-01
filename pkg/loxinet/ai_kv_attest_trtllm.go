@@ -234,6 +234,7 @@ func (a *kvTrtllmAttest) TokenParityProbe(ep KvAttestEndpoint, info kvAttestRule
 	if f := kvFixtureSetCheck(fixtures, info); !f.OK {
 		return f
 	}
+	fixtures = kvFixturesForRule(fixtures, info)
 	for _, fx := range fixtures {
 		if f := kvTrtllmOracleFixtureCheck(fx, info.modelName); !f.OK {
 			return f

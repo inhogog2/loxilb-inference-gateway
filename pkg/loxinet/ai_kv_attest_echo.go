@@ -340,11 +340,19 @@ type kvChallengePlan struct {
 	// lastBlock: the engine caches only some blocks, always including the
 	// prompt's last full block; the watch ends on that block alone.
 	lastBlock bool
+	// idPrompt: the engine encodes a completions prompt given as text with
+	// a BOS the gateway's tokenizer does not add, and leaves a prompt given
+	// as token ids as it is (measured on SGLang v0.5.18). The challenge then
+	// posts the gateway's own token ids, so the blocks the engine stores are
+	// the blocks the expected chain was built from. Read by the SGLang
+	// adapter; another adapter posts text, and its challenge fails on the
+	// first block if its engine adds the BOS.
+	idPrompt bool
 }
 
 // kvChallengePlanFor derives the challenge plan from a profile's quirks.
 func kvChallengePlanFor(q KvEngineQuirks) kvChallengePlan {
-	return kvChallengePlan{cacheChunk: q.CacheChunk, lastBlock: q.ChallengeLastBlock}
+	return kvChallengePlan{cacheChunk: q.CacheChunk, lastBlock: q.ChallengeLastBlock, idPrompt: q.CompletionsBos}
 }
 
 // kvChallengeBuildPrompt builds the nonce-unique challenge prompt: the nonce
@@ -384,6 +392,28 @@ func kvChallengeBuildPrompt(model, nonceHex string, blockSize uint32, plan kvCha
 		sb.WriteString(kvChallengeFiller)
 	}
 	return "", nil, fmt.Errorf("challenge prompt never reached %d tokens", need)
+}
+
+// kvChallengePromptJSON is the challenge request's "prompt" value: the text,
+// or under an id-prompt plan the gateway's token ids of that text.
+func kvChallengePromptJSON(model, prompt string, plan kvChallengePlan) (string, error) {
+	if !plan.idPrompt {
+		return strconv.Quote(prompt), nil
+	}
+	toks := kvChallengeTokenizeFn(prompt, model, kvChallengeMaxTokens)
+	if len(toks) == 0 {
+		return "", fmt.Errorf("challenge prompt tokenization failed for model %q", model)
+	}
+	var sb strings.Builder
+	sb.WriteByte('[')
+	for i, tk := range toks {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(strconv.FormatUint(uint64(tk), 10))
+	}
+	sb.WriteByte(']')
+	return sb.String(), nil
 }
 
 // HashChallenge runs one §6.2 echo challenge against one endpoint.
