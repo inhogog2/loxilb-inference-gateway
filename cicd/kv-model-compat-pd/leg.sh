@@ -18,19 +18,18 @@ MODEL=$(profile_field "$PROF" baseModel)
 ENC_MODEL=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MODEL")
 GWLOG=${LOGD}/loxilb$(hostname).log
 case $ENG in
-  # CONTRACT = the engine family's default contract profile, the one a rule declaring only the family binds
-  vllm)   VER=$VLLM_VERSION; MSRC=$FIX/manifests/$PROF.yaml; FSUB=""; CONTRACT=vllm-kv-map-v2
+  vllm)   VER=$VLLM_VERSION; MSRC=$FIX/manifests/$PROF.yaml; FSUB=""
           GWC='^loxilb_ai_pd_(prefill_duration|decode_ttft)_seconds_count'; GWMIN=6
           EREQ_P='^vllm:request_success_total'; EREQ_D='^vllm:request_success_total'; XFER='^vllm:nixl_xfer_time_seconds_count' ;;
-  sglang) VER=$SGL_VERSION; MSRC=$FIX/manifests-sglang/$PROF.yaml; FSUB="/sglang"; CONTRACT=sglang-kv-rank-v1
+  sglang) VER=$SGL_VERSION; MSRC=$FIX/manifests-sglang/$PROF.yaml; FSUB="/sglang"
           # decode exposes no num_requests_total; each transferred request bootstraps once and allocates once
           GWC='^loxilb_ai_pd_requests_total'; GWMIN=3
           EREQ_P='^sglang:num_requests_total'; EREQ_D='^sglang:kv_transfer_bootstrap_ms_count'; XFER='^sglang:kv_transfer_alloc_ms_count' ;;
   *) echo "usage: $0 vllm|sglang <profileId>"; exit 64 ;;
 esac
-# Strict surfaces: both, except where admission refuses completions on this engine's contract
-# (engineQuirks.<contract>.completionsBos: the engine adds a BOS the gateway's tokenizer does not).
-API=both; [ "$(profile_quirk "$PROF" "$CONTRACT" completionsBos)" = true ] && API=chat
+# Strict surfaces: both. Where the engine encodes completions its own way (engineQuirks.<contract>), the gateway's
+# encoder for that engine reproduces it; step 2b proves it with exact hits on the completions surface.
+API=both
 SALT="kvmc${ENG}$(date +%s)$RANDOM"; TS=$(date +%Y%m%dT%H%M%S)
 EV=${EVROOT}/${ENG}-pd-${PROF}-${TS}; mkdir -p "${EV}"
 echo "RUN_ID=${ENG}-pd-${PROF}-${TS}"
@@ -136,6 +135,22 @@ if [[ $PDF == 0 ]]; then
 fi
 [[ $PDF == 0 ]] || { echo PD_SPLIT_NOT_PROVEN; del_rule; exit 5; }
 echo "  P/D split proven: gateway +$((g1-g0)), prefill +$((p1-p0)), decode +$((d1-d0)), KV transfers +$((x1-x0))"
+
+echo "=== 2b. completions x3: exact hits on the completions surface ==="
+# A TEXT prompt: the gateway hashes its own encoding of it, the engine caches its own. A hit needs both to agree
+# on every id of a block, an engine-added BOS included (it shifts every block boundary by one).
+COMP_PROMPT="${SALT} pd completions probe. ${CHAT_USER#* }"
+c0=$(settle)
+for i in 1 2 3; do
+  python3 -c "import json,sys; print(json.dumps({'model': sys.argv[1], 'prompt': sys.argv[2], 'max_tokens': 8, 'temperature': 0}))" "$MODEL" "$COMP_PROMPT" \
+    | curl -s -m 90 -X POST "http://${VIP}:${PORT}/v1/completions" -H 'Content-Type: application/json' -d @- > "${EV}/pdcompl-r${i}.json"
+  python3 -c "import json;d=json.load(open('${EV}/pdcompl-r${i}.json'));u=d['usage'];print('  r${i} prompt=%s' % u.get('prompt_tokens'))" \
+    || { echo PD_COMPL_REQ_FAILED; head -c 300 "${EV}/pdcompl-r${i}.json"; del_rule; exit 7; }
+  sleep 2
+done
+c1=""; for _ in $(seq 1 15); do c1=$(hits); [[ -n "$c1" && "$c1" -ge $((c0+2)) ]] && break; sleep 2; done
+[[ -n "$c1" && "$c1" -ge $((c0+2)) ]] || { echo "PD_COMPL_NO_EXACT_HITS ${c0}->${c1}"; del_rule; exit 7; }
+c1=$(settle); echo "  tier15_hits ${c0}->${c1}"
 del_rule
 
 echo "=== 3. red arm: one flipped expected id -> not READY, token_mismatch on the prefill endpoint only ==="

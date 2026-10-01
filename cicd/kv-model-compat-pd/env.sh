@@ -51,11 +51,5 @@ MET="${GW_API}/metrics"
 
 # profile_field <profileId> <yaml key> — one scalar from a committed profile
 profile_field() { sed -n "s/^$2: *//p" "${FIX}/profiles/$1.yaml" | tr -d '"'; }
-# profile_quirk <profileId> <contract profile id> <quirk> — one engineQuirks value, "" when unset
-profile_quirk() {
-  awk -v c="  $2:" -v k="    $3:" '/^[^ ]/ { q = ($0 == "engineQuirks:"); s = 0; next }
-    q && /^  [^ ]/ { s = ($0 == c); next }
-    q && s && index($0, k) == 1 { sub(/^ *[^:]*: */, ""); print }' "${FIX}/profiles/$1.yaml"
-}
 # snapshot <hf-id> <rev> — the engine-node path of a pinned snapshot
 snapshot() { echo "${HF_CACHE}/hub/models--${1//\//--}/snapshots/$2"; }

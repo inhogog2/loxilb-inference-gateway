@@ -65,7 +65,8 @@ admission() {
   curl -s -m 5 "${LB}/all" | grep -q "\"port\":${PORT}" && { check "rule port ${PORT} free before the matrix" 1; return; }
   admission_one ministral3-3b-v1 chat "renders this model's chat with mistral_common" vllm sglang
   admission_one gptoss-20b-v1 chat "renders this model's chat with the Harmony encoder" vllm trtllm
-  admission_one r1-distill-qwen-15b-v1 completions "encodes this model's completions prompts with a BOS" sglang
+  # no refusing engine: SGLang adds a BOS to this model's completions and the gateway's SGLang encoder reproduces it
+  admission_one r1-distill-qwen-15b-v1 completions "-"
   curl -s -m 5 "${LB}/all" | grep -q "\"port\":${PORT}"; [ $? != 0 ]
   check "no rule left on port ${PORT}" $?
 }
