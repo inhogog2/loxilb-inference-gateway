@@ -1,1 +1,0 @@
-{"model": "google/gemma-4-E2B-it", "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Name a prime number."}, {"role": "assistant", "content": "Seven."}, {"role": "user", "content": "And the next one after it?"}]}
