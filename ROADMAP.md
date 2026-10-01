@@ -4,7 +4,7 @@ This roadmap captures the direction of loxilb-inference-gateway. It is
 intentionally short and honest: items here are intent, not commitments, and
 priorities shift with community feedback. For what the project explicitly does
 *not* aim to be, see the **scope & non-goals** section of the
-[README](README.md#where-it-fits-scope--non-goals).
+[README](README.md#where-it-fits).
 
 The base load balancer follows [upstream loxilb](https://github.com/loxilb-io/loxilb);
 this roadmap covers only the inference-gateway delta.
