@@ -35,6 +35,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -604,6 +605,66 @@ func TestKvSglangHashChallengePdPairDispatch(t *testing.T) {
 	if got[0] != prefillBody {
 		t.Fatalf("decode counterpart body diverges from prefill leg:\n  prefill: %s\n  decode:  %s",
 			prefillBody, got[0])
+	}
+}
+
+// Under an id-prompt plan the challenge posts the gateway's own token ids, on
+// both legs of a P/D pair too: an engine that adds a BOS to a text prompt
+// would otherwise store blocks the expected chain was never built from. The
+// default plan keeps posting text.
+func TestKvSglangHashChallengeIdPrompt(t *testing.T) {
+	for _, pd := range []bool{false, true} {
+		for _, ids := range []bool{false, true} {
+			t.Run(fmt.Sprintf("pd=%v/ids=%v", pd, ids), func(t *testing.T) {
+				kvSglTestSetup(t)
+				var last []uint32
+				inner := kvChallengeTokenizeFn
+				kvChallengeTokenizeFn = func(text, model string, max int) []uint32 {
+					last = inner(text, model, max)
+					return last
+				}
+				conf := kvSglGoodConf()
+				conf.pdRequireBootstrap = pd
+				body := ""
+				conf.lastCompletionsBody = &body
+				_, ep, _ := kvSglTestServer(t, conf)
+				info := kvSglInfo()
+				var decodeBodies func() []string
+				if pd {
+					var dep KvAttestEndpoint
+					dep, decodeBodies = kvSglDecodeMock(t, 200)
+					info = kvSglPdInfo(dep)
+				}
+				info.challenge = kvChallengePlan{idPrompt: ids}
+				kvSglFeedRanks(t, info.svcID, ep.EpIdx, []int{0}, 1)
+				if f := newKvSglangAttest().HashChallenge(ep, info); !f.OK {
+					t.Fatalf("challenge refused: %s (%s)", f.Reason, f.Detail)
+				}
+				var req struct {
+					Prompt json.RawMessage `json:"prompt"`
+				}
+				if err := json.Unmarshal([]byte(body), &req); err != nil {
+					t.Fatalf("challenge body is not JSON: %v: %s", err, body)
+				}
+				var gotIDs []uint32
+				var gotText string
+				if ids {
+					if err := json.Unmarshal(req.Prompt, &gotIDs); err != nil {
+						t.Fatalf("id-prompt plan must post token ids, got %s", req.Prompt)
+					}
+					if len(gotIDs) == 0 || !reflect.DeepEqual(gotIDs, last) {
+						t.Fatalf("posted ids are not the gateway's tokenization of the challenge prompt: %d ids vs %d", len(gotIDs), len(last))
+					}
+				} else if err := json.Unmarshal(req.Prompt, &gotText); err != nil || gotText == "" {
+					t.Fatalf("default plan must post the prompt text, got %s", req.Prompt)
+				}
+				if pd {
+					if got := decodeBodies(); len(got) != 1 || got[0] != body {
+						t.Fatalf("decode counterpart must carry the same body as the prefill leg: %v vs %s", got, body)
+					}
+				}
+			})
+		}
 	}
 }
 

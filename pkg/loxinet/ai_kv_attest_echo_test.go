@@ -625,13 +625,17 @@ func TestKvChallengePlanReachesEveryAdapter(t *testing.T) {
 	})
 }
 
-// TestKvChallengePlanFor: the plan carries every challenge-shaping quirk and
-// nothing else (completionsBos is an admission quirk).
+// TestKvChallengePlanFor: the plan carries every challenge-shaping quirk.
+// completionsBos shapes it too: the engine adds the BOS to a text prompt, so
+// the challenge posts token ids.
 func TestKvChallengePlanFor(t *testing.T) {
-	if got := kvChallengePlanFor(KvEngineQuirks{CacheChunk: 64, ChallengeLastBlock: true, CompletionsBos: true}); got != (kvChallengePlan{cacheChunk: 64, lastBlock: true}) {
-		t.Fatalf("plan %+v, want chunk 64 + last block", got)
+	if got := kvChallengePlanFor(KvEngineQuirks{CacheChunk: 64, ChallengeLastBlock: true}); got != (kvChallengePlan{cacheChunk: 64, lastBlock: true}) {
+		t.Fatalf("plan %+v, want chunk 64 + last block, text prompt", got)
 	}
-	if got := kvChallengePlanFor(KvEngineQuirks{CompletionsBos: true}); got != (kvChallengePlan{}) {
+	if got := kvChallengePlanFor(KvEngineQuirks{CompletionsBos: true}); got != (kvChallengePlan{idPrompt: true}) {
+		t.Fatalf("plan %+v, want the default challenge with an id prompt", got)
+	}
+	if got := kvChallengePlanFor(KvEngineQuirks{}); got != (kvChallengePlan{}) {
 		t.Fatalf("plan %+v, want the default challenge", got)
 	}
 }
