@@ -525,7 +525,17 @@ pre-staged at `/etc/loxilb/tokenizers/<model-slug>/tokenizer.json`, where `<mode
 client-visible model name with every `/` replaced by `__` (e.g. `Qwen/Qwen2.5-7B-Instruct` →
 `Qwen__Qwen2.5-7B-Instruct`).
 
-Download it from Hugging Face:
+**Models with a strict profile: use the installer.** For every model listed in
+[SUPPORTED-MODELS.md](../SUPPORTED-MODELS.md), `scripts/models/install-models.sh` downloads `tokenizer.json`
+at the pinned revision, verifies its sha256, and stages it here together with the profile registry
+(profile, engine manifest, probe fixtures, chat template) — nothing below has to be done by hand:
+```bash
+scripts/models/install-models.sh --list
+sudo scripts/models/install-models.sh --engine vllm --models <profile-id>
+```
+See `scripts/models/install-models.sh --help` for weights download, gated repositories and `--dry-run`.
+
+For a model served through a legacy (profile-less) rule, stage the tokenizer manually from Hugging Face:
 ```bash
 MODEL=Qwen/Qwen2.5-7B-Instruct ; SLUG=${MODEL//\//__}
 sudo mkdir -p /etc/loxilb/tokenizers/$SLUG
