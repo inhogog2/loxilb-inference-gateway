@@ -269,6 +269,7 @@ func (a *kvSglangAttest) TokenParityProbe(ep KvAttestEndpoint, info kvAttestRule
 	if f := kvFixtureSetCheck(fixtures, info); !f.OK {
 		return f
 	}
+	fixtures = kvFixturesForRule(fixtures, info)
 	url := fmt.Sprintf("http://%s:%d/v1/tokenize", ep.IP, ep.Port)
 	for _, fx := range fixtures {
 		if f := kvTokenizeFixtureProbe(a.client, url, fx, info.modelName); !f.OK {
