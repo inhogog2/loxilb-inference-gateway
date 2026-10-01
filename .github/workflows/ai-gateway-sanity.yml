@@ -67,7 +67,14 @@ jobs:
         # A fresh runner has none of them and apt for the native modules is unreliable
         # here, so install to the system site (visible to the root publisher launched via
         # `ip netns exec`) from prebuilt manylinux wheels. config.sh re-probes as a fallback.
-        run: sudo python3 -m pip install pyzmq msgpack cbor2 xxhash transformers || sudo python3 -m pip install --break-system-packages pyzmq msgpack cbor2 xxhash transformers
+        # The runner's system pip (22.0.2 on Ubuntu 22.04) crashes in its resolver
+        # (AssertionError in get_topological_weights) on transformers' current dependency
+        # set, while a current pip resolves it, so upgrade pip in the same system site
+        # first; a PEP 668 image needs --break-system-packages for that too.
+        run: |
+          sudo python3 -m pip install --upgrade pip || sudo python3 -m pip install --break-system-packages --upgrade pip
+          sudo python3 -m pip --version
+          sudo python3 -m pip install pyzmq msgpack cbor2 xxhash transformers || sudo python3 -m pip install --break-system-packages pyzmq msgpack cbor2 xxhash transformers
       - name: Install python h2 (ai-jwtauth HTTP/2 client and echo backend)
         # ai-jwtauth's h2c echo backend, multiplexed client and raw recorder all
         # import h2, and config.sh fails closed when it is missing rather than
