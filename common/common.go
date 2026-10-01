@@ -961,6 +961,13 @@ type LbServiceArg struct {
 	// One of "off" (default), "both", "request", "response".
 	// "request" offloads only client->backend, "response" only backend->client.
 	SockMapMode string `json:"sockMapMode,omitempty"`
+	// HalfCloseMode - what this FullProxy service does with a client that
+	// half-closes after its request: "hold" keeps it open until its answer
+	// is out, "off" cuts it at its FIN. Empty (or "inherit" on input) runs on
+	// the process default, which is off.
+	HalfCloseMode string `json:"half_close_mode,omitempty"`
+	// HalfCloseModePresent is the presence bit for replace semantics.
+	HalfCloseModePresent bool `json:"-"`
 	// Egress - Egress Rule
 	Egress bool `json:"egress"`
 	// Id - Stable opaque identifier for the LB rule (Octavia).

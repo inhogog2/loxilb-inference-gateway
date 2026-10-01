@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "2d4a8e26d78a09f755d475bac12858bffa787b80b6bf1cdea043823ad7d955c3"
+    "swagger.yml": "8cdc6748339696174ddff246bf1a2421a8f38e15b1c64f72f48f7d466a85f703"
   },
   "fields": [
     {
@@ -1048,6 +1048,21 @@
         "maximum": 3600000,
         "minimum": 0,
         "type": "integer",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/half_close_mode",
+      "required": false,
+      "contract": {
+        "description": "What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default, which is off. hold+parked is refused (400) until it is available, and hold is refused (400) on a service whose mode is not fullproxy. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.",
+        "enum": [
+          "off",
+          "hold",
+          "hold+parked",
+          "inherit"
+        ],
+        "type": "string",
         "x-nullable": false
       }
     },

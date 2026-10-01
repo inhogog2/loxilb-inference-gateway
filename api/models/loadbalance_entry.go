@@ -786,6 +786,10 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	FcWarmupMs int32 `json:"fc_warmup_ms,omitempty"`
 
+	// What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default, which is off. hold+parked is refused (400) until it is available, and hold is refused (400) on a service whose mode is not fullproxy. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.
+	// Enum: [off hold hold+parked inherit]
+	HalfCloseMode string `json:"half_close_mode,omitempty"`
+
 	// Host routing key for the proxy pool, distinct from path_prefix. It participates in the LB rule key, but L7 policy attachment is currently keyed only by listener VIP/port/protocol. The server accepts at most 255 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 256-byte data-plane field; UI validation must count encoded bytes rather than characters. Together with path_prefix and model_name, the conditional host, host|path, host||model or host|path|model key must not exceed 511 UTF-8 bytes including separators.
 	Host string `json:"host,omitempty"`
 
@@ -1076,6 +1080,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	}
 
 	if err := m.validateFcWarmupMs(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateHalfCloseMode(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -1678,6 +1686,54 @@ func (m *LoadbalanceEntryServiceArguments) validateFcWarmupMs(formats strfmt.Reg
 	}
 
 	if err := validate.MaximumInt("serviceArguments"+"."+"fc_warmup_ms", "body", int64(m.FcWarmupMs), 3.6e+06, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsTypeHalfCloseModePropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["off","hold","hold+parked","inherit"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsTypeHalfCloseModePropEnum = append(loadbalanceEntryServiceArgumentsTypeHalfCloseModePropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsHalfCloseModeOff captures enum value "off"
+	LoadbalanceEntryServiceArgumentsHalfCloseModeOff string = "off"
+
+	// LoadbalanceEntryServiceArgumentsHalfCloseModeHold captures enum value "hold"
+	LoadbalanceEntryServiceArgumentsHalfCloseModeHold string = "hold"
+
+	// LoadbalanceEntryServiceArgumentsHalfCloseModeHoldPlusParked captures enum value "hold+parked"
+	LoadbalanceEntryServiceArgumentsHalfCloseModeHoldPlusParked string = "hold+parked"
+
+	// LoadbalanceEntryServiceArgumentsHalfCloseModeInherit captures enum value "inherit"
+	LoadbalanceEntryServiceArgumentsHalfCloseModeInherit string = "inherit"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArguments) validateHalfCloseModeEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsTypeHalfCloseModePropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateHalfCloseMode(formats strfmt.Registry) error {
+	if swag.IsZero(m.HalfCloseMode) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateHalfCloseModeEnum("serviceArguments"+"."+"half_close_mode", "body", m.HalfCloseMode); err != nil {
 		return err
 	}
 

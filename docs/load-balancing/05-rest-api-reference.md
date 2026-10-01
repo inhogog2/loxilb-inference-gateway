@@ -67,6 +67,7 @@ IPv6 in the path: bracket the literal — `…/externalipaddress/[2001:db8:aa::1
 | `mtls_frontend` | object | — | frontend (client → gateway) mTLS: client-cert mode, CA/CRL paths, CN/SAN pattern |
 | `mtls_backend` | object | — | backend (gateway → backend) mTLS: server-cert verification, CA bundle, client cert/key |
 | `backend_protocol` | string | — | backend ALPN capability: `http1` (default) · `http2` · `both` |
+| `half_close_mode` | string | — | fullproxy: a client that half-closes after its request. `hold` keeps it open until its answer is out (plaintext connections the kernel was never given to carry; with `sockMapMode` set, a client whose FIN comes before acceleration is not accelerated); `off` cuts it at its FIN; `inherit`/omitted runs on the process default, `off`. The bound and the allow/block switch are at [`/config/halfclose`](#half-close-holds). `hold+parked` is refused (`400`) until available; `hold` is refused on other modes. Replace and `null` semantics as `fc_mode`; a change of this field alone applies in place. |
 
 ### `serviceArguments` — AI gateway fields
 

@@ -278,6 +278,34 @@ func (p *loadbalancerRequestPresence) validateFcGateFields(
 	return nil
 }
 
+// validateHalfCloseMode checks half_close_mode on its own, as
+// validateFcGateFields does for the gate: null is refused and the value is
+// one of its words (the rule layer checks again for callers without it).
+func (p *loadbalancerRequestPresence) validateHalfCloseMode(
+	src *models.LoadbalanceEntryServiceArguments,
+) error {
+	if p.svcIsNull("half_close_mode") {
+		return fmt.Errorf("half_close_mode must not be null")
+	}
+	if src == nil {
+		return nil
+	}
+	_, err := cmn.HalfCloseModeToRule(src.HalfCloseMode)
+	return err
+}
+
+// applyHalfCloseMode copies half_close_mode with its presence bit, as
+// applyFcGate does for fc_mode.
+func (p *loadbalancerRequestPresence) applyHalfCloseMode(
+	dst *cmn.LbServiceArg,
+	src *models.LoadbalanceEntryServiceArguments,
+) {
+	if p.svcPresent("half_close_mode") || src.HalfCloseMode != "" {
+		dst.HalfCloseMode = src.HalfCloseMode
+		dst.HalfCloseModePresent = p.svcPresent("half_close_mode")
+	}
+}
+
 // applyFcGate copies the admission gate's rule fields with their presence
 // bits, as applyFcQueue does for the queue pair.
 func (p *loadbalancerRequestPresence) applyFcGate(

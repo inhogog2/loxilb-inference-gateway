@@ -129,6 +129,7 @@ func fullFieldLbRule() cmn.LbRuleMod {
 			FcTtftTargetMs:       800,
 			FcTenantMaxSharePct:  30,
 			FcExposeHeaders:      "on",
+			HalfCloseMode:        "hold",
 			MTLSFrontend: &cmn.MTLSFrontendConfig{
 				ClientCertMode:   "require",
 				ClientCAPath:     "/etc/loxilb/certs/frontend-ca.pem",

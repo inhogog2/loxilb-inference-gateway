@@ -10305,6 +10305,28 @@ definitions:
             enum: ["off", "both", "request", "response"]
             default: "off"
             description: Directional sockmap acceleration for this FullProxy service - off (default), both, request (client->backend only), response (backend->client only). The direction that is not selected stays on the userspace relay and never runs the sockmap verdict. A mode other than off requires a plaintext tcp fullproxy service with an ipv4 external IP and ipv4 endpoints, and the daemon started with --sockmapsupport; a request that does not meet either condition is rejected with 400 before any rule state changes. A snapshot restore on a daemon without --sockmapsupport keeps the mode, logs a warning and runs the rule unaccelerated. A service whose data plane changes bytes in the direction being accelerated is rejected with 400, and the check is per direction. sse_mode, pd_disagg_mode and an attached L7 policy own BOTH directions and accept only off. ANY api_key_auth declaration - an explicit disabled included, since that value still makes the gateway strip X-Api-Key, as is one kept by a replace that omits the field - owns the REQUEST direction only - both and request are rejected with 400, response is accepted because validating the credential and stripping X-Api-Key both happen before dispatch and neither rewrites a response byte. Accepting it logs a warning, since api_key_auth arms ai_gw_mode and an accelerated response is not recorded. On a connection whose REQUEST direction is accelerated the later keep-alive requests skip admission, the request-header rewrites and the X-Api-Key strip; on one whose RESPONSE direction is accelerated the responses are not recorded. Attaching an L7 policy to a service that declares a mode is rejected with 400 as well, since a policy can arrive long after the rule. A snapshot restore of such a service turns the mode off with a warning; a restored policy whose rule declares a mode is attached with a warning and the rule stays unaccelerated. Services are told apart by address and port; services pointing at the same endpoint address and port, or host-based services on the same VIP address and port, share a portset entry, but a connection is accelerated only in the directions its own service selects. HTTP/2, including h2c, is never accelerated. Adding a direction applies to new connections; a connection already running is never accelerated retroactively. Taking a direction away, and deleting the service, close the connections that had it accelerated, since the verdict decides on the pairing installed when a connection was accepted and could not otherwise be reached. POST .../sockmapreset does the same without changing the configuration. Connections that were never accelerated are not touched. Redirect correctness depends on the kernel - see docs/sockmap-acceleration.md before enabling.
+          half_close_mode:
+            type: string
+            x-nullable: false
+            enum: ["off", "hold", "hold+parked", "inherit"]
+            description: >-
+              What this FullProxy service does with a client that half-closes
+              (shuts down its write side) after sending its request. hold keeps
+              the client open until the answer is out, where the gateway relays
+              the answer itself: a plaintext connection whose traffic the kernel
+              was never given to carry. Such a client is then closed once its
+              answers are written, once the backend ends the answer's connection,
+              when no answer byte has reached it for the bound set at
+              /config/halfclose, or when that endpoint's release is called;
+              with sockMapMode other than off, a client whose FIN arrives before
+              the connection is accelerated is not accelerated, so that it can
+              be held. off cuts the client at its FIN, as before. inherit, or
+              omitted on create, runs on the process default, which is off.
+              hold+parked is refused (400) until it is available, and hold is
+              refused (400) on a service whose mode is not fullproxy. Replace and
+              null semantics as fc_mode; a replace that changes nothing else
+              applies in place, to half-closes from then on. Read back only when
+              declared.
           egress:
             type: boolean
             description: Marks an egress rule. The ordinary LB2DP programming path returns early for this marker; do not infer ordinary ingress FullProxy behavior. The existing-rule path rejects changes to this flag.
