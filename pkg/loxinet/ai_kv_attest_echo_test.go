@@ -531,6 +531,46 @@ func TestKvEchoChallengeLastBlock(t *testing.T) {
 	}
 }
 
+// TestKvEchoChallengeLastBlockWideEvent: under a last-block plan the last
+// block may arrive inside a wider event block (an engine block spanning
+// several contract blocks carries the hash of the last one it covers). The
+// whole wide block is checked against the gateway's tokens, so a flipped
+// token in its FIRST contract block fails the challenge.
+func TestKvEchoChallengeLastBlockWideEvent(t *testing.T) {
+	kvEchoTestSetup(t)
+	_, ep := kvEchoTestServer(t, "m-echo", 200)
+	info := kvEchoInfo()
+	info.challenge = kvChallengePlan{lastBlock: true}
+	const k = 2
+	feed := func(corrupt bool) {
+		go func() {
+			w := kvEchoAwaitWatch(info.svcID, ep.EpIdx)
+			if w == nil {
+				return
+			}
+			hashes, tokens := kvEchoWatchExpectation(w)
+			last := len(hashes) - 1
+			toks := append([]uint32(nil), tokens[(last+1-k)*kvEchoTestBS:(last+1)*kvEchoTestBS]...)
+			if corrupt {
+				toks[0]++
+			}
+			kvHashWatchObserve(info.svcID, ep.EpIdx, 0, kvEvent{Type: kvEventBlockStored,
+				Hashes: []uint64{hashes[last]}, Tokens: toks, BlockSize: k * kvEchoTestBS})
+		}()
+	}
+
+	feed(false)
+	if f := newKvVllmAttest().HashChallenge(ep, info); !f.OK || !strings.Contains(f.Detail, "last of") {
+		t.Fatalf("wide event carrying the last block, last-block plan: want a pass that says so, got %+v", f)
+	}
+
+	feed(true)
+	f := newKvVllmAttest().HashChallenge(ep, info)
+	if f.OK || f.Reason != KvAttestReasonChallengeFailed || !strings.Contains(f.Detail, "token mismatch") {
+		t.Fatalf("wrong token in the first contract block of the wide last block: want challenge_failed, got %+v", f)
+	}
+}
+
 // TestKvChallengePlanReachesEveryAdapter: each engine adapter hands the
 // rule's challenge plan to BOTH the prompt builder (the expected sequence
 // stops on a cache-chunk boundary) and the watch (the last block alone ends
