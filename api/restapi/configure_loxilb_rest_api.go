@@ -117,6 +117,10 @@ func configureAPI(api *operations.LoxilbRestAPIAPI) http.Handler {
 	api.GetConfigLoadbalancerIDHandler = operations.GetConfigLoadbalancerIDHandlerFunc(handler.ConfigGetLoadbalancerByID)
 	api.GetConfigLoadbalancerStatusHandler = operations.GetConfigLoadbalancerStatusHandlerFunc(handler.ConfigGetLoadbalancerStatus)
 	api.PostConfigLoadbalancerSockmapResetHandler = operations.PostConfigLoadbalancerSockmapResetHandlerFunc(handler.ConfigPostLoadbalancerSockmapReset)
+	// Half-close holds: the process-wide settings and the release of every held client
+	api.GetConfigHalfcloseHandler = operations.GetConfigHalfcloseHandlerFunc(handler.ConfigGetHalfClose)
+	api.PostConfigHalfcloseHandler = operations.PostConfigHalfcloseHandlerFunc(handler.ConfigPostHalfClose)
+	api.PostConfigHalfcloseReleaseHandler = operations.PostConfigHalfcloseReleaseHandlerFunc(handler.ConfigPostHalfCloseRelease)
 	// resolved KV-exact composition status by composite key — a dedicated
 	// read model, never the GET/POST-shared LoadbalanceEntry
 	api.GetConfigLoadbalancerKvExactStatusHandler = operations.GetConfigLoadbalancerKvExactStatusHandlerFunc(handler.ConfigGetLoadbalancerKvExactStatus)

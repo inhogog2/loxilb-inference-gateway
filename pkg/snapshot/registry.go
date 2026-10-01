@@ -152,6 +152,12 @@ type Hooks interface {
 	NetTracingSet(*cmn.TracingConfig) (int, error)
 	NetTracingReset() (int, error)
 
+	// halfclose (schema 1.7) -- singleton, Set semantics; nil = the
+	// defaults are in force. Reset returns to them.
+	NetHalfCloseGet() (*cmn.HalfCloseConfig, error)
+	NetHalfCloseSet(*cmn.HalfCloseConfig) (int, error)
+	NetHalfCloseReset() (int, error)
+
 	// cert (schema 1.3) -- TLS certificates as {id, digest} metadata.
 	// Add re-registers from the node-local managed material after digest
 	// verification (missing/divergent material fails loudly); Del
@@ -213,6 +219,7 @@ type DomainEntry struct {
 var Registry = []DomainEntry{
 	{Name: DomainEndpoint, Get: getEndpoint, Apply: applyEndpoint, Delete: deleteEndpoint},
 	{Name: DomainJWTAuthProfile, Get: getJWTAuthProfile, Apply: applyJWTAuthProfile, Delete: deleteJWTAuthProfile},
+	{Name: DomainHalfClose, Get: getHalfClose, Apply: applyHalfClose, Delete: deleteHalfClose},
 	{Name: DomainLoadBalancer, Get: getLoadBalancer, Apply: applyLoadBalancer, Delete: deleteLoadBalancer},
 	{Name: DomainKvExactBinding, Get: getKvExactBinding, Apply: applyKvExactBinding, Delete: deleteKvExactBinding},
 	{Name: DomainL7Policy, Get: getL7Policy, Apply: applyL7Policy, Delete: deleteL7Policy},
@@ -1723,4 +1730,40 @@ func deleteCert(hooks Hooks) (int, error) {
 		n++
 	}
 	return n, errors.Join(errs...)
+}
+
+// ---------------------------------------------------------------------
+// halfclose -- singleton, Set semantics (schema 1.7)
+//
+// The process-wide half-close hold settings: whether new holds may be
+// taken and the idle bound on a hold. The defaults are not configuration:
+// capture exports nil for them, and the wipe resets back to them. Applied
+// before loadbalancer (see Domains.HalfClose).
+// ---------------------------------------------------------------------
+
+func getHalfClose(hooks Hooks, doc *Document) error {
+	cfg, err := hooks.NetHalfCloseGet()
+	if err != nil {
+		return fmt.Errorf("get halfclose: %w", err)
+	}
+	doc.Domains.HalfClose = cfg
+	return nil
+}
+
+func applyHalfClose(hooks Hooks, doc *Document, _ bool) (int, int, error) {
+	// Singleton with Set (overwrite) semantics: no "exists" to tolerate.
+	if doc.Domains.HalfClose == nil {
+		return 0, 0, nil
+	}
+	if _, err := hooks.NetHalfCloseSet(doc.Domains.HalfClose); err != nil {
+		return 0, 0, fmt.Errorf("apply halfclose: %w", err)
+	}
+	return 1, 0, nil
+}
+
+func deleteHalfClose(hooks Hooks) (int, error) {
+	if _, err := hooks.NetHalfCloseReset(); err != nil {
+		return 0, fmt.Errorf("delete halfclose: %w", err)
+	}
+	return 1, nil
 }

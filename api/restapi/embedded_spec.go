@@ -2213,6 +2213,25 @@ func init() {
       },
       "type": "object"
     },
+    "HalfCloseConfig": {
+      "description": "The process-wide half-close hold settings. They apply to the services whose half_close_mode is hold; a service's own mode decides whether it holds at all.",
+      "properties": {
+        "allow": {
+          "description": "Whether new holds may be taken. false blocks them on every service, whatever its mode, and leaves the clients already held to finish.",
+          "type": "boolean",
+          "x-nullable": true
+        },
+        "capSeconds": {
+          "description": "The idle bound on a hold, in seconds: a held client to which no answer byte has been written for this long is closed. The clock starts once the request has reached the backend and restarts with every write of the answer, so a long answer that keeps coming is never cut by it.",
+          "format": "int32",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer",
+          "x-nullable": true
+        }
+      },
+      "type": "object"
+    },
     "HealthCheckResponse": {
       "properties": {
         "status": {
@@ -12216,6 +12235,120 @@ func init() {
           }
         },
         "summary": "Get GPU monitoring status"
+      }
+    },
+    "/config/halfclose": {
+      "get": {
+        "description": "The process-wide settings for holding a client that half-closes after its request, on the services whose half_close_mode is hold: whether new holds may be taken, and the idle bound on a hold. Until they are set, the defaults are in force (allowed, 240 seconds) and are what this returns.",
+        "operationId": "getConfigHalfclose",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/HalfCloseConfig"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "$ref": "#/responses/ManagementStoreUnavailable"
+          }
+        },
+        "summary": "Get the half-close hold settings"
+      },
+      "post": {
+        "description": "Sets whether new holds may be taken and the idle bound on a hold. A field omitted keeps the value in force; a body with neither is refused (400). Blocking stops new holds only: the clients already held stay held until their answers are out or the bound ends them, and /config/halfclose/release is what closes them at once. A new bound applies to every hold from the next pass of the data path, those already held included. The settings are kept across a restart and in a configuration snapshot.",
+        "operationId": "postConfigHalfclose",
+        "parameters": [
+          {
+            "description": "The settings to set",
+            "in": "body",
+            "name": "attr",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/HalfCloseConfig"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "$ref": "#/responses/ManagementStoreUnavailable"
+          }
+        },
+        "summary": "Set the half-close hold settings"
+      }
+    },
+    "/config/halfclose/release": {
+      "post": {
+        "description": "Closes, at the data path's next pass (within a second), every client held after a half-close, on every service, as it would have been closed without the hold: both of its connections are shut and released. An answer still on its way to such a client is lost. Nothing is stored: holds taken afterwards are taken as before, so block new holds first (POST /config/halfclose with allow false) to stop them. Answers 200 whether or not anything is held.",
+        "operationId": "postConfigHalfcloseRelease",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "$ref": "#/responses/ManagementStoreUnavailable"
+          }
+        },
+        "summary": "Close every held half-closed client"
       }
     },
     "/config/import": {
@@ -25016,6 +25149,138 @@ func init() {
         }
       }
     },
+    "/config/halfclose": {
+      "get": {
+        "description": "The process-wide settings for holding a client that half-closes after its request, on the services whose half_close_mode is hold: whether new holds may be taken, and the idle bound on a hold. Until they are set, the defaults are in force (allowed, 240 seconds) and are what this returns.",
+        "summary": "Get the half-close hold settings",
+        "operationId": "getConfigHalfclose",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/HalfCloseConfig"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "Sets whether new holds may be taken and the idle bound on a hold. A field omitted keeps the value in force; a body with neither is refused (400). Blocking stops new holds only: the clients already held stay held until their answers are out or the bound ends them, and /config/halfclose/release is what closes them at once. A new bound applies to every hold from the next pass of the data path, those already held included. The settings are kept across a restart and in a configuration snapshot.",
+        "summary": "Set the half-close hold settings",
+        "operationId": "postConfigHalfclose",
+        "parameters": [
+          {
+            "description": "The settings to set",
+            "name": "attr",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/HalfCloseConfig"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/halfclose/release": {
+      "post": {
+        "description": "Closes, at the data path's next pass (within a second), every client held after a half-close, on every service, as it would have been closed without the hold: both of its connections are shut and released. An answer still on its way to such a client is lost. Nothing is stored: holds taken afterwards are taken as before, so block new holds first (POST /config/halfclose with allow false) to stop them. Answers 200 whether or not anything is held.",
+        "summary": "Close every held half-closed client",
+        "operationId": "postConfigHalfcloseRelease",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
     "/config/import": {
       "post": {
         "consumes": [
@@ -36290,6 +36555,25 @@ func init() {
         "worker_count": {
           "description": "Number of cached worker entries, including potentially stale samples; zero can be omitted.",
           "type": "integer"
+        }
+      }
+    },
+    "HalfCloseConfig": {
+      "description": "The process-wide half-close hold settings. They apply to the services whose half_close_mode is hold; a service's own mode decides whether it holds at all.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Whether new holds may be taken. false blocks them on every service, whatever its mode, and leaves the clients already held to finish.",
+          "type": "boolean",
+          "x-nullable": true
+        },
+        "capSeconds": {
+          "description": "The idle bound on a hold, in seconds: a held client to which no answer byte has been written for this long is closed. The clock starts once the request has reached the backend and restarts with every write of the answer, so a long answer that keeps coming is never cut by it.",
+          "type": "integer",
+          "format": "int32",
+          "maximum": 3600,
+          "minimum": 1,
+          "x-nullable": true
         }
       }
     },

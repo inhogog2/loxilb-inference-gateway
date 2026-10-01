@@ -1411,6 +1411,102 @@ paths:
             $ref: '#/definitions/Error'
         '503':
           $ref: '#/responses/ManagementStoreUnavailable'
+  '/config/halfclose':
+    get:
+      summary: Get the half-close hold settings
+      description: >-
+        The process-wide settings for holding a client that half-closes after
+        its request, on the services whose half_close_mode is hold: whether new
+        holds may be taken, and the idle bound on a hold. Until they are set,
+        the defaults are in force (allowed, 240 seconds) and are what this
+        returns.
+      operationId: getConfigHalfclose
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/HalfCloseConfig'
+        '401':
+          description: Invalid authentication credentials
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          $ref: '#/responses/ManagementForbidden'
+        '500':
+          description: Internal service error
+          schema:
+            $ref: '#/definitions/Error'
+        '503':
+          $ref: '#/responses/ManagementStoreUnavailable'
+    post:
+      summary: Set the half-close hold settings
+      description: >-
+        Sets whether new holds may be taken and the idle bound on a hold. A
+        field omitted keeps the value in force; a body with neither is refused
+        (400). Blocking stops new holds only: the clients already held stay
+        held until their answers are out or the bound ends them, and
+        /config/halfclose/release is what closes them at once. A new bound
+        applies to every hold from the next pass of the data path, those
+        already held included. The settings are kept across a restart and in
+        a configuration snapshot.
+      operationId: postConfigHalfclose
+      parameters:
+        - name: attr
+          in: body
+          required: true
+          description: The settings to set
+          schema:
+            $ref: '#/definitions/HalfCloseConfig'
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/OperationResult'
+        '400':
+          description: Malformed arguments for API call
+          schema:
+            $ref: '#/definitions/Error'
+        '401':
+          description: Invalid authentication credentials
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          $ref: '#/responses/ManagementForbidden'
+        '500':
+          description: Internal service error
+          schema:
+            $ref: '#/definitions/Error'
+        '503':
+          $ref: '#/responses/ManagementStoreUnavailable'
+  '/config/halfclose/release':
+    post:
+      summary: Close every held half-closed client
+      description: >-
+        Closes, at the data path's next pass (within a second), every client
+        held after a half-close, on every service, as it would have been closed
+        without the hold: both of its connections are shut and released. An
+        answer still on its way to such a client is lost. Nothing is stored:
+        holds taken afterwards are taken as before, so block new holds first
+        (POST /config/halfclose with allow false) to stop them. Answers 200
+        whether or not anything is held.
+      operationId: postConfigHalfcloseRelease
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/OperationResult'
+        '401':
+          description: Invalid authentication credentials
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          $ref: '#/responses/ManagementForbidden'
+        '500':
+          description: Internal service error
+          schema:
+            $ref: '#/definitions/Error'
+        '503':
+          $ref: '#/responses/ManagementStoreUnavailable'
   '/config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/kvexactstatus':
     get:
       summary: Get the resolved KV-exact composition status of Load balancer rules
@@ -9411,6 +9507,31 @@ definitions:
         type: integer
         x-omitempty: false   # zero is the answer for a service with nothing accelerated, not an absent field
         description: How many accelerated connections were closed. Zero means the service had none, which is also the answer for a service whose sockMapMode is off. Connections that were never accelerated are not counted because they are not touched.
+  HalfCloseConfig:
+    type: object
+    description: >-
+      The process-wide half-close hold settings. They apply to the services
+      whose half_close_mode is hold; a service's own mode decides whether it
+      holds at all.
+    properties:
+      allow:
+        type: boolean
+        x-nullable: true
+        description: >-
+          Whether new holds may be taken. false blocks them on every service,
+          whatever its mode, and leaves the clients already held to finish.
+      capSeconds:
+        type: integer
+        format: int32
+        x-nullable: true
+        minimum: 1
+        maximum: 3600
+        description: >-
+          The idle bound on a hold, in seconds: a held client to which no
+          answer byte has been written for this long is closed. The clock
+          starts once the request has reached the backend and restarts with
+          every write of the answer, so a long answer that keeps coming is
+          never cut by it.
   LoadbalanceStatus:
     type: object
     description: Per-LB lifecycle status (Octavia).

@@ -132,6 +132,16 @@ var Migrations = []Migration{
 			return nil
 		},
 	},
+	// 1.6 -> 1.7: the halfclose domain was added. A singleton whose absent
+	// value is nil (the defaults in force), so there is nothing to
+	// normalize: re-stamp only. Deliberately NOT stamped into
+	// included_domains, as 1.5->1.6: a pre-1.7 document never captured these
+	// settings, so restoring it must leave the live ones untouched.
+	{
+		FromVersion: "1.6",
+		ToVersion:   "1.7",
+		Apply:       func(doc *Document) error { return nil },
+	},
 }
 
 // ApplyMigrations runs every registered Migration whose FromVersion matches

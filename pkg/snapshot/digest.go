@@ -248,6 +248,12 @@ func domainItemJSONs(name string, d *Domains) ([]string, error) {
 		return itemJSONs(d.Endpoint)
 	case DomainJWTAuthProfile:
 		return itemJSONs(d.JWTAuthProfile)
+	case DomainHalfClose:
+		// Same nil-vs-configured distinction as cors.
+		if d.HalfClose == nil {
+			return nil, nil
+		}
+		return itemJSONs([]cmn.HalfCloseConfig{*d.HalfClose})
 	case DomainLoadBalancer:
 		return itemJSONs(d.LoadBalancer)
 	case DomainKvExactBinding:

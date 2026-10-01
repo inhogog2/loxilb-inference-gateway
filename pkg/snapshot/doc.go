@@ -84,7 +84,17 @@ import (
 // carry no lineage position, and the 1.4->1.5 migration is restamp-only
 // -- a generation states a fact about the persisted lineage that a
 // migration cannot know, so it must never invent one.
-const SchemaVersion = "1.6"
+//
+// 1.6: added the jwtauthprofile domain (see Domains.JWTAuthProfile).
+//
+// 1.7: added the halfclose domain: the process-wide half-close hold
+// settings (whether new holds may be taken, and the idle bound on a hold).
+// A singleton like cors; the defaults are not configuration and are
+// captured as absent. Additive: older documents carry none, and their
+// included_domains never lists it, so restoring them leaves the live
+// settings untouched. Builds that predate it refuse 1.7 documents via the
+// minor-version gate.
+const SchemaVersion = "1.7"
 
 // DocKind identifies the document type, matching §4's "kind" field.
 const DocKind = "loxilb-snapshot"
@@ -109,6 +119,7 @@ const (
 const (
 	DomainEndpoint       = "endpoint"
 	DomainJWTAuthProfile = "jwtauthprofile"
+	DomainHalfClose      = "halfclose"
 	DomainLoadBalancer   = "loadbalancer"
 	DomainKvExactBinding = "kvexactbinding"
 	DomainL7Policy       = "l7policy"
@@ -187,7 +198,13 @@ type Domains struct {
 	// service up refusing every request (fail-closed 503) until the
 	// profile followed. Added in schema 1.6; absent in older documents.
 	JWTAuthProfile []cmn.JWTAuthProfileMod `json:"jwtauthprofile,omitempty"`
-	LoadBalancer   []cmn.LbRuleMod         `json:"loadbalancer"`
+	// HalfClose carries the process-wide half-close hold settings
+	// (singleton, Set semantics on apply); nil means the defaults are in
+	// force (not configuration, not captured). Applied BEFORE loadbalancer,
+	// so that a restored block is in force before the rules that would hold
+	// come back. Added in schema 1.7; absent in older documents.
+	HalfClose    *cmn.HalfCloseConfig `json:"halfclose,omitempty"`
+	LoadBalancer []cmn.LbRuleMod      `json:"loadbalancer"`
 	// KvExactBinding carries each rule's KV-exact composed-binding identity
 	// (model-profile ref, engine-contract ref, binding generation + digest,
 	// allocation high-water mark). Applied after loadbalancer (bindings

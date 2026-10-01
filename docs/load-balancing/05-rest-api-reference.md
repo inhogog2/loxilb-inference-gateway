@@ -214,6 +214,34 @@ Per-endpoint probe type/port (including `tls-hello`) are configured on the separ
 `operatingStatus` ∈ `ONLINE` / `OFFLINE` / `DEGRADED` / `ERROR` / `NO_MONITOR`. Status/stats values are
 in-memory (reset on restart).
 
+### Half-close holds
+
+A client that sends its request and then shuts down its write side (a half-close) is saying
+"that was my last request", not "forget the answer". On a fullproxy service whose
+`half_close_mode` is `hold`, such a client is kept open until its answer is out, where the
+gateway relays the answer itself: a plaintext connection whose traffic the kernel was never
+given to carry (a TLS connection, or one already accelerated, is cut at its FIN as before).
+A held client is closed once its answers are written, once the backend ends the answer's
+connection, when no answer byte has reached it for the bound below, or on a release.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/config/halfclose` | The settings in force: `{"allow": true, "capSeconds": 240}` until set |
+| `POST` | `/config/halfclose` | Set `allow` (new holds allowed or blocked, on every service) and/or `capSeconds` (the idle bound, `1`–`3600`); an omitted field keeps its value; persisted |
+| `POST` | `/config/halfclose/release` | Close every held client at the next pass (within a second); stores nothing |
+
+Blocking stops new holds only; the clients already held finish as they started. To stop
+everything at once, block, then release. The bound is on idleness: it restarts with every
+write of the answer, so a long answer that keeps coming is never cut by it.
+
+Metrics: `loxilb_proxy_halfclose_held` (held now), `loxilb_proxy_halfclose_held_oldest_seconds`,
+`loxilb_proxy_halfclose_hold_total`, `loxilb_proxy_halfclose_hold_ended_total{reason}` (`answered`,
+`backend_first`, `expired`, `released`, `reset` — a client that reset while held, i.e. a cancel
+that was waited on — `other`), `loxilb_proxy_halfclose_hold_expired_total{answer_started,stream}`,
+`loxilb_proxy_halfclose_hold_refused_total{reason}`, `loxilb_proxy_halfclose_accel_skipped_total`
+(connections left unaccelerated so that they could be held), and the settings as
+`loxilb_proxy_halfclose_hold_allowed` / `loxilb_proxy_halfclose_hold_cap_seconds`.
+
 ---
 
 ## 2. Certificates (certId registry)

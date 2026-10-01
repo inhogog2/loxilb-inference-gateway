@@ -196,6 +196,10 @@ var RouteLifecycles = []RouteLifecycle{
 	{Method: "delete", Path: "/config/loadbalancer/externalipaddress/{ip_address}/port/{port}/portmax/{portmax}/protocol/{proto}", Class: ClassSnapshot, Area: DomainLoadBalancer, DesiredState: true},
 	{Method: "delete", Path: "/config/loadbalancer/hosturl/{hosturl}/externalipaddress/{ip_address}/port/{port}/protocol/{proto}", Class: ClassSnapshot, Area: DomainLoadBalancer, DesiredState: true},
 	{Method: "delete", Path: "/config/loadbalancer/hosturl/{hosturl}/externalipaddress/{ip_address}/port/{port}/portmax/{portmax}/protocol/{proto}", Class: ClassSnapshot, Area: DomainLoadBalancer, DesiredState: true},
+	// Half-close hold settings: snapshot domain since schema 1.7. The
+	// release closes the clients held now and stores nothing.
+	{Method: "post", Path: "/config/halfclose", Class: ClassSnapshot, Area: DomainHalfClose, DesiredState: true},
+	{Method: "post", Path: "/config/halfclose/release", Class: ClassRuntimeRebuilt, Area: DomainHalfClose},
 	{Method: "delete", Path: "/config/loadbalancer/name/{lb_name}", Class: ClassSnapshot, Area: DomainLoadBalancer, DesiredState: true},
 
 	{Method: "post", Path: "/config/firewall", Class: ClassSnapshot, Area: DomainFirewall, DesiredState: true},
@@ -365,6 +369,7 @@ func RouteLifecycleIndex() map[string]RouteLifecycle {
 var snapshotDomainSet = map[string]bool{
 	DomainEndpoint:       true,
 	DomainJWTAuthProfile: true,
+	DomainHalfClose:      true,
 	DomainLoadBalancer:   true,
 	DomainKvExactBinding: true,
 	DomainL7Policy:       true,

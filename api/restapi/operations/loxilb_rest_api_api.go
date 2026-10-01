@@ -675,6 +675,9 @@ func NewLoxilbRestAPIAPI(spec *loads.Document) *LoxilbRestAPIAPI {
 		DpuGetConfigDpuHwcountersHandler: dpu.GetConfigDpuHwcountersHandlerFunc(func(params dpu.GetConfigDpuHwcountersParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation dpu.GetConfigDpuHwcounters has not yet been implemented")
 		}),
+		GetConfigHalfcloseHandler: GetConfigHalfcloseHandlerFunc(func(params GetConfigHalfcloseParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation GetConfigHalfclose has not yet been implemented")
+		}),
 		GetConfigL7PolicyAllHandler: GetConfigL7PolicyAllHandlerFunc(func(params GetConfigL7PolicyAllParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation GetConfigL7PolicyAll has not yet been implemented")
 		}),
@@ -734,6 +737,12 @@ func NewLoxilbRestAPIAPI(spec *loads.Document) *LoxilbRestAPIAPI {
 		}),
 		DpuPostConfigDpuDebugHandler: dpu.PostConfigDpuDebugHandlerFunc(func(params dpu.PostConfigDpuDebugParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation dpu.PostConfigDpuDebug has not yet been implemented")
+		}),
+		PostConfigHalfcloseHandler: PostConfigHalfcloseHandlerFunc(func(params PostConfigHalfcloseParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation PostConfigHalfclose has not yet been implemented")
+		}),
+		PostConfigHalfcloseReleaseHandler: PostConfigHalfcloseReleaseHandlerFunc(func(params PostConfigHalfcloseReleaseParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation PostConfigHalfcloseRelease has not yet been implemented")
 		}),
 		PostConfigL7PolicyHandler: PostConfigL7PolicyHandlerFunc(func(params PostConfigL7PolicyParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation PostConfigL7Policy has not yet been implemented")
@@ -1221,6 +1230,8 @@ type LoxilbRestAPIAPI struct {
 	DpuGetConfigDpuDebugHandler dpu.GetConfigDpuDebugHandler
 	// DpuGetConfigDpuHwcountersHandler sets the operation handler for the get config dpu hwcounters operation
 	DpuGetConfigDpuHwcountersHandler dpu.GetConfigDpuHwcountersHandler
+	// GetConfigHalfcloseHandler sets the operation handler for the get config halfclose operation
+	GetConfigHalfcloseHandler GetConfigHalfcloseHandler
 	// GetConfigL7PolicyAllHandler sets the operation handler for the get config l7 policy all operation
 	GetConfigL7PolicyAllHandler GetConfigL7PolicyAllHandler
 	// GetConfigL7PolicyIDHandler sets the operation handler for the get config l7 policy ID operation
@@ -1261,6 +1272,10 @@ type LoxilbRestAPIAPI struct {
 	PostConfigCertHandler PostConfigCertHandler
 	// DpuPostConfigDpuDebugHandler sets the operation handler for the post config dpu debug operation
 	DpuPostConfigDpuDebugHandler dpu.PostConfigDpuDebugHandler
+	// PostConfigHalfcloseHandler sets the operation handler for the post config halfclose operation
+	PostConfigHalfcloseHandler PostConfigHalfcloseHandler
+	// PostConfigHalfcloseReleaseHandler sets the operation handler for the post config halfclose release operation
+	PostConfigHalfcloseReleaseHandler PostConfigHalfcloseReleaseHandler
 	// PostConfigL7PolicyHandler sets the operation handler for the post config l7 policy operation
 	PostConfigL7PolicyHandler PostConfigL7PolicyHandler
 	// PostConfigLoadbalancerSockmapResetHandler sets the operation handler for the post config loadbalancer sockmap reset operation
@@ -1979,6 +1994,9 @@ func (o *LoxilbRestAPIAPI) Validate() error {
 	if o.DpuGetConfigDpuHwcountersHandler == nil {
 		unregistered = append(unregistered, "dpu.GetConfigDpuHwcountersHandler")
 	}
+	if o.GetConfigHalfcloseHandler == nil {
+		unregistered = append(unregistered, "GetConfigHalfcloseHandler")
+	}
 	if o.GetConfigL7PolicyAllHandler == nil {
 		unregistered = append(unregistered, "GetConfigL7PolicyAllHandler")
 	}
@@ -2038,6 +2056,12 @@ func (o *LoxilbRestAPIAPI) Validate() error {
 	}
 	if o.DpuPostConfigDpuDebugHandler == nil {
 		unregistered = append(unregistered, "dpu.PostConfigDpuDebugHandler")
+	}
+	if o.PostConfigHalfcloseHandler == nil {
+		unregistered = append(unregistered, "PostConfigHalfcloseHandler")
+	}
+	if o.PostConfigHalfcloseReleaseHandler == nil {
+		unregistered = append(unregistered, "PostConfigHalfcloseReleaseHandler")
 	}
 	if o.PostConfigL7PolicyHandler == nil {
 		unregistered = append(unregistered, "PostConfigL7PolicyHandler")
@@ -2988,6 +3012,10 @@ func (o *LoxilbRestAPIAPI) initHandlerCache() {
 	if o.handlers["GET"] == nil {
 		o.handlers["GET"] = make(map[string]http.Handler)
 	}
+	o.handlers["GET"]["/config/halfclose"] = NewGetConfigHalfclose(o.context, o.GetConfigHalfcloseHandler)
+	if o.handlers["GET"] == nil {
+		o.handlers["GET"] = make(map[string]http.Handler)
+	}
 	o.handlers["GET"]["/config/l7policy"] = NewGetConfigL7PolicyAll(o.context, o.GetConfigL7PolicyAllHandler)
 	if o.handlers["GET"] == nil {
 		o.handlers["GET"] = make(map[string]http.Handler)
@@ -3065,6 +3093,14 @@ func (o *LoxilbRestAPIAPI) initHandlerCache() {
 		o.handlers["POST"] = make(map[string]http.Handler)
 	}
 	o.handlers["POST"]["/config/dpu/debug"] = dpu.NewPostConfigDpuDebug(o.context, o.DpuPostConfigDpuDebugHandler)
+	if o.handlers["POST"] == nil {
+		o.handlers["POST"] = make(map[string]http.Handler)
+	}
+	o.handlers["POST"]["/config/halfclose"] = NewPostConfigHalfclose(o.context, o.PostConfigHalfcloseHandler)
+	if o.handlers["POST"] == nil {
+		o.handlers["POST"] = make(map[string]http.Handler)
+	}
+	o.handlers["POST"]["/config/halfclose/release"] = NewPostConfigHalfcloseRelease(o.context, o.PostConfigHalfcloseReleaseHandler)
 	if o.handlers["POST"] == nil {
 		o.handlers["POST"] = make(map[string]http.Handler)
 	}

@@ -94,7 +94,7 @@ func domainNames(entries []DomainEntry) []string {
 // DeleteOrder is the exact reverse.
 func TestRegistryOrder(t *testing.T) {
 	want := []string{
-		DomainEndpoint, DomainJWTAuthProfile, DomainLoadBalancer, DomainKvExactBinding,
+		DomainEndpoint, DomainJWTAuthProfile, DomainHalfClose, DomainLoadBalancer, DomainKvExactBinding,
 		DomainL7Policy, DomainFirewall, DomainPolicy,
 		DomainMirror, DomainSession, DomainSessionUlCl, DomainIPFilter,
 		DomainSecurityRate, DomainBFD, DomainBGP, DomainIPsec, DomainCORS,
@@ -124,6 +124,13 @@ func TestRegistryOrder(t *testing.T) {
 	jpIdx := indexOf(got, DomainJWTAuthProfile)
 	if jpIdx < 0 || jpIdx > lbIdx {
 		t.Fatalf("expected jwtauthprofile (idx %d) before loadbalancer (idx %d)", jpIdx, lbIdx)
+	}
+
+	// halfclose before loadbalancer -- a restored block must be in force
+	// before the rules that would hold come back.
+	hcIdx := indexOf(got, DomainHalfClose)
+	if hcIdx < 0 || hcIdx > lbIdx {
+		t.Fatalf("expected halfclose (idx %d) before loadbalancer (idx %d)", hcIdx, lbIdx)
 	}
 	sessIdx, ulclIdx := indexOf(got, DomainSession), indexOf(got, DomainSessionUlCl)
 	if sessIdx < 0 || ulclIdx < 0 || sessIdx > ulclIdx {

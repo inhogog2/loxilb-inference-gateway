@@ -101,7 +101,15 @@ func withoutDomain(names []string, drop string) []string {
 func legacyGoldenDocument(schemaVersion string) *Document {
 	doc := goldenDocument()
 	doc.SchemaVersion = schemaVersion
-	// jwtauthprofile is a 1.6 domain -- every legacy schema predates it,
+	// halfclose is a 1.7 domain -- every legacy schema predates it, in
+	// content and in declared coverage alike.
+	doc.Domains.HalfClose = nil
+	doc.IncludedDomains = withoutDomain(doc.IncludedDomains, DomainHalfClose)
+	if schemaVersion == "1.6" {
+		// 1.6 had everything else current.
+		return doc
+	}
+	// jwtauthprofile is a 1.6 domain -- every older schema predates it,
 	// in content and in declared coverage alike.
 	doc.Domains.JWTAuthProfile = nil
 	doc.IncludedDomains = withoutDomain(doc.IncludedDomains, DomainJWTAuthProfile)
@@ -195,7 +203,7 @@ func TestGoldenCurrentSchema(t *testing.T) {
 // TestGoldenLegacySchemas: every older-schema golden still decodes,
 // verifies, migrates to the current schema, and passes a dry-run restore.
 func TestGoldenLegacySchemas(t *testing.T) {
-	legacy := []string{"1.0", "1.1", "1.2", "1.3", "1.4", "1.5"}
+	legacy := []string{"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"}
 	for _, version := range legacy {
 		version := version
 		t.Run("v"+version, func(t *testing.T) {
@@ -230,11 +238,14 @@ func TestGoldenLegacySchemas(t *testing.T) {
 			if doc.Domains.JWTAuthProfile == nil {
 				t.Fatalf("migration left jwtauthprofile nil (want normalized empty)")
 			}
-			if version == "1.5" {
-				// 1.5 documents carry a lineage generation; migration
+			if doc.Domains.HalfClose != nil {
+				t.Fatalf("migration invented halfclose settings: %+v", doc.Domains.HalfClose)
+			}
+			if version == "1.5" || version == "1.6" {
+				// 1.5+ documents carry a lineage generation; migration
 				// must preserve it.
 				if doc.Generation != 7 {
-					t.Fatalf("migration lost the 1.5 lineage generation (got %d, want 7)", doc.Generation)
+					t.Fatalf("migration lost the %s lineage generation (got %d, want 7)", version, doc.Generation)
 				}
 			} else if doc.Generation != 0 {
 				t.Fatalf("migration invented a lineage generation (%d) for a pre-1.5 document", doc.Generation)
@@ -247,27 +258,40 @@ func TestGoldenLegacySchemas(t *testing.T) {
 				for _, name := range doc.IncludedDomains {
 					if name == DomainL7Policy || name == DomainCORS ||
 						name == DomainTracing || name == DomainCert ||
-						name == DomainJWTAuthProfile {
+						name == DomainJWTAuthProfile || name == DomainHalfClose {
 						t.Fatalf("1.2 golden gained %q coverage through migration: %v", name, doc.IncludedDomains)
 					}
 				}
 			case "1.3", "1.4", "1.5":
 				// These declared today's pre-1.6 coverage explicitly;
-				// migration must not sneak the jwtauthprofile domain in
-				// (an old document must not wipe live profiles).
+				// migration must not sneak the jwtauthprofile or the
+				// halfclose domain in (an old document must not wipe live
+				// profiles or settings).
 				for _, name := range doc.IncludedDomains {
-					if name == DomainJWTAuthProfile {
-						t.Fatalf("%s golden gained jwtauthprofile coverage through migration: %v", version, doc.IncludedDomains)
+					if name == DomainJWTAuthProfile || name == DomainHalfClose {
+						t.Fatalf("%s golden gained %q coverage through migration: %v", version, name, doc.IncludedDomains)
+					}
+				}
+				if len(doc.IncludedDomains) != len(Registry)-2 {
+					t.Fatalf("unexpected coverage width for %s: %v", version, doc.IncludedDomains)
+				}
+			case "1.6":
+				// 1.6 declared everything but halfclose; migration must
+				// not sneak it in (an old document must not reset live
+				// settings).
+				for _, name := range doc.IncludedDomains {
+					if name == DomainHalfClose {
+						t.Fatalf("1.6 golden gained halfclose coverage through migration: %v", doc.IncludedDomains)
 					}
 				}
 				if len(doc.IncludedDomains) != len(Registry)-1 {
-					t.Fatalf("unexpected coverage width for %s: %v", version, doc.IncludedDomains)
+					t.Fatalf("unexpected coverage width for 1.6: %v", doc.IncludedDomains)
 				}
 			default:
 				// Pre-1.2 documents never declared coverage; the 1.1->1.2
 				// migration stamps DomainNames(), which now includes
-				// jwtauthprofile -- preserving their historical "restore
-				// replaces everything" semantics.
+				// jwtauthprofile and halfclose -- preserving their
+				// historical "restore replaces everything" semantics.
 				if len(doc.IncludedDomains) != len(Registry) {
 					t.Fatalf("migration did not stamp full coverage: %v", doc.IncludedDomains)
 				}
@@ -275,8 +299,8 @@ func TestGoldenLegacySchemas(t *testing.T) {
 
 			hooks := newMockHooks()
 			e := newTestEngine(hooks, t.TempDir())
-			if version == "1.5" {
-				// The 1.5 fixture carries enc:v1 IPsec secrets pinned to
+			if version == "1.5" || version == "1.6" {
+				// The 1.5+ fixtures carry enc:v1 IPsec secrets pinned to
 				// the golden node secret; the dry run has to decrypt them.
 				defer SetNodeSecretForTest(goldenNodeSecret)()
 			}

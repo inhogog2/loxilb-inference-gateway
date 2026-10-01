@@ -2349,6 +2349,18 @@ type NetHookInterface interface {
 	// certificate keys on disk, and the apply that follows a wipe must
 	// still be able to re-join them.
 	NetTracingReset() (int, error)
+	// NetHalfCloseGet returns the half-close hold settings as set, or nil
+	// while the defaults are in force (not configuration, not persisted).
+	NetHalfCloseGet() (*HalfCloseConfig, error)
+	// NetHalfCloseSet replaces the half-close hold settings (overwrite/Set
+	// semantics -- the snapshot restore path).
+	NetHalfCloseSet(*HalfCloseConfig) (int, error)
+	// NetHalfCloseReset returns them to the defaults (the snapshot wipe
+	// path).
+	NetHalfCloseReset() (int, error)
+	// NetHalfCloseRelease closes every held half-closed client at the data
+	// path's next pass. An action, not configuration: nothing is stored.
+	NetHalfCloseRelease() (int, error)
 	// NetCertGet returns the registered TLS certificates as desired-state
 	// metadata (stable id + content digest of the node-local managed
 	// material; PEM and keys never cross this surface).
