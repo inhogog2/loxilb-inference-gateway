@@ -637,3 +637,26 @@ func kvCommittedChatFixturesParity(t *testing.T, slug, profileDir, fixtureSub, s
 		}
 	})
 }
+
+// TestKvTrtllmTokenParityDeclaredSurfacesOnly: the oracle path checks only
+// fixtures of a surface the rule serves. A chat fixture the oracle cannot
+// parse must not fail a completions-only rule, and must fail a rule that
+// serves chat.
+func TestKvTrtllmTokenParityDeclaredSurfacesOnly(t *testing.T) {
+	info := kvTrtInfo()
+	_, ep := kvTrtTestServer(t, kvTrtGoodConf())
+	root := kvAttestFixtureRoot(t, info.profileID, info.modelName)
+	kvWriteTrtllmProbeFixture(t, root, info.profileID, "basic", "completions",
+		[]byte(`{"model":"m-trt","prompt":"oracle parity probe"}`), []int64{101, 202})
+	kvWriteTrtllmProbeFixture(t, root, info.profileID, "chat-bad", "chat",
+		[]byte(`{"model":"m-trt","messages":[]}`), []int64{7})
+	kvTrtOracleSeam(t, []uint32{101, 202})
+	info.apiChat, info.apiCompl = false, true
+	if f := newKvTrtllmAttest().TokenParityProbe(ep, info); !f.OK {
+		t.Fatalf("completions-only rule must not be failed by a chat fixture: %s %s", f.Reason, f.Detail)
+	}
+	info.apiChat = true
+	if f := newKvTrtllmAttest().TokenParityProbe(ep, info); f.OK {
+		t.Fatalf("rule serving chat must be failed by its chat fixture, got %+v", f)
+	}
+}

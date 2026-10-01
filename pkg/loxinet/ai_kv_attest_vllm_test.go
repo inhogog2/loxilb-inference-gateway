@@ -319,3 +319,69 @@ func TestKvAttestManifestRefusals(t *testing.T) {
 		t.Fatalf("identity-less manifest loaded")
 	}
 }
+
+// kvWriteProbeFixtureAPI writes one fixture pair of the given API shape under
+// probefixtures/<dir>.
+func kvWriteProbeFixtureAPI(t *testing.T, root, dir, name, api string, request []byte, tokens []int64) {
+	t.Helper()
+	kvWriteProbeFixture(t, root, dir, name, request, tokens)
+	sum := sha256.Sum256(request)
+	expRaw, _ := json.Marshal(map[string]interface{}{
+		"requestSha256": hex.EncodeToString(sum[:]), "expectedTokenIds": tokens, "api": api})
+	if err := os.WriteFile(filepath.Join(root, "probefixtures", dir, name+".expect.json"), expRaw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestKvTokenParityProbesDeclaredSurfacesOnly pins the probe's scope: only
+// fixtures of a surface the rule serves are sent to the engine. The engine
+// here answers every completions fixture one token long (a BOS the gateway
+// does not add) and every chat fixture exactly. A chat-only rule must attest
+// without sending a completions fixture; a rule that serves completions must
+// still fail on it.
+func TestKvTokenParityProbesDeclaredSurfacesOnly(t *testing.T) {
+	compl := []byte(`{"model":"m-probe","prompt":"p"}`)
+	chat := []byte(`{"model":"m-probe","messages":[{"role":"user","content":"p"}]}`)
+	for _, eng := range []string{"vllm", "sglang"} {
+		t.Run(eng, func(t *testing.T) {
+			root := kvAttestFixtureRoot(t, "prof-scope", "m-probe")
+			dir := "prof-scope"
+			if eng == "sglang" {
+				dir += "/" + kvSglangFixtureSub
+			}
+			kvWriteProbeFixtureAPI(t, root, dir, "compl", "completions", compl, []int64{11, 12})
+			kvWriteProbeFixtureAPI(t, root, dir, "chat", "chat", chat, []int64{21, 22, 23})
+			var sawCompl, sawChat int
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				if strings.Contains(string(body), `"messages"`) {
+					sawChat++
+					fmt.Fprint(w, `{"count":3,"tokens":[21,22,23],"max_model_len":4096}`)
+					return
+				}
+				sawCompl++
+				fmt.Fprint(w, `{"count":3,"tokens":[1,11,12],"max_model_len":4096}`)
+			}))
+			defer ts.Close()
+			ep := kvTestEndpoint(t, ts)
+			probe := func(apiChat, apiCompl bool) KvAttestFinding {
+				info := kvProbeInfo("prof-scope")
+				info.apiChat, info.apiCompl = apiChat, apiCompl
+				sawCompl, sawChat = 0, 0
+				if eng == "sglang" {
+					return newKvSglangAttest().TokenParityProbe(ep, info)
+				}
+				return newKvVllmAttest().TokenParityProbe(ep, info)
+			}
+			if f := probe(true, false); !f.OK || sawCompl != 0 || sawChat != 1 {
+				t.Fatalf("chat-only rule: want OK on the chat fixture alone, got %+v (completions sent %d, chat sent %d)", f, sawCompl, sawChat)
+			}
+			if f := probe(true, true); f.OK || f.Reason != KvAttestReasonTokenMismatch || !strings.Contains(f.Detail, "compl") {
+				t.Fatalf("rule serving both: the completions fixture must fail it, got %+v", f)
+			}
+			if f := probe(false, true); f.OK || f.Reason != KvAttestReasonTokenMismatch || sawChat != 0 {
+				t.Fatalf("completions-only rule: must fail on its own fixture and never send chat, got %+v (chat sent %d)", f, sawChat)
+			}
+		})
+	}
+}

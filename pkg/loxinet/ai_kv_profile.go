@@ -179,7 +179,9 @@ type KvEngineQuirks struct {
 	// restores tokenizer_config.json's add_bos_token, which transformers v5
 	// drops, and rebuilds the post-processor). Chat is unaffected: such
 	// templates write the BOS themselves and the engines encode the rendered
-	// text without specials. Admission refuses a strict completions surface.
+	// text without specials. Admission refuses a strict completions surface,
+	// and the SGLang echo challenge posts its prompt as token ids, which the
+	// engine leaves as they are.
 	CompletionsBos bool `yaml:"completionsBos,omitempty"`
 	// ChallengeLastBlock: the engine stores only some of the challenge
 	// prompt's blocks, always including its last full block (vLLM v0.28.0
