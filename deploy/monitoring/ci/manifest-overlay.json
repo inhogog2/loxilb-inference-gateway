@@ -2891,7 +2891,7 @@
     "evidence": "source verification 2026-09-22: api/prometheus/listen_backlog_metrics.go, sampleListenBacklog reads TcpExt from /proc/net/netstat each period and adds what grew since the previous sample; listen_backlog_metrics_test.go drives the sampler against a fixture (baseline, delta, counter reset, unreadable file). Not yet observed on a bed."
    },
    "loxilb_proxy_client_reset_total": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseCollector", "file": "api/prometheus/halfclose_metrics.go", "def_line": 260, "writes": "proxyClientResetDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_metrics.go", "def_line": 302, "call_line": 303, "calls": "halfCloseCollector", "entry_point": "registry-collector" }
@@ -2901,10 +2901,10 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1145, "calls": "updateHalfCloseStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-09-30: api/prometheus/halfclose_metrics.go emits every series of the family from halfCloseStore at scrape time, at zero until the datapath counts; halfclose_metrics_test.go drives the collector (series count per family, labels and values from the store) and the merge (torn read clamped, never backwards), and pins the bucket bounds and the label order against loxilb-ebpf/common/sockproxy_hc_core.h. The C side is observation only (sockproxy_hc.c: hooks at the client's FIN, the TLS read exits, the request and response framers and the relay's writes) and its pure half is driven by make -C common test_hc. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-09-30/2026-10-01, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known client shapes five times each through off/request/response/both rules and reads /metrics before and after, asserting the cells that move and that no other cell does. +5 for clients that send a request and reset 100 ms later (SO_LINGER 0); no FIN is counted for them."
    },
    "loxilb_proxy_halfclose_accel_early_fin_total": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseCollector", "file": "api/prometheus/halfclose_metrics.go", "def_line": 260, "writes": "halfCloseAccelEarlyFinDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_metrics.go", "def_line": 302, "call_line": 303, "calls": "halfCloseCollector", "entry_point": "registry-collector" }
@@ -2914,10 +2914,10 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1145, "calls": "updateHalfCloseStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-09-30: api/prometheus/halfclose_metrics.go emits every series of the family from halfCloseStore at scrape time, at zero until the datapath counts; halfclose_metrics_test.go drives the collector (series count per family, labels and values from the store) and the merge (torn read clamped, never backwards), and pins the bucket bounds and the label order against loxilb-ebpf/common/sockproxy_hc_core.h. The C side is observation only (sockproxy_hc.c: hooks at the client's FIN, the TLS read exits, the request and response framers and the relay's writes) and its pure half is driven by make -C common test_hc. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-09-30/2026-10-01, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known client shapes five times each through off/request/response/both rules and reads /metrics before and after, asserting the cells that move and that no other cell does. +5 on the response-only rule for FINs in one segment with the request and 20 ms after it, +5 on the both rule when the kernel refused the request direction (client no longer established), 0 when both directions were paired."
    },
    "loxilb_proxy_halfclose_fin_gap_seconds": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseCollector", "file": "api/prometheus/halfclose_metrics.go", "def_line": 260, "writes": "halfCloseFinGapDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_metrics.go", "def_line": 302, "call_line": 303, "calls": "halfCloseCollector", "entry_point": "registry-collector" }
@@ -2927,10 +2927,10 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1145, "calls": "updateHalfCloseStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-09-30: api/prometheus/halfclose_metrics.go emits every series of the family from halfCloseStore at scrape time, at zero until the datapath counts; halfclose_metrics_test.go drives the collector (series count per family, labels and values from the store) and the merge (torn read clamped, never backwards), and pins the bucket bounds and the label order against loxilb-ebpf/common/sockproxy_hc_core.h. The C side is observation only (sockproxy_hc.c: hooks at the client's FIN, the TLS read exits, the request and response framers and the relay's writes) and its pure half is driven by make -C common test_hc. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-09-30/2026-10-01, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known client shapes five times each through off/request/response/both rules and reads /metrics before and after, asserting the cells that move and that no other cell does. Request and FIN in one corked segment: count +5, all at or under 1 ms; FIN 20 ms after the request: +5 at or under 20 ms; and, from the queue and connect-wait baseline harnesses read the same way but without the assertion, FIN while parked in the setup or keep-alive queue: entry setup_park / fc_park, 100 ms shapes at about 93 / 100 ms; FIN during a 200 ms netem'd backend connect: entry connect_wait +20 at or under 20 ms."
    },
    "loxilb_proxy_halfclose_fin_total": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseCollector", "file": "api/prometheus/halfclose_metrics.go", "def_line": 260, "writes": "halfCloseFinDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_metrics.go", "def_line": 302, "call_line": 303, "calls": "halfCloseCollector", "entry_point": "registry-collector" }
@@ -2940,7 +2940,7 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1145, "calls": "updateHalfCloseStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-09-30: api/prometheus/halfclose_metrics.go emits every series of the family from halfCloseStore at scrape time, at zero until the datapath counts; halfclose_metrics_test.go drives the collector (series count per family, labels and values from the store) and the merge (torn read clamped, never backwards), and pins the bucket bounds and the label order against loxilb-ebpf/common/sockproxy_hc_core.h. The C side is observation only (sockproxy_hc.c: hooks at the client's FIN, the TLS read exits, the request and response framers and the relay's writes) and its pure half is driven by make -C common test_hc. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-09-30/2026-10-01, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known client shapes five times each through off/request/response/both rules and reads /metrics before and after, asserting the cells that move and that no other cell does. outcome owed for half-closes with an answer owed, idle for clients closing after their answer, partial for a FIN behind half a request, accel on response/request/both rules once a verdict entry exists; entries eof, connect_wait, setup_park and fc_park all observed (the last three without the assertion). The layer that passes the EOF branch twice still counts one per FIN."
    },
    "loxilb_proxy_halfclose_tls_fin_total": {
     "status": "verified-static",
@@ -2956,7 +2956,7 @@
     "evidence": "source verification 2026-09-30: api/prometheus/halfclose_metrics.go emits every series of the family from halfCloseStore at scrape time, at zero until the datapath counts; halfclose_metrics_test.go drives the collector (series count per family, labels and values from the store) and the merge (torn read clamped, never backwards), and pins the bucket bounds and the label order against loxilb-ebpf/common/sockproxy_hc_core.h. The C side is observation only (sockproxy_hc.c: hooks at the client's FIN, the TLS read exits, the request and response framers and the relay's writes) and its pure half is driven by make -C common test_hc. Not yet observed on a bed."
    },
    "loxilb_proxy_halfclose_user_agent_total": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseCollector", "file": "api/prometheus/halfclose_metrics.go", "def_line": 260, "writes": "halfCloseUserAgentDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_metrics.go", "def_line": 302, "call_line": 303, "calls": "halfCloseCollector", "entry_point": "registry-collector" }
@@ -2966,10 +2966,10 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1145, "calls": "updateHalfCloseStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-09-30: api/prometheus/halfclose_metrics.go emits every series of the family from halfCloseStore at scrape time, at zero until the datapath counts; halfclose_metrics_test.go drives the collector (series count per family, labels and values from the store) and the merge (torn read clamped, never backwards), and pins the bucket bounds and the label order against loxilb-ebpf/common/sockproxy_hc_core.h. The C side is observation only (sockproxy_hc.c: hooks at the client's FIN, the TLS read exits, the request and response framers and the relay's writes) and its pure half is driven by make -C common test_hc. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-09-30/2026-10-01, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known client shapes five times each through off/request/response/both rules and reads /metrics before and after, asserting the cells that move and that no other cell does. family none +1 per sampled FIN for a client that sends no User-Agent (the harness clients); counted only where fin_gap_seconds samples."
    },
    "loxilb_proxy_response_first_write_gap_seconds": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseCollector", "file": "api/prometheus/halfclose_metrics.go", "def_line": 260, "writes": "proxyResponseFirstWriteGapDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_metrics.go", "def_line": 302, "call_line": 303, "calls": "halfCloseCollector", "entry_point": "registry-collector" }
@@ -2979,10 +2979,10 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1145, "calls": "updateHalfCloseStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-09-30: api/prometheus/halfclose_metrics.go emits every series of the family from halfCloseStore at scrape time, at zero until the datapath counts; halfclose_metrics_test.go drives the collector (series count per family, labels and values from the store) and the merge (torn read clamped, never backwards), and pins the bucket bounds and the label order against loxilb-ebpf/common/sockproxy_hc_core.h. The C side is observation only (sockproxy_hc.c: hooks at the client's FIN, the TLS read exits, the request and response framers and the relay's writes) and its pure half is driven by make -C common test_hc. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-09-30/2026-10-01, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known client shapes five times each through off/request/response/both rules and reads /metrics before and after, asserting the cells that move and that no other cell does. +5 at about 0.1 s for a backend holding the answer 100 ms; samples also for answers the backend ends by closing (close-delimited 64 KB and 4 MB)."
    },
    "loxilb_proxy_response_max_write_gap_seconds": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseCollector", "file": "api/prometheus/halfclose_metrics.go", "def_line": 260, "writes": "proxyResponseMaxWriteGapDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_metrics.go", "def_line": 302, "call_line": 303, "calls": "halfCloseCollector", "entry_point": "registry-collector" }
@@ -2992,7 +2992,7 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1145, "calls": "updateHalfCloseStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-09-30: api/prometheus/halfclose_metrics.go emits every series of the family from halfCloseStore at scrape time, at zero until the datapath counts; halfclose_metrics_test.go drives the collector (series count per family, labels and values from the store) and the merge (torn read clamped, never backwards), and pins the bucket bounds and the label order against loxilb-ebpf/common/sockproxy_hc_core.h. The C side is observation only (sockproxy_hc.c: hooks at the client's FIN, the TLS read exits, the request and response framers and the relay's writes) and its pure half is driven by make -C common test_hc. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-09-30/2026-10-01, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known client shapes five times each through off/request/response/both rules and reads /metrics before and after, asserting the cells that move and that no other cell does. +5 at 0 for answers written at once; +5 at about 3.0 s for a client that stops reading a 4 MB answer for 3 s, with Content-Length and close-delimited alike."
    },
    "loxilb_pd_sg_prefill_abort_decode_total": {
     "status": "verified-runtime",
