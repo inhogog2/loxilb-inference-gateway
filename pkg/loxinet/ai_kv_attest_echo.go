@@ -194,13 +194,30 @@ func (w *kvHashWatch) observe(rank int, ev kvEvent) {
 			return
 		}
 		if len(ev.Tokens) > 0 && bs > 0 {
-			evStart := j * bs
-			wantStart := idx * bs
-			if evStart+bs > len(ev.Tokens) || wantStart+bs > len(w.wantTokens) {
+			// An event block of k contract blocks carries the hash of the
+			// last contract block it covers (vLLM hybrid sliding-window
+			// groups): its tokens are the gateway's blocks idx-k+1..idx.
+			evBS := bs
+			if ev.BlockSize != 0 {
+				if int(ev.BlockSize)%bs != 0 {
+					w.fail(KvAttestReasonChallengeFailed, fmt.Sprintf(
+						"BlockStored block_size %d is not a multiple of the contract block size %d", ev.BlockSize, bs))
+					return
+				}
+				evBS = int(ev.BlockSize)
+			}
+			evStart := j * evBS
+			wantStart := (idx+1)*bs - evBS
+			if wantStart < 0 {
+				w.fail(KvAttestReasonChallengeFailed, fmt.Sprintf(
+					"BlockStored block of %d tokens carries the hash of challenge block %d, which ends before it", evBS, idx))
+				return
+			}
+			if evStart+evBS > len(ev.Tokens) || wantStart+evBS > len(w.wantTokens) {
 				w.fail(KvAttestReasonChallengeFailed, "BlockStored token list shorter than its hash list")
 				return
 			}
-			for t := 0; t < bs; t++ {
+			for t := 0; t < evBS; t++ {
 				if ev.Tokens[evStart+t] != w.wantTokens[wantStart+t] {
 					w.fail(KvAttestReasonChallengeFailed,
 						fmt.Sprintf("token mismatch in challenge block %d", idx))

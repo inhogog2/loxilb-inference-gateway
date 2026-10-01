@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-09-29T14:28:52+00:00",
-  "source_revision": "2fd81e1b6baebbf718e55494c0e46627108e712c"
+  "generated_at": "2026-10-01T00:47:12+00:00",
+  "source_revision": "2663efda77ff625ce6c08575841feaca59156119"
  },
  "contract": {
   "total": 287,
@@ -2581,8 +2581,8 @@
      "symbol": "runKvSubscriberLoopBinding",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 737,
-     "call_line": 934,
+     "def_line": 743,
+     "call_line": 940,
      "calls": "Decode",
      "note": "the decoder is held behind the kvWireDecoder interface, so this call site names the method, not the concrete type"
     },
@@ -2590,8 +2590,8 @@
      "symbol": "KvSubscriberStartRank",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1230,
-     "call_line": 1379,
+     "def_line": 1236,
+     "call_line": 1385,
      "calls": "runKvSubscriberLoopBinding",
      "note": "one subscriber goroutine per (service, endpoint, rank)"
     },
@@ -2673,16 +2673,16 @@
      "symbol": "runKvSubscriberLoopBinding",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 737,
-     "call_line": 934,
+     "def_line": 743,
+     "call_line": 940,
      "calls": "Decode"
     },
     {
      "symbol": "KvSubscriberStartRank",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1230,
-     "call_line": 1379,
+     "def_line": 1236,
+     "call_line": 1385,
      "calls": "runKvSubscriberLoopBinding",
      "note": "one subscriber goroutine per (service, endpoint, rank)"
     },
@@ -6863,16 +6863,16 @@
      "symbol": "runKvSubscriberLoopBinding",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 737,
-     "call_line": 965,
+     "def_line": 743,
+     "call_line": 971,
      "calls": "AddBlocks"
     },
     {
      "symbol": "KvSubscriberStartRank",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1230,
-     "call_line": 1379,
+     "def_line": 1236,
+     "call_line": 1385,
      "calls": "runKvSubscriberLoopBinding",
      "note": "one subscriber goroutine per (service, endpoint, rank)"
     },
@@ -6934,16 +6934,16 @@
      "symbol": "setKvInventoryFreshIfLive",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1096,
-     "call_line": 1102,
+     "def_line": 1102,
+     "call_line": 1108,
      "calls": "SetKvInventoryFresh"
     },
     {
      "symbol": "runKvSubscriberLoopBinding",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 737,
-     "call_line": 970,
+     "def_line": 743,
+     "call_line": 976,
      "calls": "setKvInventoryFreshIfLive",
      "note": "the only site that sets 1; five other sites (:770, :875, :906, :927, :991) clear it, so freshness is asserted by a single positive edge"
     },
@@ -6951,8 +6951,8 @@
      "symbol": "KvSubscriberStartRank",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1230,
-     "call_line": 1379,
+     "def_line": 1236,
+     "call_line": 1385,
      "calls": "runKvSubscriberLoopBinding",
      "note": "one subscriber goroutine per (service, endpoint, rank)"
     },
@@ -7016,8 +7016,8 @@
      "symbol": "setKvConnectedIfLive",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1034,
-     "call_line": 1040,
+     "def_line": 1040,
+     "call_line": 1046,
      "calls": "SetKvSubscriberConnected",
      "note": "the IfLive wrapper drops the write once the context is cancelled, so a torn-down subscriber cannot resurrect a cleared series"
     },
@@ -7025,17 +7025,17 @@
      "symbol": "runKvSubscriberLoopBinding",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 737,
-     "call_line": 762,
+     "def_line": 743,
+     "call_line": 768,
      "calls": "setKvConnectedIfLive",
-     "note": "set to 1 on entry and deferred back to 0 at :763"
+     "note": "set to 1 on entry and deferred back to 0 at :769"
     },
     {
      "symbol": "KvSubscriberStartRank",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1230,
-     "call_line": 1379,
+     "def_line": 1236,
+     "call_line": 1385,
      "calls": "runKvSubscriberLoopBinding",
      "note": "one subscriber goroutine per (service, endpoint, rank)"
     },
@@ -7097,24 +7097,24 @@
      "symbol": "setKvLastEventIfLive",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1082,
-     "call_line": 1088,
+     "def_line": 1088,
+     "call_line": 1094,
      "calls": "SetKvSubscriberLastEvent"
     },
     {
      "symbol": "runKvSubscriberLoopBinding",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 737,
-     "call_line": 958,
+     "def_line": 743,
+     "call_line": 964,
      "calls": "setKvLastEventIfLive"
     },
     {
      "symbol": "KvSubscriberStartRank",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1230,
-     "call_line": 1379,
+     "def_line": 1236,
+     "call_line": 1385,
      "calls": "runKvSubscriberLoopBinding",
      "note": "one subscriber goroutine per (service, endpoint, rank)"
     },
@@ -7139,7 +7139,7 @@
      "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go"
     }
    ],
-   "verification_evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:958 stamps the gauge on each accepted event. Scenario M08 owns the runtime proof; freshness is one of the identities the KV-exact arm must satisfy."
+   "verification_evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:964 stamps the gauge on each accepted event. Scenario M08 owns the runtime proof; freshness is one of the identities the KV-exact arm must satisfy."
   },
   {
    "name": "loxilb_kv_subscriber_reconnect_total",
@@ -7177,24 +7177,24 @@
      "symbol": "incKvReconnectIfLive",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1048,
-     "call_line": 1054,
+     "def_line": 1054,
+     "call_line": 1060,
      "calls": "IncKvSubscriberReconnect"
     },
     {
      "symbol": "rebuildKvSubscriber",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1115,
-     "call_line": 1161,
+     "def_line": 1121,
+     "call_line": 1167,
      "calls": "incKvReconnectIfLive"
     },
     {
      "symbol": "runKvSubscriberLoopBinding",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 737,
-     "call_line": 825,
+     "def_line": 743,
+     "call_line": 831,
      "calls": "rebuildKvSubscriber",
      "note": "the loop retries the rebuild until it succeeds, so one publisher outage produces one increment per successful redial, not one per attempt"
     },
@@ -7202,8 +7202,8 @@
      "symbol": "KvSubscriberStartRank",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1230,
-     "call_line": 1379,
+     "def_line": 1236,
+     "call_line": 1385,
      "calls": "runKvSubscriberLoopBinding",
      "note": "one subscriber goroutine per (service, endpoint, rank)"
     },
@@ -7265,24 +7265,24 @@
      "symbol": "incKvRecvErrorIfLive",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1057,
-     "call_line": 1063,
+     "def_line": 1063,
+     "call_line": 1069,
      "calls": "IncKvSubscriberRecvError"
     },
     {
      "symbol": "runKvSubscriberLoopBinding",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 737,
-     "call_line": 812,
+     "def_line": 743,
+     "call_line": 818,
      "calls": "incKvRecvErrorIfLive"
     },
     {
      "symbol": "KvSubscriberStartRank",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1230,
-     "call_line": 1379,
+     "def_line": 1236,
+     "call_line": 1385,
      "calls": "runKvSubscriberLoopBinding",
      "note": "one subscriber goroutine per (service, endpoint, rank)"
     },
@@ -7346,16 +7346,16 @@
      "symbol": "incKvWireRejectIfLive",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1069,
-     "call_line": 1075,
+     "def_line": 1075,
+     "call_line": 1081,
      "calls": "IncKvSubscriberWireReject"
     },
     {
      "symbol": "runKvSubscriberLoopBinding",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 737,
-     "call_line": 937,
+     "def_line": 743,
+     "call_line": 943,
      "calls": "incKvWireRejectIfLive",
      "note": "reason-labelled; the rank-mismatch reason is raised separately at :949"
     },
@@ -7363,8 +7363,8 @@
      "symbol": "KvSubscriberStartRank",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1230,
-     "call_line": 1379,
+     "def_line": 1236,
+     "call_line": 1385,
      "calls": "runKvSubscriberLoopBinding",
      "note": "one subscriber goroutine per (service, endpoint, rank)"
     },
@@ -9302,8 +9302,8 @@
      "symbol": "KvSubscriberStartRank",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1230,
-     "call_line": 1273,
+     "def_line": 1236,
+     "call_line": 1279,
      "calls": "SetKvEpInfo"
     },
     {
@@ -9449,16 +9449,16 @@
      "symbol": "runKvSubscriberLoopBinding",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 737,
-     "call_line": 965,
+     "def_line": 743,
+     "call_line": 971,
      "calls": "AddBlocks"
     },
     {
      "symbol": "KvSubscriberStartRank",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1230,
-     "call_line": 1379,
+     "def_line": 1236,
+     "call_line": 1385,
      "calls": "runKvSubscriberLoopBinding",
      "note": "one subscriber goroutine per (service, endpoint, rank)"
     },
@@ -9519,19 +9519,19 @@
      "symbol": "llb_ai_kv_best_worker",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1856,
-     "call_line": 1995,
+     "def_line": 1862,
+     "call_line": 2001,
      "calls": "kvColdSeedCounterFn",
      "via": {
       "var": "kvColdSeedCounterFn",
       "file": "pkg/loxinet/ai_kv_subscriber.go",
-      "line": 1616
+      "line": 1622
      },
      "entry_point": "cgo-export",
      "note": "dispatched through a metric seam variable, so a plain name search finds no caller for the writer at all -- the binding is recorded in via and re-checked on every run"
     }
    ],
-   "verification_evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:1995 through the kvColdSeedCounterFn seam bound at :1616. Scenario M08 owns the runtime proof."
+   "verification_evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:2001 through the kvColdSeedCounterFn seam bound at :1622. Scenario M08 owns the runtime proof."
   },
   {
    "name": "loxilb_pd_kv_tier15_fallthrough_total",
@@ -9634,8 +9634,8 @@
      "symbol": "llb_ai_kv_best_worker",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1856,
-     "call_line": 1999,
+     "def_line": 1862,
+     "call_line": 2005,
      "calls": "IncKvTier15HitCounter",
      "entry_point": "cgo-export"
     }
@@ -9745,8 +9745,8 @@
      "symbol": "llb_ai_kv_best_worker",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1856,
-     "call_line": 1980,
+     "def_line": 1862,
+     "call_line": 1986,
      "calls": "IncKvTier15SpillCounter",
      "entry_point": "cgo-export"
     }
@@ -9788,13 +9788,13 @@
      "symbol": "kvZeroHitWatchdog",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1685,
-     "call_line": 1712,
+     "def_line": 1691,
+     "call_line": 1718,
      "calls": "kvZeroHitCounterFn",
      "via": {
       "var": "kvZeroHitCounterFn",
       "file": "pkg/loxinet/ai_kv_subscriber.go",
-      "line": 1670
+      "line": 1676
      },
      "note": "dispatched through a metric seam variable, so a plain name search finds no caller for the writer at all -- the binding is recorded in via and re-checked on every run"
     },
@@ -9802,21 +9802,21 @@
      "symbol": "kvSvcScanInventories",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1725,
-     "call_line": 1815,
+     "def_line": 1731,
+     "call_line": 1821,
      "calls": "kvZeroHitWatchdog"
     },
     {
      "symbol": "llb_ai_kv_best_worker",
      "kind": "func",
      "file": "pkg/loxinet/ai_kv_subscriber.go",
-     "def_line": 1856,
-     "call_line": 1916,
+     "def_line": 1862,
+     "call_line": 1922,
      "calls": "kvSvcScanInventories",
      "entry_point": "cgo-export"
     }
    ],
-   "verification_evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:1712 through the kvZeroHitCounterFn seam bound at :1670. WP-6 owns the injected zero-hit window."
+   "verification_evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:1718 through the kvZeroHitCounterFn seam bound at :1676. WP-6 owns the injected zero-hit window."
   },
   {
    "name": "loxilb_pd_prefill_ep_died_total",
