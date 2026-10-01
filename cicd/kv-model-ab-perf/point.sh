@@ -124,18 +124,22 @@ arm() { # arm <repetition> exact|baseline
   else
     [ "$h" = 0 ] || { echo "BASELINE_HITS +$h (the baseline rule must not route by cache)"; return 1; }
   fi
-  # Where the requests went, from the prefill engines' own counters. Every owner has the same number of
-  # families, so the exact arm puts an equal share on every prefill, except for the requests the gateway itself
-  # reports as spilled past a loaded owner (bounded load; a spill is still a tier-1.5 hit). The baseline arm
-  # must spread too, or it is not a round-robin baseline.
-  local share=$(( NREQ / ${#PNODES[@]} )) s spread="" off
+  # Where the requests went, from the prefill engines' own counters. Exact arm: every prefill engine served the
+  # requests the gateway counted as tier-1.5 hits on that endpoint (endpoint index = position in the rule, the
+  # prefill engines first). Equal shares are not required: when two engines hold blocks of a prompt, the
+  # gateway's bounded-load selection may spill past a loaded owner, and the engine it spilled to then holds the
+  # prefix too. The spill count is stored with the arm. Baseline arm: the requests must spread over every prefill
+  # engine, or it is not a round-robin baseline.
+  local share=$(( NREQ / ${#PNODES[@]} )) s spread="" off i=0 hi
   local sp=$(( $(msum "$d/after-gateway.prom" loxilb_pd_kv_tier15_spills_total) - $(msum "$d/before-gateway.prom" loxilb_pd_kv_tier15_spills_total) ))
   echo "$sp" > "$d/tier15-spill-delta.txt"
   for n in "${PNODES[@]}"; do
     s=$(served "$d" "$n") || return 1; spread+="$n=$s "
     if [ "$a" = exact ]; then
-      off=$(( s > share ? s - share : share - s ))
-      [ "$off" -le $((sp + 2)) ] || { echo "EXACT_PREFILL_SHARE $n served $s, want $share (spills +$sp)"; return 1; }
+      hi=$(( $(msum "$d/after-gateway.prom" "loxilb_pd_kv_tier15_hits_total{ep_idx=\"$i\"}") - $(msum "$d/before-gateway.prom" "loxilb_pd_kv_tier15_hits_total{ep_idx=\"$i\"}") ))
+      off=$(( s > hi ? s - hi : hi - s ))
+      [ "$off" -le 2 ] || { echo "EXACT_PREFILL_SHARE $n served $s, the gateway counted $hi hits on endpoint $i"; return 1; }
+      i=$((i+1))
     else
       [ "$s" -ge $((share * 8 / 10)) ] || { echo "BASELINE_NOT_SPREAD $n served $s of $NREQ"; return 1; }
     fi
