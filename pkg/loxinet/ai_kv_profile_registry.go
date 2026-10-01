@@ -355,7 +355,11 @@ func kvProfileLoadOne(rootFd int, name string) (*kvProfileEntry, error) {
 		// Fail-closed at publish: a template the executor cannot compile
 		// must refuse the whole generation now, not fault the first chat
 		// request later.
-		if _, err := entry.chatTemplate(); err != nil {
+		tpl, err := entry.chatTemplate()
+		if err != nil {
+			return nil, fmt.Errorf("%s: template artifact: %w", name, err)
+		}
+		if err := kvCheckClockPolicy(tpl, &p.RenderPolicy); err != nil {
 			return nil, fmt.Errorf("%s: template artifact: %w", name, err)
 		}
 	}

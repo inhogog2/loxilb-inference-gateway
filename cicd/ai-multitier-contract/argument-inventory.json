@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "00009d33e5b9bfaf28ee66ffe26822646394240dc2995ef3beb9749facc3b8b3"
+    "swagger.yml": "4cc8cb89174acdc1fca9548a56ee69bb2acf69d17e9cb2defb71028b6cc780a6"
   },
   "fields": [
     {
@@ -607,6 +607,18 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/expose_headers",
+      "required": false,
+      "contract": {
+        "description": "Whether admitted responses carry the admission headers.",
+        "enum": [
+          "on",
+          "off"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/inflight",
       "required": false,
       "contract": {
@@ -722,6 +734,18 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/expose_headers",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/max_outstanding",
       "required": false,
       "contract": {
@@ -794,6 +818,18 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/tenant_max_share_pct",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/ttft_target_ms",
       "required": false,
       "contract": {
@@ -822,6 +858,24 @@
       "required": false,
       "contract": {
         "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/tenant_max_share_pct",
+      "required": false,
+      "contract": {
+        "description": "The tenant share in force, in percent; 0 or 100 is no share.",
+        "format": "int32",
+        "type": "integer"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/tenants_active",
+      "required": false,
+      "contract": {
+        "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
         "format": "int32",
         "type": "integer"
       }
@@ -861,6 +915,20 @@
         "maximum": 100000,
         "minimum": 0,
         "type": "integer",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_expose_headers",
+      "required": false,
+      "contract": {
+        "description": "on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.",
+        "enum": [
+          "on",
+          "off",
+          "inherit"
+        ],
+        "type": "string",
         "x-nullable": false
       }
     },
@@ -939,6 +1007,19 @@
         "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
         "format": "int32",
         "maximum": 3600000,
+        "minimum": 0,
+        "type": "integer",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_tenant_max_share_pct",
+      "required": false,
+      "contract": {
+        "default": 0,
+        "description": "The most of the service ceiling in force, and of the queue depth, one tenant may hold, in percent (rounded up, at least one). A tenant is the tenant id the request's credential resolved to; requests without one are one tenant. A tenant at its share waits for one of its own units when the pool queues (within its share of the queue), or is refused with 429 admission_tenant_share, while other tenants still admit; waiters held back by their share never make another tenant wait. Inert without fc_max_outstanding. 100 is no share; 0 or omitted leaves the process default (LLB_FC_TENANT_MAX_SHARE_PCT, else no share) in force. Replace and null semantics as fc_max_outstanding.",
+        "format": "int32",
+        "maximum": 100,
         "minimum": 0,
         "type": "integer",
         "x-nullable": false

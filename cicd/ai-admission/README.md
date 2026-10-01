@@ -26,6 +26,11 @@ l3h1 (10.10.10.1) ---- llb1 (VIP 10.10.10.254) ---- l3ep1 (31.31.31.1)
 :2026  HTTP/1.1   -> l3ep1:8080          fc_max_queue_depth 65536: the memory warning at apply
 :2028  HTTP/1.1   -> l3ep1:8080, :8081   fc_max_outstanding 4 (under the env's 8), fc_telemetry_stale_ms 45000
 :2029  HTTP/1.1   -> l3ep1:8080, :8081   fc_max_outstanding 2, fc_max_queue_depth 4: raised at runtime
+:2033  HTTP/1.1   -> l3ep1:8080, :8081   API keys required, fc_max_outstanding 4, fc_tenant_max_share_pct 50
+:2034  HTTP/1.1   -> l3ep1:8080, :8081   API keys required, fc_max_outstanding 2, fc_tenant_max_share_pct 50, a queue
+:2035  HTTP/1.1   -> l3ep1:8080, :8081   fc_max_outstanding 4, fc_expose_headers on
+:2036  HTTP/2     -> l3ep1:8090, :8091   fc_max_outstanding 4, fc_expose_headers on
+pg-ai-admission (docker bridge)          PostgreSQL: the API-key store the two keyed pools resolve tenants from
 ```
 
 The gateway runs with `--audit-dir --audit-required`, so every refusal the
@@ -60,6 +65,10 @@ gate makes must also be a `sec.ai.deny` record with stage `capacity`.
 | KA | pool full, one connection sends a buffered request, then another on the same socket after the pool empties | 429 with `Connection: keep-alive`, socket open; the second request on the SAME socket is 200; receipts 0 then 1 |
 | DL | 8 held on `:2025`, 2 waiting, the rule is deleted by its full key (host, path prefix, match mode, model name) and the GET no longer lists it | both 503 `admission_drained`, 0 receipts then or later, 2 `sec.ai.deny` records with decision `admission_drained`; the rule re-created reports enforce with nothing in flight |
 | M | 8 held on `:2025`, 2 waiting, `PUT /maintenance {enabled:true}` | GET maintenance says `refusing_new_inference: true` and `in_flight_requests: 8`; the 2 waiters get 503 `admission_drained` (drained +2); a new request gets 503 `gateway_draining` with `Connection: close` and `Retry-After: 5` and 0 receipts (draining +1); the 8 executing finish 200; `enabled:false` ⇒ `refusing_new_inference: false` and the next request is admitted |
+| TS | three keys issued through `/config/ai/apikey`, one tenant each; tenant A holds 2 on `:2033` (ceiling 4, share 50 %), sends a third; tenant B holds 2 | A's third is 429 `admission_tenant_share` and never reaches a backend while B's two are admitted; `fc_effective` reports 2 tenants active and the share from the rule; `tenant_share` decisions +1; the 4 held answer 200 and no tenant holds anything after |
+| TW | on `:2034` (ceiling 2, a unit and two queue places a tenant) A holds 1, 2 wait, a fourth is sent; then B, then C | A's fourth is 429 `admission_tenant_share` (its queue share); B is admitted past A's waiters; with the ceiling full C waits behind A's two, and the unit B frees goes to C, not to A's over-share head waiter; A's own unit goes to A's head waiter, then A's second; the 5 admitted answer 200, the queue empties, no tenant holds anything; `queued` decisions on `:2034` moved by exactly 3 (A's two and C: B was never parked) |
+| XH | two held on `:2035` (ceiling 4, headers on); a plain request, a streamed one, one whose backend answers with its own `X-Loxilb-Admission-Inflight: 999`; the same request on `:2021` (environment: off); then the rule replaced with `fc_expose_headers` `off` while the two are held | the plain and streamed heads carry inflight 3, queued 0, limit 4; the stream is still `text/event-stream` with every event and `[DONE]` last; the backend's field is replaced (one line each, the gateway's values); `:2021` adds none; GET reads `on`, in force from the rule; `"yes"` is refused naming the field; after the replace GET reads `off` and the next response carries none, and the two held (not drained by the in-place change) answer 200 |
+| XH2 | three HTTP/2 streams on `:2036` (ceiling 4, headers on), each held 2 s at the backend | all three admitted; every response's HEADERS carry the three fields with queued 0 and limit 4, inflight between 1 and 3 (read as each head goes out, while the stream holds its unit), the first head counting all three; nothing held after |
 | H | reboot in observe mode, 12 held | 12 receipts, gauge 12, nothing refused, observe_would_shed 6 (4 over the service ceiling, 1 over each endpoint's), admitted 12; after the reboot the `:2028` rule's ceiling and telemetry window still resolve to the rule's values (source `rule`) while its mode follows the new environment (`observe`, source `env`) |
 
 ## Files

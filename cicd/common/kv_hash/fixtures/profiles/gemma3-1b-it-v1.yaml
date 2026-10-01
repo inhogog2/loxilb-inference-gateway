@@ -1,0 +1,17 @@
+profileId: gemma3-1b-it-v1
+baseModel: google/gemma-3-1b-it
+modelType: gemma3_text
+tokenizerRevision: dcc83ea841ab6100d6b47a070329e1ba4cf78752
+tokenizerArtifact: sha256/4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795
+tokenizerSha256: 4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795
+templateArtifact: sha256/7de1c58e208eda46e9c7f86397df37ec49883aeece39fb961e0a6b24088dd3c4
+templateSha256: 7de1c58e208eda46e9c7f86397df37ec49883aeece39fb961e0a6b24088dd3c4
+templateContentFormat: openai
+renderPolicy:
+  addGenerationPrompt: true
+  bosToken: "<bos>"
+  eosToken: "<eos>"
+supportedApis:
+  - completions
+  - chat
+aliasPolicy: base_model_only

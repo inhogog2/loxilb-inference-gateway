@@ -396,6 +396,8 @@ type LBDpWorkQ struct {
 	FcAdaptive                  uint8                   // adaptive service ceiling, enum fc_rule_adaptive (0 = process default)
 	FcWarmupMs                  uint32                  // endpoint warm-up window (0 = process default)
 	FcTtftTargetMs              uint32                  // TTFT backpressure target (0 = process default)
+	FcTenantSharePct            uint8                   // tenant share in percent (0 = process default)
+	FcExposeHeaders             uint8                   // admission headers on admitted responses, enum fc_rule_expose (0 = process default)
 	CbEnable                    bool                    // per-endpoint circuit breaker for full-proxy rules
 	KvExactMode                 uint8                   // KV-cache exact routing: 0=off, 1=zmq
 	KvBlockSize                 uint32                  // Token block size for KV hash computation

@@ -17,6 +17,7 @@
 package loxinet
 
 import (
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -401,12 +402,80 @@ func TestKvChatExcludedFeature(t *testing.T) {
 		{"template_kwargs", `{"messages":[],"chat_template_kwargs":{"enable_thinking":false}}`, "template_kwargs"},
 		{"multimodal", `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"x"}}]}]}`, "multimodal"},
 		{"text_parts_ok", `{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`, ""},
+		{"empty_parts_ok", `{"messages":[{"role":"user","content":[]}]}`, ""},
+		// Engines join several text parts differently ("\n", " ", or a
+		// template's own concatenation): one part is safe, two are not.
+		{"two_text_parts", `{"messages":[{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}]}`, "multi_text_part"},
+		{"two_text_parts_later_message", `{"messages":[{"role":"system","content":"s"},{"role":"user","content":[{"type":"text","text":"a"}]},{"role":"assistant","content":"x"},{"role":"user","content":[{"type":"text","text":"b"},{"type":"text","text":"c"}]}]}`, "multi_text_part"},
+		{"one_text_part_per_message_ok", `{"messages":[{"role":"user","content":[{"type":"text","text":"a"}]},{"role":"assistant","content":[{"type":"text","text":"b"}]},{"role":"user","content":[{"type":"text","text":"c"}]}]}`, ""},
+		// SGLang renders a closing assistant turn as a user turn.
+		{"trailing_assistant", `{"messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b"}]}`, "trailing_assistant"},
 		{"null_tools_ok", `{"messages":[],"tools":null}`, ""},
+		// Render-affecting request fields (engine request -> template vars).
+		{"gen_prompt_matches_profile", `{"messages":[],"add_generation_prompt":true}`, ""},
+		{"gen_prompt_differs", `{"messages":[],"add_generation_prompt":false}`, "add_generation_prompt"},
+		{"gen_prompt_not_bool", `{"messages":[],"add_generation_prompt":"true"}`, "add_generation_prompt"},
+		{"gen_prompt_null_ok", `{"messages":[],"add_generation_prompt":null}`, ""},
+		{"continue_false_ok", `{"messages":[],"continue_final_message":false}`, ""},
+		{"continue_true", `{"messages":[],"continue_final_message":true}`, "continue_final_message"},
+		{"special_tokens_false_ok", `{"messages":[],"add_special_tokens":false}`, ""},
+		{"special_tokens_true", `{"messages":[],"add_special_tokens":true}`, "add_special_tokens"},
+		{"documents", `{"messages":[],"documents":[{"title":"t","text":"x"}]}`, "documents"},
+		{"documents_empty", `{"messages":[],"documents":[]}`, "documents"},
+		{"reasoning_effort", `{"messages":[],"reasoning_effort":"low"}`, "reasoning_effort"},
+		{"reasoning_effort_none", `{"messages":[],"reasoning_effort":"none"}`, "reasoning_effort"},
+		{"reasoning_effort_null_ok", `{"messages":[],"reasoning_effort":null}`, ""},
+		{"chat_template", `{"messages":[],"chat_template":"{{ messages }}"}`, "chat_template"},
+		{"truncate", `{"messages":[],"truncate_prompt_tokens":8}`, "truncate_prompt_tokens"},
+		{"prompt_token_ids", `{"messages":[],"prompt_token_ids":[1,2]}`, "prompt_token_ids"},
+		{"prompt_token_ids_b64", `{"messages":[],"prompt_token_ids_b64":"AQAAAA=="}`, "prompt_token_ids"},
 	}
 	for _, c := range cases {
-		if got := kvChatExcludedFeature(c.body); got != c.want {
+		if got := kvChatExcludedFeature(c.body, true); got != c.want {
 			t.Fatalf("%s: got %q want %q", c.name, got, c.want)
 		}
+	}
+	// The generation-prompt comparison follows the profile, not a constant.
+	if got := kvChatExcludedFeature(`{"messages":[],"add_generation_prompt":false}`, false); got != "" {
+		t.Fatalf("gen_prompt false vs profile false: got %q", got)
+	}
+	if got := kvChatExcludedFeature(`{"messages":[],"add_generation_prompt":true}`, false); got != "add_generation_prompt" {
+		t.Fatalf("gen_prompt true vs profile false: got %q", got)
+	}
+}
+
+// TestKvBridgeTokenizeChatRenderFields: the strict bridge compares
+// add_generation_prompt against the serving profile's renderPolicy. With a
+// profile declaring false, a request saying false passes the refusal and
+// reaches the tokenizer (absent here: TOKENIZER fault), while true is
+// refused UNSUPPORTED; legacy paths never consult the refusal.
+func TestKvBridgeTokenizeChatRenderFields(t *testing.T) {
+	kvDataplaneTestSetup(t)
+	kvTestRegister(51, "rule-chat-fields", KvContractAPIBoth)
+	b, err := KvBindingAllocate("rule-chat-fields", kvTestComponents(1))
+	if err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	kvSvcContractOutcome(51, false, "")
+	const model = "acme/render-fields-model"
+	kvTestPublishChatProfile(t, model,
+		"{% for m in messages %}{{ m.content }}{% endfor %}{% if add_generation_prompt %}GEN{% endif %}",
+		KvRenderPolicy{AddGenerationPrompt: false})
+
+	const agree = `{"messages":[{"role":"user","content":"hi"}],"add_generation_prompt":false}`
+	const differ = `{"messages":[{"role":"user","content":"hi"}],"add_generation_prompt":true}`
+	const effort = `{"messages":[{"role":"user","content":"hi"}],"reasoning_effort":"high"}`
+	if _, rc := kvBridgeTokenizeChat(51, b.BindingGen, agree, model, 16); rc != KvTokErrTokenizer {
+		t.Fatalf("strict matching generation prompt must pass the refusal, got %d", rc)
+	}
+	if _, rc := kvBridgeTokenizeChat(51, b.BindingGen, differ, model, 16); rc != KvTokErrUnsupported {
+		t.Fatalf("strict differing generation prompt must be UNSUPPORTED, got %d", rc)
+	}
+	if _, rc := kvBridgeTokenizeChat(51, b.BindingGen, effort, model, 16); rc != KvTokErrUnsupported {
+		t.Fatalf("strict reasoning_effort must be UNSUPPORTED, got %d", rc)
+	}
+	if _, rc := kvBridgeTokenizeChat(0, 0, effort, model, 16); rc != KvTokErrRequest {
+		t.Fatalf("legacy reasoning_effort must keep the pre-contract path, got %d", rc)
 	}
 }
 
@@ -437,5 +506,46 @@ func TestKvSvcContractKickInstall(t *testing.T) {
 			t.Fatalf("kicked install must clear the fence")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// A validated template that refuses a request's messages (raise_exception on
+// role order, or an empty render) is a request-class failure: it must return
+// UNSUPPORTED and never reach kvBridgeRuntimeFault, which fences the rule —
+// otherwise any client could degrade a READY rule by sending a message order
+// the template rejects. Only an unusable renderer stays a runtime fault.
+func TestKvBridgeTokenizeChatTemplateRefusalIsRequestClass(t *testing.T) {
+	kvDataplaneTestSetup(t)
+	kvTestRegister(51, "rule-chat-raise", KvContractAPIBoth)
+	b, err := KvBindingAllocate("rule-chat-raise", kvTestComponents(1))
+	if err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	kvSvcContractOutcome(51, false, "")
+
+	const model = "acme/alternating-roles"
+	const tpl = `{% for m in messages %}{% if m['role'] != 'system' and ((m['role'] == 'user') != (loop.index0 % 2 == 0)) %}` +
+		`{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}` +
+		`{% if m['role'] != 'system' %}{{ m['content'] }}{% endif %}{% endfor %}`
+	kvTestPublishChatProfile(t, model, tpl, KvRenderPolicy{AddGenerationPrompt: true})
+
+	const twoUsers = `{"messages":[{"role":"user","content":"a"},{"role":"user","content":"b"}]}`
+	if _, rc := kvBridgeTokenizeChat(51, b.BindingGen, twoUsers, model, 16); rc != KvTokErrUnsupported {
+		t.Fatalf("strict raise_exception: rc %d, want UNSUPPORTED %d (a renderer fault would fence the rule)", rc, KvTokErrUnsupported)
+	}
+	if _, rc := kvBridgeTokenizeChat(0, 0, twoUsers, model, 16); rc != KvTokErrRequest {
+		t.Fatalf("legacy raise_exception: rc %d, want %d", rc, KvTokErrRequest)
+	}
+	// Renders nothing (system turns print no text): request-class too.
+	const systemOnly = `{"messages":[{"role":"system","content":"s"}]}`
+	if _, err := kvRenderChatTemplateReq(model, []kvChatMessage{{"user", "x"}}, kvChatClock); err != nil {
+		t.Fatalf("control render failed: %v", err)
+	}
+	if _, rc := kvBridgeTokenizeChat(51, b.BindingGen, systemOnly, model, 16); rc != KvTokErrUnsupported {
+		t.Fatalf("strict empty render: rc %d, want UNSUPPORTED %d", rc, KvTokErrUnsupported)
+	}
+	// An unusable renderer is still a runtime fault.
+	if _, err := kvRenderChatTemplateReq("acme/no-template-model", nil, kvChatClock); !errors.Is(err, errKvNoChatRenderer) {
+		t.Fatalf("no renderer: err %v, want errKvNoChatRenderer", err)
 	}
 }

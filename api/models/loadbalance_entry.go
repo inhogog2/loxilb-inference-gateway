@@ -738,6 +738,10 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	FcEpMaxInflight int32 `json:"fc_ep_max_inflight,omitempty"`
 
+	// on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.
+	// Enum: [on off inherit]
+	FcExposeHeaders string `json:"fc_expose_headers,omitempty"`
+
 	// The pool-wide ceiling on executing inference requests of the service's model pool. 0 or omitted leaves the process default (LLB_FC_MAX_OUTSTANDING) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.
 	// Maximum: 100000
 	// Minimum: 0
@@ -766,6 +770,11 @@ type LoadbalanceEntryServiceArguments struct {
 	// Maximum: 3.6e+06
 	// Minimum: 0
 	FcTelemetryStaleMs int32 `json:"fc_telemetry_stale_ms,omitempty"`
+
+	// The most of the service ceiling in force, and of the queue depth, one tenant may hold, in percent (rounded up, at least one). A tenant is the tenant id the request's credential resolved to; requests without one are one tenant. A tenant at its share waits for one of its own units when the pool queues (within its share of the queue), or is refused with 429 admission_tenant_share, while other tenants still admit; waiters held back by their share never make another tenant wait. Inert without fc_max_outstanding. 100 is no share; 0 or omitted leaves the process default (LLB_FC_TENANT_MAX_SHARE_PCT, else no share) in force. Replace and null semantics as fc_max_outstanding.
+	// Maximum: 100
+	// Minimum: 0
+	FcTenantMaxSharePct int32 `json:"fc_tenant_max_share_pct,omitempty"`
 
 	// With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.
 	// Maximum: 3.6e+06
@@ -1030,6 +1039,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 		res = append(res, err)
 	}
 
+	if err := m.validateFcExposeHeaders(formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.validateFcMaxOutstanding(formats); err != nil {
 		res = append(res, err)
 	}
@@ -1051,6 +1064,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	}
 
 	if err := m.validateFcTelemetryStaleMs(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateFcTenantMaxSharePct(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -1446,6 +1463,51 @@ func (m *LoadbalanceEntryServiceArguments) validateFcEpMaxInflight(formats strfm
 	return nil
 }
 
+var loadbalanceEntryServiceArgumentsTypeFcExposeHeadersPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["on","off","inherit"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsTypeFcExposeHeadersPropEnum = append(loadbalanceEntryServiceArgumentsTypeFcExposeHeadersPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcExposeHeadersOn captures enum value "on"
+	LoadbalanceEntryServiceArgumentsFcExposeHeadersOn string = "on"
+
+	// LoadbalanceEntryServiceArgumentsFcExposeHeadersOff captures enum value "off"
+	LoadbalanceEntryServiceArgumentsFcExposeHeadersOff string = "off"
+
+	// LoadbalanceEntryServiceArgumentsFcExposeHeadersInherit captures enum value "inherit"
+	LoadbalanceEntryServiceArgumentsFcExposeHeadersInherit string = "inherit"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArguments) validateFcExposeHeadersEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsTypeFcExposeHeadersPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcExposeHeaders(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcExposeHeaders) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateFcExposeHeadersEnum("serviceArguments"+"."+"fc_expose_headers", "body", m.FcExposeHeaders); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (m *LoadbalanceEntryServiceArguments) validateFcMaxOutstanding(formats strfmt.Registry) error {
 	if swag.IsZero(m.FcMaxOutstanding) { // not required
 		return nil
@@ -1568,6 +1630,22 @@ func (m *LoadbalanceEntryServiceArguments) validateFcTelemetryStaleMs(formats st
 	}
 
 	if err := validate.MaximumInt("serviceArguments"+"."+"fc_telemetry_stale_ms", "body", int64(m.FcTelemetryStaleMs), 3.6e+06, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateFcTenantMaxSharePct(formats strfmt.Registry) error {
+	if swag.IsZero(m.FcTenantMaxSharePct) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"fc_tenant_max_share_pct", "body", int64(m.FcTenantMaxSharePct), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"fc_tenant_max_share_pct", "body", int64(m.FcTenantMaxSharePct), 100, false); err != nil {
 		return err
 	}
 
@@ -2393,6 +2471,10 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// Per-endpoint ceiling for the normal role; 0 is unlimited.
 	EpMaxInflight int32 `json:"ep_max_inflight,omitempty"`
 
+	// Whether admitted responses carry the admission headers.
+	// Enum: [on off]
+	ExposeHeaders string `json:"expose_headers,omitempty"`
+
 	// Inference requests executing on the pool right now.
 	Inflight int32 `json:"inflight,omitempty"`
 
@@ -2423,6 +2505,12 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// The P/D scorers' trust window for scraped queue depth, in milliseconds.
 	TelemetryStaleMs int32 `json:"telemetry_stale_ms,omitempty"`
 
+	// The tenant share in force, in percent; 0 or 100 is no share.
+	TenantMaxSharePct int32 `json:"tenant_max_share_pct,omitempty"`
+
+	// Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.
+	TenantsActive int32 `json:"tenants_active,omitempty"`
+
 	// ttft target ms
 	TtftTargetMs int32 `json:"ttft_target_ms,omitempty"`
 
@@ -2446,6 +2534,10 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) Validate(formats strfmt.Re
 	}
 
 	if err := m.validateAdaptive(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateExposeHeaders(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -2600,6 +2692,48 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateAdaptive(formats s
 	return nil
 }
 
+var loadbalanceEntryServiceArgumentsFcEffectiveTypeExposeHeadersPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["on","off"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveTypeExposeHeadersPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveTypeExposeHeadersPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveExposeHeadersOn captures enum value "on"
+	LoadbalanceEntryServiceArgumentsFcEffectiveExposeHeadersOn string = "on"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveExposeHeadersOff captures enum value "off"
+	LoadbalanceEntryServiceArgumentsFcEffectiveExposeHeadersOff string = "off"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateExposeHeadersEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveTypeExposeHeadersPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateExposeHeaders(formats strfmt.Registry) error {
+	if swag.IsZero(m.ExposeHeaders) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateExposeHeadersEnum("serviceArguments"+"."+"fc_effective"+"."+"expose_headers", "body", m.ExposeHeaders); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateSource(formats strfmt.Registry) error {
 	if swag.IsZero(m.Source) { // not required
 		return nil
@@ -2684,6 +2818,10 @@ type LoadbalanceEntryServiceArgumentsFcEffectiveSource struct {
 	// Enum: [rule env default]
 	EpMaxInflight string `json:"ep_max_inflight,omitempty"`
 
+	// expose headers
+	// Enum: [rule env default]
+	ExposeHeaders string `json:"expose_headers,omitempty"`
+
 	// max outstanding
 	// Enum: [rule env default]
 	MaxOutstanding string `json:"max_outstanding,omitempty"`
@@ -2707,6 +2845,10 @@ type LoadbalanceEntryServiceArgumentsFcEffectiveSource struct {
 	// telemetry stale ms
 	// Enum: [rule env default]
 	TelemetryStaleMs string `json:"telemetry_stale_ms,omitempty"`
+
+	// tenant max share pct
+	// Enum: [rule env default]
+	TenantMaxSharePct string `json:"tenant_max_share_pct,omitempty"`
 
 	// ttft target ms
 	// Enum: [rule env default]
@@ -2733,6 +2875,10 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) Validate(formats str
 		res = append(res, err)
 	}
 
+	if err := m.validateExposeHeaders(formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.validateMaxOutstanding(formats); err != nil {
 		res = append(res, err)
 	}
@@ -2754,6 +2900,10 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) Validate(formats str
 	}
 
 	if err := m.validateTelemetryStaleMs(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateTenantMaxSharePct(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -2900,6 +3050,51 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateEpMaxInfligh
 
 	// value enum
 	if err := m.validateEpMaxInflightEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"ep_max_inflight", "body", m.EpMaxInflight); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeExposeHeadersPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeExposeHeadersPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeExposeHeadersPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceExposeHeadersDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateExposeHeadersEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeExposeHeadersPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateExposeHeaders(formats strfmt.Registry) error {
+	if swag.IsZero(m.ExposeHeaders) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateExposeHeadersEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"expose_headers", "body", m.ExposeHeaders); err != nil {
 		return err
 	}
 
@@ -3170,6 +3365,51 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateTelemetrySta
 
 	// value enum
 	if err := m.validateTelemetryStaleMsEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"telemetry_stale_ms", "body", m.TelemetryStaleMs); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTenantMaxSharePctPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTenantMaxSharePctPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTenantMaxSharePctPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceTenantMaxSharePctDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateTenantMaxSharePctEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeTenantMaxSharePctPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateTenantMaxSharePct(formats strfmt.Registry) error {
+	if swag.IsZero(m.TenantMaxSharePct) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateTenantMaxSharePctEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"tenant_max_share_pct", "body", m.TenantMaxSharePct); err != nil {
 		return err
 	}
 

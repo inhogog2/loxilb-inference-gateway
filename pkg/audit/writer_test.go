@@ -904,8 +904,16 @@ func TestLastWriteMovesOnlyWhenARecordLanded(t *testing.T) {
 	if first != 1_700_000_000 {
 		t.Fatalf("last write %d after the first record", first)
 	}
-	w.faults.arm(FaultWriterWriteFailed)
-	clock.Store(1_700_000_100)
+	// Arm the fault and move the clock on the writer goroutine. From here a
+	// heartbeat that appended before the fault was armed could otherwise
+	// still be flushing, and its flush would read the moved clock: a record
+	// that really landed, stamped with a time at which nothing could land.
+	if err := w.onLoop(context.Background(), func() {
+		w.faults.arm(FaultWriterWriteFailed)
+		clock.Store(1_700_000_100)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	beats := w.Stats().Heartbeats
 	waitFor(t, "two heartbeats that could not be written", func() bool { return w.Stats().Heartbeats >= beats+2 })
 	if got := w.Stats().LastWriteUnix; got != first {

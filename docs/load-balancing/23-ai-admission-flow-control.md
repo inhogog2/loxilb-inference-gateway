@@ -230,6 +230,41 @@ returns, rising in a straight line to all of it at the end of the window.
 An unlimited role stays unlimited. The service ceiling is not ramped.
 `fc_effective.warming_endpoints` counts the endpoints inside their window.
 
+## Tenant fair share
+
+Without a share the queue is strictly first come, first served, so one
+tenant sending a burst fills the ceiling and the queue and everyone else
+waits behind it. With `fc_tenant_max_share_pct` on the rule (or
+`LLB_FC_TENANT_MAX_SHARE_PCT`), a tenant holds at most that percentage of
+the service ceiling in force (the adaptive one while the pool adapts) and of
+the queue depth, rounded up and at least one each:
+
+| `fc_max_outstanding` | `fc_max_queue_depth` | share | a tenant may execute | and wait |
+|---|---|---|---|---|
+| 8 | 16 | 25 | 2 | 4 |
+| 10 | 0 | 30 | 3 | refused at once |
+| 3 | 1 | 10 | 1 | 1 |
+
+A tenant is the tenant id the request's credential resolved to (API key or
+JWT, on a service that enforces one); every request without a tenant id,
+keyless traffic included, is one tenant. A tenant at its share of the
+ceiling waits for one of its own units when the pool queues and it still has
+room in its share of the queue; otherwise it is refused `429
+admission_tenant_share` while every other tenant still admits. A waiting
+tenant that cannot run holds nobody up: a newcomer waits behind the queue
+only when someone in it could take the unit, and a released unit wakes the
+oldest waiter whose tenant is under its share, the others keeping their
+place. The share is a hard cap: it binds even when the service is otherwise
+idle. It needs a service ceiling (`fc_max_outstanding`); a share of `100`
+is no share.
+
+A pool tracks up to 64 tenants at a time. Tenants past that share one last
+slot and are held together to one share; each request placed there counts
+`loxilb_ai_admission_anomalies_total{kind="tenant_table_full"}`. A tenant's
+slot is freed as soon as it holds nothing, so the table bounds the tenants
+active at once, not the tenants known. `fc_effective.tenants_active`
+counts them.
+
 ## What the client sees
 
 Every refusal carries `Retry-After` in seconds (`1` for a ceiling refusal;
@@ -241,6 +276,7 @@ and the ceiling that refused. The body is JSON.
 | Status | `error` | When | Connection |
 |---|---|---|---|
 | `429` | `admission_capacity` | over a ceiling with no queue, or the queue at its depth (`X-Loxilb-Admission-Queued` then equals the depth); body carries `retry_after` and `jitter_hint_ms` | kept open when the request body was fully buffered, else closed |
+| `429` | `admission_tenant_share` | the request's tenant holds its share of the ceiling (and may not wait) or of the queue; the admission headers carry the pool's counts, not the tenant's | as `admission_capacity` |
 | `503` | `admission_no_capacity` | no healthy endpoint of the pool has capacity | closed |
 | `503` | `gateway_draining` | the gateway is in maintenance (see below) | closed |
 | `504` | `admission_queue_timeout` | the request waited the whole `fc_max_queue_wait_ms`; body carries `queued_ms`, the wait it spent | closed |
@@ -251,6 +287,28 @@ same socket; it is gated again. Clients should honour `Retry-After` and add
 the jitter the body hints, so a burst of refusals does not return as one
 burst of retries. Every non-admit decision is also a `sec.ai.deny` record on
 the audit trail with the service, the model and the decision.
+
+### The same headers on admitted responses
+
+With `fc_expose_headers` `on` (or `LLB_FC_EXPOSE_HEADERS=on` and the rule
+declaring nothing), every admitted inference response carries the three
+admission headers too, so a client can slow down before it is refused:
+`X-Loxilb-Admission-Inflight` and `X-Loxilb-Admission-Queued` are the pool's
+executing and waiting requests as the response head goes out (the request
+itself counted), and `X-Loxilb-Admission-Limit` the service ceiling in force
+(the adaptive one while the pool adapts; `0` when the pool has none). They
+go on the response head on HTTP/1.1 and HTTP/2, streamed (`text/event-stream`,
+chunked) responses included; the body is never touched. Fields of those
+names sent by the backend are replaced. A pool in `observe` mode reports
+them too, since it counts its requests; requests the gate does not count
+(non-inference paths, a pool in `off` mode) carry none. On HTTP/1.1 a
+response head the backend split across several reads is sent without them.
+
+A rule refuses `fc_expose_headers` `on` with a `sockMapMode` of `both` or
+`response` (`400`): those responses go from the backend to the client in the
+kernel and the gateway never sees them. Set process-wide with
+`LLB_FC_EXPOSE_HEADERS=on`, the headers appear only on the responses the
+gateway relays.
 
 ## Maintenance drain
 
@@ -276,13 +334,14 @@ pool key) and are emitted for every AI-gateway pool in every mode.
 | `loxilb_ai_admission_limit{role}` | gauge | the ceiling in force per role; `role="queue"` is the depth |
 | `loxilb_ai_admission_queued` | gauge | requests waiting right now |
 | `loxilb_ai_admission_queue_wait_seconds` | histogram | how long resumed requests waited (buckets 10 ms to 5 s) |
-| `loxilb_ai_admission_decisions_total{reason}` | counter | `admitted`, `capacity_shed`, `no_healthy_capacity`, `observe_would_shed`, `bypass_non_inference`, `queued`, `queue_full`, `queue_timeout`, `cancelled`, `drained`, `observe_would_queue`, `draining` |
+| `loxilb_ai_admission_decisions_total{reason}` | counter | `admitted`, `capacity_shed`, `no_healthy_capacity`, `observe_would_shed`, `bypass_non_inference`, `queued`, `queue_full`, `queue_timeout`, `cancelled`, `drained`, `observe_would_queue`, `draining`, `tenant_share` |
 | `loxilb_ai_admission_effective_limit` | gauge | the service ceiling in force now: the adaptive one while the pool adapts, else the configured one |
 | `loxilb_ai_admission_adapt_state{state}` | gauge | state set, `1` for the current one: `off`, `open`, `tightened`, `frozen` |
 | `loxilb_ai_admission_adapt_reason{reason}` | gauge | state set: `none`, `queued`, `ttft`, `clear`, `stale` |
 | `loxilb_ai_admission_adapt_moves_total{direction}` | counter | steps of the adaptive ceiling, `down` and `up` |
 | `loxilb_ai_admission_warming_endpoints` | gauge | endpoints inside their warm-up window |
-| `loxilb_ai_admission_anomalies_total{kind}` | counter | process-wide bookkeeping faults (`underflow`, `unknown_permit`); any increase is a defect, not load |
+| `loxilb_ai_admission_tenants_active` | gauge | tenants holding a unit or waiting, while the pool has a tenant share |
+| `loxilb_ai_admission_anomalies_total{kind}` | counter | process-wide: `underflow` and `unknown_permit` are bookkeeping faults (any increase is a defect, not load); `tenant_table_full` counts requests whose tenant shared the overflow slot |
 
 The process accept valve (`LLB_PD_MAX_TOTAL_INFLIGHT`) bounds connection
 contexts, not requests, before any pool sees them:
@@ -317,6 +376,8 @@ by reason.
 | `warming_endpoints` above 0 after every health flap | an endpoint flaps between down and up | fix the endpoint; its ramp restarts on every return |
 | `proxy_context_inflight` at `proxy_accept_bound`, or `proxy_accept_blocked_total` rising | the node is at its connection-context bound; new connections wait in the listen backlog | raise `LLB_PD_MAX_TOTAL_INFLIGHT` if memory allows, else add gateway instances |
 | `anomalies_total` above 0 | a bookkeeping defect | report it with the gateway log |
+| `decisions_total{reason="tenant_share"}` rising while `inflight` is below the limit | one tenant is at its share; the rest of the ceiling is left for others, as intended | raise `fc_tenant_max_share_pct` if one tenant should be allowed more of an idle pool |
+| `anomalies_total{kind="tenant_table_full"}` rising | more than 64 tenants active on one pool at once; the ones past the table share one budget | expected under a very wide tenant fan-out; split the pool if they need separate budgets |
 
 The shipped alert rules (`deploy/monitoring/prometheus/rules/loxilb-alerts.yml`,
 group `loxilb-ai-admission`) fire on sustained shedding, queue timeouts, a
@@ -330,5 +391,6 @@ holding connections back, and any anomaly.
   ceiling); only HTTP/1.1 requests queue.
 - A `429` keeps the connection only when the request body was fully
   buffered before the decision; a streamed body closes it.
-- Adaptive tightening from backend telemetry, warm-up ramps and tenant fair
-  share are not part of this release; the queue is strictly FIFO.
+- The queue is first come, first served within the tenant share; without a
+  share it is strictly FIFO. There are no priorities between tenants beyond
+  the share.

@@ -58,7 +58,7 @@ func TestSortAndDedupeAdmissionSamples(t *testing.T) {
 	}
 }
 
-func withAdmissionStore(t *testing.T, samples []admissionSample, anomalies [2]float64) {
+func withAdmissionStore(t *testing.T, samples []admissionSample, anomalies [3]float64) {
 	t.Helper()
 	admissionStoreMutex.Lock()
 	savedStore, savedAnomalies := admissionStore, admissionAnomalies
@@ -72,16 +72,17 @@ func withAdmissionStore(t *testing.T, samples []admissionSample, anomalies [2]fl
 }
 
 func TestAdmissionCollectorEmptyStore(t *testing.T) {
-	withAdmissionStore(t, nil, [2]float64{})
+	withAdmissionStore(t, nil, [3]float64{})
 
-	// No pool: only the two process-wide anomaly counters, at zero, so
-	// "never anomalous" and "not exported" are distinguishable.
-	if n := testutil.CollectAndCount(admissionCollector{}); n != 2 {
-		t.Errorf("empty store emitted %d metrics, want 2 (the anomaly counters)", n)
+	// No pool: only the process-wide anomaly counters, at zero, so "never
+	// anomalous" and "not exported" are distinguishable.
+	if n := testutil.CollectAndCount(admissionCollector{}); n != 3 {
+		t.Errorf("empty store emitted %d metrics, want 3 (the anomaly counters)", n)
 	}
 	want := `
-# HELP loxilb_ai_admission_anomalies_total Accounting anomalies in the capacity gate, process-wide: underflow (a release found its counter at zero) and unknown_permit (an executing permit with no pool). Any increment is a defect, not load.
+# HELP loxilb_ai_admission_anomalies_total Accounting anomalies in the capacity gate, process-wide: underflow (a release found its counter at zero), unknown_permit (an executing permit with no pool) and tenant_table_full (a request whose tenant found the pool's tenant table full and shared the last slot with the other tenants past it). underflow and unknown_permit are defects; tenant_table_full means more tenants than the table holds are active on one pool.
 # TYPE loxilb_ai_admission_anomalies_total counter
+loxilb_ai_admission_anomalies_total{kind="tenant_table_full"} 0
 loxilb_ai_admission_anomalies_total{kind="underflow"} 0
 loxilb_ai_admission_anomalies_total{kind="unknown_permit"} 0
 `
@@ -100,7 +101,7 @@ func TestAdmissionCollectorEmitsLabelledSeries(t *testing.T) {
 		inflight:       5,
 		epCap:          [3]float64{8, 4, 0},
 		epInflight:     [3]float64{5, 0, 0},
-		decisions:      [12]float64{100, 7, 1, 0, 12, 30, 2, 3, 4, 5, 0, 6},
+		decisions:      [13]float64{100, 7, 1, 0, 12, 30, 2, 3, 4, 5, 0, 6, 9},
 		queued:         3,
 		queueDepth:     16,
 		qwaitBuckets:   [8]uint64{10, 5, 0, 0, 2, 0, 0, 1},
@@ -111,7 +112,8 @@ func TestAdmissionCollectorEmitsLabelledSeries(t *testing.T) {
 		adaptReason:    1,
 		adaptMoves:     [2]float64{3, 1},
 		warmingEps:     1,
-	}}, [2]float64{0, 1})
+		tenantsActive:  2,
+	}}, [3]float64{0, 1, 0})
 
 	want := `
 # HELP loxilb_ai_admission_inflight Capacity units held right now. role="service" is the pool-wide count, one per executing inference request; the other roles sum the endpoint units held across the pool's endpoints for that role. Zero with the gate off.
@@ -173,7 +175,7 @@ loxilb_ai_admission_queue_wait_seconds_count{pool="llm",service="192.168.1.10:80
 	}
 
 	want = `
-# HELP loxilb_ai_admission_decisions_total Gate decisions per pool and reason: admitted, capacity_shed (429), no_healthy_capacity (503), observe_would_shed (admitted in observe mode where enforce would have refused, counted at each ceiling that would have refused it), bypass_non_inference (not an inference request, no unit taken), queued (parked to wait for a unit), queue_full (429, the queue at its depth), queue_timeout (504, waited the whole window), cancelled (the client left while waiting), drained (the pool or the process stopped taking work while it waited), observe_would_queue (admitted in observe mode where enforce would have parked it), draining (503, the process is draining for maintenance).
+# HELP loxilb_ai_admission_decisions_total Gate decisions per pool and reason: admitted, capacity_shed (429), no_healthy_capacity (503), observe_would_shed (admitted in observe mode where enforce would have refused, counted at each ceiling that would have refused it), bypass_non_inference (not an inference request, no unit taken), queued (parked to wait for a unit), queue_full (429, the queue at its depth), queue_timeout (504, waited the whole window), cancelled (the client left while waiting), drained (the pool or the process stopped taking work while it waited), observe_would_queue (admitted in observe mode where enforce would have parked it), draining (503, the process is draining for maintenance), tenant_share (429, the tenant holds its share of the ceiling or of the queue).
 # TYPE loxilb_ai_admission_decisions_total counter
 loxilb_ai_admission_decisions_total{pool="llm",reason="admitted",service="192.168.1.10:8080"} 100
 loxilb_ai_admission_decisions_total{pool="llm",reason="bypass_non_inference",service="192.168.1.10:8080"} 12
@@ -187,6 +189,7 @@ loxilb_ai_admission_decisions_total{pool="llm",reason="observe_would_shed",servi
 loxilb_ai_admission_decisions_total{pool="llm",reason="queue_full",service="192.168.1.10:8080"} 2
 loxilb_ai_admission_decisions_total{pool="llm",reason="queue_timeout",service="192.168.1.10:8080"} 3
 loxilb_ai_admission_decisions_total{pool="llm",reason="queued",service="192.168.1.10:8080"} 30
+loxilb_ai_admission_decisions_total{pool="llm",reason="tenant_share",service="192.168.1.10:8080"} 9
 `
 	if err := testutil.CollectAndCompare(admissionCollector{}, strings.NewReader(want),
 		"loxilb_ai_admission_decisions_total"); err != nil {
@@ -258,13 +261,22 @@ loxilb_ai_admission_warming_endpoints{pool="llm",service="192.168.1.10:8080"} 1
 		"loxilb_ai_admission_warming_endpoints"); err != nil {
 		t.Errorf("warming endpoints mismatch: %v", err)
 	}
+	want = `
+# HELP loxilb_ai_admission_tenants_active Tenants holding a capacity unit or waiting on the pool right now, counted while the pool holds tenants to a share (fc_tenant_max_share_pct); zero otherwise. Requests without a tenant count as one.
+# TYPE loxilb_ai_admission_tenants_active gauge
+loxilb_ai_admission_tenants_active{pool="llm",service="192.168.1.10:8080"} 2
+`
+	if err := testutil.CollectAndCompare(admissionCollector{}, strings.NewReader(want),
+		"loxilb_ai_admission_tenants_active"); err != nil {
+		t.Errorf("tenants active mismatch: %v", err)
+	}
 
 	// Per pool: 1 mode + 4 inflight + 5 limit + 1 queued + 1 wait histogram
-	// + 12 decisions + 1 effective limit + 4 adapt states + 5 adapt reasons
-	// + 2 adapt moves + 1 warming = 37, plus the 2 process-wide anomaly
-	// counters.
-	if n := testutil.CollectAndCount(admissionCollector{}); n != 39 {
-		t.Errorf("collected %d metrics for one pool, want 39", n)
+	// + 13 decisions + 1 effective limit + 4 adapt states + 5 adapt reasons
+	// + 2 adapt moves + 1 warming + 1 tenants = 39, plus the 3 process-wide
+	// anomaly counters.
+	if n := testutil.CollectAndCount(admissionCollector{}); n != 42 {
+		t.Errorf("collected %d metrics for one pool, want 42", n)
 	}
 }
 

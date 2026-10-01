@@ -37,6 +37,8 @@ type fcRuleCfg struct {
 	adaptive           uint8 // cmn.FcRuleAdaptive*
 	warmupMs           uint32
 	ttftTargetMs       uint32
+	tenantSharePct     uint32
+	exposeHeaders      uint8 // cmn.FcRuleAdaptive* encoding, enum fc_rule_expose
 }
 
 // fcRuleResolve returns the gate declaration a rule will store: on create
@@ -52,6 +54,10 @@ func fcRuleResolve(eRule *ruleEnt, serv *cmn.LbServiceArg) (fcRuleCfg, error) {
 	if err != nil {
 		return fcRuleCfg{}, err
 	}
+	expose, err := cmn.FcExposeHeadersToRule(serv.FcExposeHeaders)
+	if err != nil {
+		return fcRuleCfg{}, err
+	}
 	next := fcRuleCfg{
 		mode:               mode,
 		maxOutstanding:     serv.FcMaxOutstanding,
@@ -62,6 +68,8 @@ func fcRuleResolve(eRule *ruleEnt, serv *cmn.LbServiceArg) (fcRuleCfg, error) {
 		adaptive:           adaptive,
 		warmupMs:           serv.FcWarmupMs,
 		ttftTargetMs:       serv.FcTtftTargetMs,
+		tenantSharePct:     serv.FcTenantMaxSharePct,
+		exposeHeaders:      expose,
 	}
 	if eRule != nil {
 		cur := eRule.fcCfg
@@ -78,6 +86,10 @@ func fcRuleResolve(eRule *ruleEnt, serv *cmn.LbServiceArg) (fcRuleCfg, error) {
 		}
 		next.warmupMs = u32OnReplace(cur.warmupMs, serv.FcWarmupMs, serv.FcWarmupMsPresent)
 		next.ttftTargetMs = u32OnReplace(cur.ttftTargetMs, serv.FcTtftTargetMs, serv.FcTtftTargetMsPresent)
+		next.tenantSharePct = u32OnReplace(cur.tenantSharePct, serv.FcTenantMaxSharePct, serv.FcTenantMaxSharePctPresent)
+		if !serv.FcExposeHeadersPresent && serv.FcExposeHeaders == "" {
+			next.exposeHeaders = cur.exposeHeaders
+		}
 	}
 	for _, c := range []struct {
 		name string
@@ -105,6 +117,10 @@ func fcRuleResolve(eRule *ruleEnt, serv *cmn.LbServiceArg) (fcRuleCfg, error) {
 		return fcRuleCfg{}, cmn.NewValidationError("fc_ttft_target_ms",
 			"fc_ttft_target_ms must be within 0..%d", cmn.FcTtftTargetMsMax)
 	}
+	if next.tenantSharePct > cmn.FcTenantMaxSharePctMax {
+		return fcRuleCfg{}, cmn.NewValidationError("fc_tenant_max_share_pct",
+			"fc_tenant_max_share_pct must be within 0..%d", cmn.FcTenantMaxSharePctMax)
+	}
 	return next, nil
 }
 
@@ -120,6 +136,30 @@ func (c fcRuleCfg) toServ(s *cmn.LbServiceArg) {
 	s.FcAdaptive = cmn.FcAdaptiveFromRule(c.adaptive)
 	s.FcWarmupMs = c.warmupMs
 	s.FcTtftTargetMs = c.ttftTargetMs
+	s.FcTenantMaxSharePct = c.tenantSharePct
+	s.FcExposeHeaders = cmn.FcAdaptiveFromRule(c.exposeHeaders)
+}
+
+// fcExposeSockMapErr refuses the admission headers on a rule whose response
+// direction the kernel may carry (sockMapMode both or response): the gateway
+// never sees those responses, so it could not keep what the rule asks for.
+// A snapshot restore replay is let through with a warning, as the sockmap
+// checks do: the headers then appear only on responses the relay carries.
+func fcExposeSockMapErr(serv *cmn.LbServiceArg, c fcRuleCfg, sockMapCode uint8) error {
+	if c.exposeHeaders != cmn.FcRuleAdaptiveOn {
+		return nil
+	}
+	if _, resp := sockMapDirs(sockMapCode); !resp {
+		return nil
+	}
+	if serv.RestoreReplay {
+		tk.LogIt(tk.LogWarning, "lb-rule %s:%d: fc_expose_headers on with sockMapMode %s restored: accelerated responses carry no admission headers\n",
+			serv.ServIP, serv.ServPort, serv.SockMapMode)
+		return nil
+	}
+	return cmn.NewValidationError("fc_expose_headers",
+		"fc_expose_headers on is refused with sockMapMode %s: the response direction is not seen by the gateway",
+		serv.SockMapMode)
 }
 
 // adaptiveInForce reports whether the rule's pool adapts its service

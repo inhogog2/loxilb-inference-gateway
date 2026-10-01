@@ -19,6 +19,10 @@ PORT_U=2029           # the same two backends, rule ceiling 2 and a queue: raise
 PORT_AD=2030          # two scraped backends, an adaptive ceiling of 10 on their queue depth
 PORT_TT=2031          # the same two, an adaptive ceiling of 8 on their time to first token
 PORT_WU=2032          # two backends of its own, per-endpoint ceiling 8, a 20 s warm-up
+PORT_TS=2033          # the same two backends, keyed: ceiling 4, tenant share 50 %, no queue
+PORT_TQ=2034          # the same two backends, keyed: ceiling 2, tenant share 50 %, a queue
+PORT_XH=2035          # the same two backends, ceiling 4, admission headers on admitted responses
+PORT_XH2=2036         # the two h2c backends, ceiling 4, admission headers on admitted streams
 FC_P_MAX=4
 FC_P_STALE_MS=45000
 FC_U_MAX=2
@@ -29,6 +33,10 @@ FC_TT_MAX=8
 FC_TT_TARGET_MS=300
 FC_WU_EP=8
 FC_WU_MS=20000
+FC_TS_MAX=4
+FC_TQ_MAX=2
+FC_TS_PCT=50          # half: two units of :PORT_TS a tenant, one of :PORT_TQ and two of its queue
+FC_XH_MAX=4
 FC_Q_DEPTH=4
 # The pool's wait is long enough that a waiter outlives the 10 s metric
 # republish the rows poll between parking it and releasing a unit; row T
@@ -38,6 +46,26 @@ FC_T_WAIT_MS=4000
 SSE_CAP_SEC=3
 AUDIT_DIR=/var/log/loxilb/audit
 GW_ARGS="--audit-dir $AUDIT_DIR --audit-required"
+# The API-key store behind the keyed pools (:PORT_TS, :PORT_TQ): the tenant a
+# key resolves to is what the tenant share counts. Its two secrets are files
+# in cert/, the one directory mounted into the gateway, so the in-place
+# restarts keep them.
+PG_NAME=pg-ai-admission
+PG_OWNER=oamuser
+PG_OWNER_PW=oampass
+PG_DB=loxilb
+DP_PW=dp-secret-1
+MGMT_PW=mgmt-secret-1
+# gw_db_args: the store flags, once the PostgreSQL container is up.
+gw_db_args() {
+  local ip
+  ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$PG_NAME" 2>/dev/null)
+  [ -n "$ip" ] || return 0
+  echo "--mgmt-db-host $ip --mgmt-db-port 5432 --mgmt-db-user aigw_mgmt_user --mgmt-db-name $PG_DB" \
+       "--mgmt-db-password-file /opt/loxilb/cert/mgmt_db_password" \
+       "--aikey-db-host $ip --aikey-db-port 5432 --aikey-db-user aigwuser --aikey-db-name $PG_DB" \
+       "--aikey-db-password-file /opt/loxilb/cert/aikey_password"
+}
 API="http://$VIP:11111/netlox/v1"
 
 gw_env() { # gw_env <mode> -> the environment the gate reads at pool creation
@@ -128,6 +156,12 @@ gw_ad_json() { echo ", \"fc_max_outstanding\": $FC_AD_MAX, \"fc_adaptive\": \"$1
 gw_tt_json() { echo ", \"fc_max_outstanding\": $FC_TT_MAX, \"fc_adaptive\": \"on\", \"fc_ttft_target_ms\": $FC_TT_TARGET_MS, \"fc_telemetry_stale_ms\": $FC_AD_STALE_MS"; }
 # gw_wu_json: the :PORT_WU rule, a per-endpoint ceiling and a warm-up window
 gw_wu_json() { echo ", \"fc_ep_max_inflight\": $FC_WU_EP, \"fc_warmup_ms\": $FC_WU_MS"; }
+# gw_ts_json: the :PORT_TS rule, keyed, a ceiling shared among tenants
+gw_ts_json() { echo ", \"api_key_auth\": \"required\", \"fc_max_outstanding\": $FC_TS_MAX, \"fc_tenant_max_share_pct\": $FC_TS_PCT"; }
+# gw_xh_json <on|off>: the :PORT_XH / :PORT_XH2 rules, a ceiling and the admission headers switch
+gw_xh_json() { echo ", \"fc_max_outstanding\": $FC_XH_MAX, \"fc_expose_headers\": \"$1\""; }
+# gw_tq_json: the :PORT_TQ rule, the same with a queue
+gw_tq_json() { echo ", \"api_key_auth\": \"required\", \"fc_max_outstanding\": $FC_TQ_MAX, \"fc_tenant_max_share_pct\": $FC_TS_PCT$(gw_queue_json $FC_Q_DEPTH $FC_Q_WAIT_MS)"; }
 
 gw_add_rules() {
   gw_add_rule $PORT_H1  ""                                                       8080 8081 || return 1
@@ -141,6 +175,10 @@ gw_add_rules() {
   gw_add_rule $PORT_AD  "$(gw_ad_json on)"                                       8084 8085 || return 1
   gw_add_rule $PORT_TT  "$(gw_tt_json)"                                          8084 8085 || return 1
   gw_add_rule $PORT_WU  "$(gw_wu_json)"                                          8082 8083 || return 1
+  gw_add_rule $PORT_TS  "$(gw_ts_json)"                                          8080 8081 || return 1
+  gw_add_rule $PORT_TQ  "$(gw_tq_json)"                                          8080 8081 || return 1
+  gw_add_rule $PORT_XH  "$(gw_xh_json on)"                                       8080 8081 || return 1
+  gw_add_rule $PORT_XH2 ", \"backend_protocol\": \"http2\"$(gw_xh_json on)"      8090 8091 || return 1
   sleep 2
 }
 
@@ -157,7 +195,7 @@ gw_restart() {
     docker exec llb1 pgrep -f '/root/loxilb-io/loxilb/loxilb' >/dev/null 2>&1 || break
     sleep 1
   done
-  docker exec -d llb1 bash -c "$(gw_env "$mode") /root/loxilb-io/loxilb/loxilb -p $GW_ARGS --loglevel debug > /tmp/loxilb.out 2> /tmp/loxilb.err"
+  docker exec -d llb1 bash -c "$(gw_env "$mode") /root/loxilb-io/loxilb/loxilb -p $GW_ARGS $(gw_db_args) --loglevel debug > /tmp/loxilb.out 2> /tmp/loxilb.err"
   sleep 3
   gw_wait_api && gw_wait_boot && gw_wait_audit && gw_add_rules
 }

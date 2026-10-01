@@ -96,6 +96,9 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 		AdaptState:              fcNameOf(fcAdaptStateNames, uint8(st.adapt_state)),
 		AdaptReason:             fcNameOf(fcAdaptReasonNames, uint8(st.adapt_reason)),
 		WarmingEndpoints:        uint32(st.warming_eps),
+		TenantMaxSharePct:       uint32(st.tenant_share_pct),
+		TenantsActive:           uint32(st.tenants_active),
+		ExposeHeaders:           fcOnOff(st.expose_headers),
 		Source: cmn.FcEffectiveSource{
 			Mode:               fcSourceName(st.src[0]),
 			MaxOutstanding:     fcSourceName(st.src[1]),
@@ -108,6 +111,8 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 			Adaptive:           fcSourceName(st.src_adapt[0]),
 			WarmupMs:           fcSourceName(st.src_adapt[1]),
 			TtftTargetMs:       fcSourceName(st.src_adapt[2]),
+			TenantMaxSharePct:  fcSourceName(st.src_tenant),
+			ExposeHeaders:      fcSourceName(st.src_expose),
 		},
 	}, true
 }

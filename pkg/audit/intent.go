@@ -21,7 +21,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 )
@@ -63,8 +65,15 @@ func (w *Writer) scanOrphans() {
 		return
 	}
 	var files []string
-	prevBoot := ""
+	prevBoot, newer := "", ""
 	for i := len(sealed) - 1; i >= 0 && len(files) < maxOrphanScanSegments; i-- {
+		// Between its rename and its remove, a segment being compressed
+		// is listed twice, as X.jsonl.gz and X.jsonl. It is one segment.
+		name := sealed[i].Name
+		if name+gzipExt == newer {
+			continue
+		}
+		newer = name
 		hdr, ok := readSegmentHeader(sealed[i].Path)
 		if !ok || hdr.BootID == w.bootID {
 			continue
@@ -102,22 +111,38 @@ func (w *Writer) scanOrphans() {
 	}
 }
 
+// openSealed opens a sealed segment for reading, decompressing a .gz one.
+// The scan lists the directory before it reads, and the compression
+// worker starts at the same time: it writes X.jsonl.gz and then removes
+// X.jsonl, so a plain segment listed a moment ago can be gone by the time
+// it is opened. It is then read under its .gz name, not skipped.
+func openSealed(path string) (io.Reader, func(), error) {
+	f, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) && !strings.HasSuffix(path, gzipExt) {
+		path += gzipExt
+		f, err = os.Open(path)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if !strings.HasSuffix(path, gzipExt) {
+		return f, func() { f.Close() }, nil
+	}
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	return zr, func() { zr.Close(); f.Close() }, nil
+}
+
 // readSegmentHeader decodes the first line of a sealed segment.
 func readSegmentHeader(path string) (segmentHeader, bool) {
-	f, err := os.Open(path)
+	r, done, err := openSealed(path)
 	if err != nil {
 		return segmentHeader{}, false
 	}
-	defer f.Close()
-	var r io.Reader = f
-	if strings.HasSuffix(path, gzipExt) {
-		zr, err := gzip.NewReader(f)
-		if err != nil {
-			return segmentHeader{}, false
-		}
-		defer zr.Close()
-		r = zr
-	}
+	defer done()
 	line, err := bufio.NewReaderSize(r, 4096).ReadBytes('\n')
 	if err != nil && len(line) == 0 {
 		return segmentHeader{}, false
@@ -136,22 +161,12 @@ func readSegmentHeader(path string) (segmentHeader, bool) {
 // file: a torn tail was already truncated at recovery, so anything after
 // an unreadable line is not evidence.
 func (w *Writer) scanOrphanFile(path string, open map[string]struct{}, order *[]string) {
-	f, err := os.Open(path)
+	r, done, err := openSealed(path)
 	if err != nil {
 		w.logf("audit: orphan scan %s: %v", path, err)
 		return
 	}
-	defer f.Close()
-	var r io.Reader = f
-	if strings.HasSuffix(path, gzipExt) {
-		zr, err := gzip.NewReader(f)
-		if err != nil {
-			w.logf("audit: orphan scan %s: %v", path, err)
-			return
-		}
-		defer zr.Close()
-		r = zr
-	}
+	defer done()
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), maxLineBytes)
 	for sc.Scan() {

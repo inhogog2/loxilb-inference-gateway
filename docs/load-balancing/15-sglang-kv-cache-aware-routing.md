@@ -575,6 +575,14 @@ python -m sglang.launch_server --model <MODEL> --port 30000 \
 # SGLang's --page-size default is MODEL-DEPENDENT — never assume 16 (§7).
 ```
 
+**Strict (profile-bound) rules:** launch from the pinned snapshot directory and pin the revision —
+`--model-path <HF_HOME>/hub/models--<org>--<name>/snapshots/<rev> --revision <rev>`. `--revision` is what
+makes `/server_info` report the revision the gateway's identity probe compares with the profile manifest.
+The snapshot path matters as much: with a hub id as `--model-path`, SGLang 0.5.18 (transformers 5.12.1)
+builds some tokenizers (measured: Phi-4-mini) with a plain byte-level pre-tokenizer instead of the split rule
+in `tokenizer.json`, so both `/v1/tokenize` and the served prompt differ from the pinned tokenizer. The gateway
+catches it (the rule stays at `PROFILE_VALIDATED` with `token_mismatch`), but the rule never becomes READY.
+
 Make the launch a scripted, repeatable recipe rather than an improvised console session.
 The required end state per EP: the chosen ZMQ port range verified free with `ss -tln`
 before launch (on hosts co-resident with a vLLM publisher, `:5557` is usually taken —

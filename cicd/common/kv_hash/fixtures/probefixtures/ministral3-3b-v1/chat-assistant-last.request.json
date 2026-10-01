@@ -1,0 +1,1 @@
+{"model": "mistralai/Ministral-3-3B-Instruct-2512", "messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello! How can I help?"}]}

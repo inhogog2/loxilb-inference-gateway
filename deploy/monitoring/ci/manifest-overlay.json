@@ -10,14 +10,14 @@
   "Combined codes (D+P etc.) apply both behaviors."
  ],
  "expected": {
-  "total": 294,
+  "total": 295,
   "owners": {
-   "loxilb": 271,
+   "loxilb": 272,
    "loxilb-ai-controller": 19,
    "loxilb-kv-agent": 4
   },
   "classes": {
-   "default": 238,
+   "default": 239,
    "dpu-doca": 24,
    "aictrl-bridge": 8,
    "kv-agent-health": 1,
@@ -125,6 +125,7 @@
   "loxilb_ai_admission_adapt_reason": "C",
   "loxilb_ai_admission_adapt_moves_total": "C",
   "loxilb_ai_admission_warming_endpoints": "C",
+  "loxilb_ai_admission_tenants_active": "C",
   "loxilb_ai_admission_queued": "C",
   "loxilb_ai_engine_info": "V",
   "loxilb_ai_keyed_services": "E",
@@ -417,6 +418,7 @@
   "loxilb_ai_admission_adapt_reason": "gauge",
   "loxilb_ai_admission_adapt_moves_total": "counter",
   "loxilb_ai_admission_warming_endpoints": "gauge",
+  "loxilb_ai_admission_tenants_active": "gauge",
   "loxilb_ai_admission_queued": "gauge",
    "loxilb_ai_jwks_keys": "gauge",
   "loxilb_ai_jwks_last_success_timestamp_seconds": "gauge",
@@ -555,6 +557,7 @@
    "loxilb_ai_admission_adapt_reason",
    "loxilb_ai_admission_adapt_moves_total",
    "loxilb_ai_admission_warming_endpoints",
+   "loxilb_ai_admission_tenants_active",
    "loxilb_ai_admission_queued",
    "loxilb_ai_admission_queue_wait_seconds"
   ]
@@ -788,8 +791,8 @@
      "kind": "method",
      "receiver": "ruleEnt",
      "file": "pkg/loxinet/fc_rule.go",
-     "def_line": 141,
-     "call_line": 177,
+     "def_line": 181,
+     "call_line": 217,
      "calls": "Run",
      "note": "the scraper goroutine runs while something reads what it scrapes: a rule with pdDisaggMode (the P/D scorers) or an AI-gateway rule whose admission ceiling adapts (fc_adaptive, else LLB_FC_ADAPTIVE); at a hard-coded 10s interval, against each endpoint's own xIP:xPort -- the same port the data connect uses. Restarted when a replace moves the endpoints, stopped when neither reader remains"
     },
@@ -798,16 +801,16 @@
      "kind": "method",
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
-     "def_line": 3760,
-     "call_line": 5107,
+     "def_line": 3763,
+     "call_line": 5113,
      "calls": "syncVllmScraper",
-     "note": "on create; the replace path calls it too (rules.go:4686), so a replace that turns adaptation on or off, or moves the endpoints, reaches the scraper"
+     "note": "on create; the replace path calls it too (rules.go:4692), so a replace that turns adaptation on or off, or moves the endpoints, reaches the scraper"
     },
     { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
    ],
    "kv-subscriber-rule-config": [
-    { "symbol": "KvSubscriberStartRank", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1230, "call_line": 1379, "calls": "runKvSubscriberLoopBinding", "note": "one subscriber goroutine per (service, endpoint, rank)" },
-    { "symbol": "AddLbRule", "kind": "method", "receiver": "RuleH", "file": "pkg/loxinet/rules.go", "def_line": 3760, "call_line": 5059, "calls": "KvSubscriberStartRank" },
+    { "symbol": "KvSubscriberStartRank", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1236, "call_line": 1385, "calls": "runKvSubscriberLoopBinding", "note": "one subscriber goroutine per (service, endpoint, rank)" },
+    { "symbol": "AddLbRule", "kind": "method", "receiver": "RuleH", "file": "pkg/loxinet/rules.go", "def_line": 3763, "call_line": 5065, "calls": "KvSubscriberStartRank" },
     { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
    ],
    "kv-attest-controller-loop": [
@@ -815,12 +818,12 @@
     { "symbol": "loop", "kind": "method", "receiver": "kvAttestController", "file": "pkg/loxinet/ai_kv_attest.go", "def_line": 458, "call_line": 477, "calls": "cadenceCheck", "note": "single controller goroutine per rule; its deferred teardown clears this rule's series after the last publish" },
     { "symbol": "KvAttestStart", "kind": "func", "file": "pkg/loxinet/ai_kv_attest.go", "def_line": 326, "call_line": 351, "calls": "loop" },
     { "symbol": "kvAttestActivate", "kind": "func", "file": "pkg/loxinet/ai_kv_attest.go", "def_line": 927, "call_line": 934, "calls": "KvAttestStart" },
-    { "symbol": "kvDataplaneContractInstallAsync", "kind": "func", "file": "pkg/loxinet/ai_kv_dataplane.go", "def_line": 381, "call_line": 385, "calls": "kvAttestActivate", "note": "the controller starts only after a full dataplane contract install ACK, which is the only path to eligible=1" },
-    { "symbol": "AddLbRule", "kind": "method", "receiver": "RuleH", "file": "pkg/loxinet/rules.go", "def_line": 3760, "call_line": 4681, "calls": "kvDataplaneContractInstallAsync" },
+    { "symbol": "kvDataplaneContractInstallAsync", "kind": "func", "file": "pkg/loxinet/ai_kv_dataplane.go", "def_line": 383, "call_line": 387, "calls": "kvAttestActivate", "note": "the controller starts only after a full dataplane contract install ACK, which is the only path to eligible=1" },
+    { "symbol": "AddLbRule", "kind": "method", "receiver": "RuleH", "file": "pkg/loxinet/rules.go", "def_line": 3763, "call_line": 4687, "calls": "kvDataplaneContractInstallAsync" },
     { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
    ],
    "kv-best-worker-cgo": [
-    { "symbol": "llb_ai_kv_best_worker", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1856, "call_line": 1999, "calls": "IncKvTier15HitCounter", "entry_point": "cgo-export" }
+    { "symbol": "llb_ai_kv_best_worker", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1862, "call_line": 2005, "calls": "IncKvTier15HitCounter", "entry_point": "cgo-export" }
    ]
   },
   "families": {
@@ -1210,11 +1213,11 @@
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 289, "writes": "admissionModeDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 329, "call_line": 330, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 304, "writes": "admissionModeDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 345, "call_line": 346, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 414, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 430, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1295, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 756, "call_line": 806, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1224,11 +1227,11 @@
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 289, "writes": "admissionInflightDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 329, "call_line": 330, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 304, "writes": "admissionInflightDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 345, "call_line": 346, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 414, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 430, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1295, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 756, "call_line": 806, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1238,11 +1241,11 @@
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 289, "writes": "admissionLimitDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 329, "call_line": 330, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 304, "writes": "admissionLimitDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 345, "call_line": 346, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 414, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 430, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1295, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 756, "call_line": 806, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1252,11 +1255,11 @@
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 289, "writes": "admissionDecisionsDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 329, "call_line": 330, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 304, "writes": "admissionDecisionsDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 345, "call_line": 346, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 414, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 430, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1295, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 756, "call_line": 806, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1266,11 +1269,11 @@
     "status": "verified-static",
     "activation_precondition": "none: the two process-wide anomaly counters are emitted from start, at zero, so absence and quiet are distinguishable.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 289, "writes": "admissionAnomaliesDesc", "note": "read from the process-wide fc_anomaly_total counters through proxy_get_fc_anomaly on the same 10s cycle; emitted whether or not any AI service exists" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 329, "call_line": 330, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 304, "writes": "admissionAnomaliesDesc", "note": "read from the process-wide fc_anomaly_total counters through proxy_get_fc_anomaly on the same 10s cycle; emitted whether or not any AI service exists" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 345, "call_line": 346, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 414, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 430, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1295, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 756, "call_line": 806, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1285,7 +1288,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 289,
+      "def_line": 304,
       "writes": "admissionEffectiveLimitDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1293,8 +1296,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 329,
-      "call_line": 330,
+      "def_line": 345,
+      "call_line": 346,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1305,7 +1308,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 414,
+      "def_line": 430,
       "writes": "admissionStore"
      },
      {
@@ -1337,7 +1340,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 289,
+      "def_line": 304,
       "writes": "admissionAdaptStateDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1345,8 +1348,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 329,
-      "call_line": 330,
+      "def_line": 345,
+      "call_line": 346,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1357,7 +1360,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 414,
+      "def_line": 430,
       "writes": "admissionStore"
      },
      {
@@ -1389,7 +1392,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 289,
+      "def_line": 304,
       "writes": "admissionAdaptReasonDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1397,8 +1400,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 329,
-      "call_line": 330,
+      "def_line": 345,
+      "call_line": 346,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1409,7 +1412,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 414,
+      "def_line": 430,
       "writes": "admissionStore"
      },
      {
@@ -1441,7 +1444,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 289,
+      "def_line": 304,
       "writes": "admissionAdaptMovesDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1449,8 +1452,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 329,
-      "call_line": 330,
+      "def_line": 345,
+      "call_line": 346,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1461,7 +1464,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 414,
+      "def_line": 430,
       "writes": "admissionStore"
      },
      {
@@ -1493,7 +1496,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 289,
+      "def_line": 304,
       "writes": "admissionWarmingDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1501,8 +1504,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 329,
-      "call_line": 330,
+      "def_line": 345,
+      "call_line": 346,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1513,7 +1516,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 414,
+      "def_line": 430,
       "writes": "admissionStore"
      },
      {
@@ -1536,15 +1539,67 @@
     ],
     "evidence": "api/prometheus/ai_admission_metrics_test.go TestAdmissionCollectorEmitsLabelledSeries compares the gauge against the store; loxilb-ebpf/common/test_fc_adapt.c counts a warming endpoint inside its window and none after it; runtime proof belongs to cicd/ai-admission (rows W)."
    },
+   "loxilb_ai_admission_tenants_active": {
+    "status": "verified-static",
+    "activation_precondition": "an AI-gateway service with at least one model pool; emitted for every pool at zero, non-zero only while the pool holds tenants to a share (fc_tenant_max_share_pct or LLB_FC_TENANT_MAX_SHARE_PCT) and a tenant holds a unit or waits.",
+    "writer_sources": [
+     {
+      "symbol": "Collect",
+      "kind": "method",
+      "receiver": "admissionCollector",
+      "file": "api/prometheus/ai_admission_metrics.go",
+      "def_line": 304,
+      "writes": "admissionTenantsDesc",
+      "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
+     },
+     {
+      "symbol": "init",
+      "kind": "func",
+      "file": "api/prometheus/ai_admission_metrics.go",
+      "def_line": 345,
+      "call_line": 346,
+      "calls": "admissionCollector",
+      "entry_point": "registry-collector",
+      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+     }
+    ],
+    "data_sources": [
+     {
+      "symbol": "refreshAdmissionStore",
+      "kind": "func",
+      "file": "api/prometheus/ai_admission_metrics.go",
+      "def_line": 430,
+      "writes": "admissionStore"
+     },
+     {
+      "symbol": "RunSockproxyMetrics",
+      "kind": "func",
+      "file": "api/prometheus/sockproxy_metrics.go",
+      "def_line": 1048,
+      "call_line": 1295,
+      "calls": "refreshAdmissionStore"
+     },
+     {
+      "symbol": "Init",
+      "kind": "func",
+      "file": "api/prometheus/prometheus.go",
+      "def_line": 756,
+      "call_line": 806,
+      "calls": "RunSockproxyMetrics",
+      "entry_point": "main"
+     }
+    ],
+    "evidence": "api/prometheus/ai_admission_metrics_test.go TestAdmissionCollectorEmitsLabelledSeries compares the gauge against the store; loxilb-ebpf/common/test_fc_tenant.c counts tenants as they take units and evicts them at zero; runtime proof belongs to cicd/ai-admission (rows TS)."
+   },
    "loxilb_ai_admission_queued": {
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted for every pool at zero, so an absent queue and an idle queue are distinguishable. The values move only when the pool has a queue depth (fc_max_queue_depth on the rule or LLB_FC_MAX_QUEUE_DEPTH) and the gate is enforcing.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 289, "writes": "admissionQueuedDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 329, "call_line": 330, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 304, "writes": "admissionQueuedDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 345, "call_line": 346, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 414, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 430, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1295, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 756, "call_line": 806, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1554,11 +1609,11 @@
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted for every pool at zero, so an absent queue and an idle queue are distinguishable. The values move only when the pool has a queue depth (fc_max_queue_depth on the rule or LLB_FC_MAX_QUEUE_DEPTH) and the gate is enforcing.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 289, "writes": "admissionQueueWaitDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; the C side keeps one count per bucket (fc_qwait_bounds_ms) and Collect converts them to the cumulative form at its MustNewConstHistogram call, which is where the extractor resolves the histogram type" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 329, "call_line": 330, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 304, "writes": "admissionQueueWaitDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; the C side keeps one count per bucket (fc_qwait_bounds_ms) and Collect converts them to the cumulative form at its MustNewConstHistogram call, which is where the extractor resolves the histogram type" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 345, "call_line": 346, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 414, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 430, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1048, "call_line": 1295, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 756, "call_line": 806, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -3001,8 +3056,8 @@
     "activation_precondition": "an LB rule with KV-exact routing configured, so a subscriber goroutine exists for that (service, endpoint); with no such rule nothing creates the child and the gauge is absent rather than 0.",
     "writer_sources": [
      { "symbol": "SetKvSubscriberConnected", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1544, "writes": "kvSubscriberConnected" },
-     { "symbol": "setKvConnectedIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1034, "call_line": 1040, "calls": "SetKvSubscriberConnected", "note": "the IfLive wrapper drops the write once the context is cancelled, so a torn-down subscriber cannot resurrect a cleared series" },
-     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 737, "call_line": 762, "calls": "setKvConnectedIfLive", "note": "set to 1 on entry and deferred back to 0 at :763" },
+     { "symbol": "setKvConnectedIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1040, "call_line": 1046, "calls": "SetKvSubscriberConnected", "note": "the IfLive wrapper drops the write once the context is cancelled, so a torn-down subscriber cannot resurrect a cleared series" },
+     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 743, "call_line": 768, "calls": "setKvConnectedIfLive", "note": "set to 1 on entry and deferred back to 0 at :769" },
      { "tail": "kv-subscriber-rule-config" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): api/prometheus/sockproxy_metrics.go:1403 with the production call path in pkg/loxinet/ai_kv_subscriber.go. No test drives the collector and no bed run has checked this family's value; scenario M08 owns the runtime proof."
@@ -3012,20 +3067,20 @@
     "activation_precondition": "a KV-exact rule whose publisher actually delivered an event: the gauge is stamped on receipt, so it stays absent for an endpoint that connected but never published.",
     "writer_sources": [
      { "symbol": "SetKvSubscriberLastEvent", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1551, "writes": "kvSubscriberLastEventTs" },
-     { "symbol": "setKvLastEventIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1082, "call_line": 1088, "calls": "SetKvSubscriberLastEvent" },
-     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 737, "call_line": 958, "calls": "setKvLastEventIfLive" },
+     { "symbol": "setKvLastEventIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1088, "call_line": 1094, "calls": "SetKvSubscriberLastEvent" },
+     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 743, "call_line": 964, "calls": "setKvLastEventIfLive" },
      { "tail": "kv-subscriber-rule-config" }
     ],
-    "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:958 stamps the gauge on each accepted event. Scenario M08 owns the runtime proof; freshness is one of the identities the KV-exact arm must satisfy."
+    "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:964 stamps the gauge on each accepted event. Scenario M08 owns the runtime proof; freshness is one of the identities the KV-exact arm must satisfy."
    },
    "loxilb_kv_subscriber_reconnect_total": {
     "status": "conditional-with-proven-writer",
     "activation_precondition": "a KV-exact rule whose subscriber was rebound: the counter is incremented on the rebuild path only, so a stable publisher leaves it at zero -- which is the point of WP-6's kill/restart arm.",
     "writer_sources": [
      { "symbol": "IncKvSubscriberReconnect", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1565, "writes": "kvSubscriberReconnectTotal" },
-     { "symbol": "incKvReconnectIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1048, "call_line": 1054, "calls": "IncKvSubscriberReconnect" },
-     { "symbol": "rebuildKvSubscriber", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1115, "call_line": 1161, "calls": "incKvReconnectIfLive" },
-     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 737, "call_line": 825, "calls": "rebuildKvSubscriber", "note": "the loop retries the rebuild until it succeeds, so one publisher outage produces one increment per successful redial, not one per attempt" },
+     { "symbol": "incKvReconnectIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1054, "call_line": 1060, "calls": "IncKvSubscriberReconnect" },
+     { "symbol": "rebuildKvSubscriber", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1121, "call_line": 1167, "calls": "incKvReconnectIfLive" },
+     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 743, "call_line": 831, "calls": "rebuildKvSubscriber", "note": "the loop retries the rebuild until it succeeds, so one publisher outage produces one increment per successful redial, not one per attempt" },
      { "tail": "kv-subscriber-rule-config" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:1161. WP-6 owns the injected kill/restart proof; scenario M12."
@@ -3035,8 +3090,8 @@
     "activation_precondition": "a KV-exact rule whose ZMQ receive failed; normal traffic never increments it, so WP-6 must inject the fault.",
     "writer_sources": [
      { "symbol": "IncKvSubscriberRecvError", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1571, "writes": "kvSubscriberRecvErrorTotal" },
-     { "symbol": "incKvRecvErrorIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1057, "call_line": 1063, "calls": "IncKvSubscriberRecvError" },
-     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 737, "call_line": 812, "calls": "incKvRecvErrorIfLive" },
+     { "symbol": "incKvRecvErrorIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1063, "call_line": 1069, "calls": "IncKvSubscriberRecvError" },
+     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 743, "call_line": 818, "calls": "incKvRecvErrorIfLive" },
      { "tail": "kv-subscriber-rule-config" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:812, the receive-error branch of the subscriber loop. Scenario M12 owns the injected proof."
@@ -3046,8 +3101,8 @@
     "activation_precondition": "a malformed or mismatched KV frame on a KV-exact rule; a well-formed publisher leaves this at zero by construction.",
     "writer_sources": [
      { "symbol": "IncKvSubscriberWireReject", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1578, "writes": "kvSubscriberWireRejectTotal" },
-     { "symbol": "incKvWireRejectIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1069, "call_line": 1075, "calls": "IncKvSubscriberWireReject" },
-     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 737, "call_line": 937, "calls": "incKvWireRejectIfLive", "note": "reason-labelled; the rank-mismatch reason is raised separately at :949" },
+     { "symbol": "incKvWireRejectIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1075, "call_line": 1081, "calls": "IncKvSubscriberWireReject" },
+     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 743, "call_line": 943, "calls": "incKvWireRejectIfLive", "note": "reason-labelled; the rank-mismatch reason is raised separately at :949" },
      { "tail": "kv-subscriber-rule-config" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): two reject branches at pkg/loxinet/ai_kv_subscriber.go:937 and :949. Scenario M12 owns the malformed-frame proof."
@@ -3057,8 +3112,8 @@
     "activation_precondition": "a KV-exact rule with a live subscriber: the gauge is set to 0 on every path that invalidates freshness and to 1 only after an accepted event, so it has no child until a subscriber runs for that endpoint.",
     "writer_sources": [
      { "symbol": "SetKvInventoryFresh", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1559, "writes": "kvInventoryFresh" },
-     { "symbol": "setKvInventoryFreshIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1096, "call_line": 1102, "calls": "SetKvInventoryFresh" },
-     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 737, "call_line": 970, "calls": "setKvInventoryFreshIfLive", "note": "the only site that sets 1; five other sites (:770, :875, :906, :927, :991) clear it, so freshness is asserted by a single positive edge" },
+     { "symbol": "setKvInventoryFreshIfLive", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1102, "call_line": 1108, "calls": "SetKvInventoryFresh" },
+     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 743, "call_line": 976, "calls": "setKvInventoryFreshIfLive", "note": "the only site that sets 1; five other sites (:770, :875, :906, :927, :991) clear it, so freshness is asserted by a single positive edge" },
      { "tail": "kv-subscriber-rule-config" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): six call sites in the subscriber loop, one positive. Scenario M08 owns the runtime proof."
@@ -3069,7 +3124,7 @@
     "writer_sources": [
      { "symbol": "IncKvInventoryCapHit", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1587, "writes": "kvInvCapEvictionsTotal" },
      { "symbol": "AddBlocks", "kind": "method", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 166, "call_line": 198, "calls": "IncKvInventoryCapHit", "receiver": "kvInventory", "note": "evicted count comes from the ring insert, so one call can record many evictions" },
-     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 737, "call_line": 965, "calls": "AddBlocks" },
+     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 743, "call_line": 971, "calls": "AddBlocks" },
      { "tail": "kv-subscriber-rule-config" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:198. WP-5 owns the cap-flood proof."
@@ -3081,7 +3136,7 @@
      { "symbol": "SetKvBlocksGauge", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1307, "writes": "pdKvBlocks" },
      { "symbol": "setBlocksGauge", "kind": "method", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 218, "call_line": 222, "calls": "SetKvBlocksGauge", "receiver": "kvInventory" },
      { "symbol": "AddBlocks", "kind": "method", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 166, "call_line": 204, "calls": "setBlocksGauge", "receiver": "kvInventory", "note": "StartKvMetricsBridge (:2273) republishes the same gauge from the bridge goroutine for inventories it owns; eviction (:239) and clear (:258) set it event-driven too" },
-     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 737, "call_line": 965, "calls": "AddBlocks" },
+     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 743, "call_line": 971, "calls": "AddBlocks" },
      { "tail": "kv-subscriber-rule-config" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:222 and the bridge at :2273. Scenario M08 owns the runtime proof (inventory 716/716/716 was read from this family's exposition on 2026-09-10, but that run is EVIDENCE-PARTIAL per section E.5.1)."
@@ -3091,8 +3146,8 @@
     "activation_precondition": "a KV-exact rule with at least one endpoint registered: the info gauge is published when a subscriber rank starts and cleared when it stops.",
     "writer_sources": [
      { "symbol": "SetKvEpInfo", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1337, "writes": "pdEpInfo", "note": "ClearKvEpInfo (:1215) deletes the child on teardown, so a departed endpoint leaves no stale identity series" },
-     { "symbol": "KvSubscriberStartRank", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1230, "call_line": 1273, "calls": "SetKvEpInfo" },
-     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 3760, "call_line": 5059, "calls": "KvSubscriberStartRank", "receiver": "RuleH" },
+     { "symbol": "KvSubscriberStartRank", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1236, "call_line": 1279, "calls": "SetKvEpInfo" },
+     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 3763, "call_line": 5065, "calls": "KvSubscriberStartRank", "receiver": "RuleH" },
      { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:1273. Scenario M08 owns the runtime proof."
@@ -3111,7 +3166,7 @@
     "activation_precondition": "kvExactMode=1 and a winner that was already over capacity, so the request spilled to another endpoint; ordinary balanced traffic leaves it at zero.",
     "writer_sources": [
      { "symbol": "IncKvTier15SpillCounter", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1321, "writes": "kvTier15SpillsTotal" },
-     { "symbol": "llb_ai_kv_best_worker", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1856, "call_line": 1980, "calls": "IncKvTier15SpillCounter", "entry_point": "cgo-export" }
+     { "symbol": "llb_ai_kv_best_worker", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1862, "call_line": 1986, "calls": "IncKvTier15SpillCounter", "entry_point": "cgo-export" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:1980. WP-5 owns the deliberate over-capacity arm."
    },
@@ -3120,9 +3175,9 @@
     "activation_precondition": "kvExactMode=1 with a cold endpoint eligible for seeding: the seed displaces the scored winner, so it only fires while some endpoint has no inventory yet.",
     "writer_sources": [
      { "symbol": "IncKvTier15ColdSeedCounter", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1329, "writes": "kvTier15ColdSeedsTotal" },
-     { "symbol": "llb_ai_kv_best_worker", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1856, "call_line": 1995, "calls": "kvColdSeedCounterFn", "via": {"var": "kvColdSeedCounterFn", "file": "pkg/loxinet/ai_kv_subscriber.go", "line": 1616}, "entry_point": "cgo-export", "note": "dispatched through a metric seam variable, so a plain name search finds no caller for the writer at all -- the binding is recorded in via and re-checked on every run" }
+     { "symbol": "llb_ai_kv_best_worker", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1862, "call_line": 2001, "calls": "kvColdSeedCounterFn", "via": {"var": "kvColdSeedCounterFn", "file": "pkg/loxinet/ai_kv_subscriber.go", "line": 1622}, "entry_point": "cgo-export", "note": "dispatched through a metric seam variable, so a plain name search finds no caller for the writer at all -- the binding is recorded in via and re-checked on every run" }
     ],
-    "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:1995 through the kvColdSeedCounterFn seam bound at :1616. Scenario M08 owns the runtime proof."
+    "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:2001 through the kvColdSeedCounterFn seam bound at :1622. Scenario M08 owns the runtime proof."
    },
    "loxilb_pd_kv_tier15_miss_reason_total": {
     "status": "conditional-with-proven-writer",
@@ -3138,11 +3193,11 @@
     "activation_precondition": "kvExactMode=1 plus a window of consecutive zero-hit lookups against a NON-empty inventory -- the signature of a block-size or hash-algorithm mismatch. A healthy or empty-inventory service never fires it.",
     "writer_sources": [
      { "symbol": "IncKvZeroHitWatchdog", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1615, "writes": "kvZeroHitWatchdogTotal" },
-     { "symbol": "kvZeroHitWatchdog", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1685, "call_line": 1712, "calls": "kvZeroHitCounterFn", "via": {"var": "kvZeroHitCounterFn", "file": "pkg/loxinet/ai_kv_subscriber.go", "line": 1670}, "note": "dispatched through a metric seam variable, so a plain name search finds no caller for the writer at all -- the binding is recorded in via and re-checked on every run" },
-     { "symbol": "kvSvcScanInventories", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1725, "call_line": 1815, "calls": "kvZeroHitWatchdog" },
-     { "symbol": "llb_ai_kv_best_worker", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1856, "call_line": 1916, "calls": "kvSvcScanInventories", "entry_point": "cgo-export" }
+     { "symbol": "kvZeroHitWatchdog", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1691, "call_line": 1718, "calls": "kvZeroHitCounterFn", "via": {"var": "kvZeroHitCounterFn", "file": "pkg/loxinet/ai_kv_subscriber.go", "line": 1676}, "note": "dispatched through a metric seam variable, so a plain name search finds no caller for the writer at all -- the binding is recorded in via and re-checked on every run" },
+     { "symbol": "kvSvcScanInventories", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1731, "call_line": 1821, "calls": "kvZeroHitWatchdog" },
+     { "symbol": "llb_ai_kv_best_worker", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1862, "call_line": 1922, "calls": "kvSvcScanInventories", "entry_point": "cgo-export" }
     ],
-    "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:1712 through the kvZeroHitCounterFn seam bound at :1670. WP-6 owns the injected zero-hit window."
+    "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:1718 through the kvZeroHitCounterFn seam bound at :1676. WP-6 owns the injected zero-hit window."
    },
    "loxilb_ai_kv_attest_state": {
     "status": "conditional-with-proven-writer",
@@ -3193,7 +3248,7 @@
      { "symbol": "IncKvTrtllmDrainOwnershipFault", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1741, "writes": "kvTrtllmDrainOwnFaultTotal" },
      { "symbol": "kvTrtllmOwnershipObserve", "kind": "func", "file": "pkg/loxinet/ai_kv_trtllm_ownership.go", "def_line": 161, "call_line": 191, "calls": "kvTrtllmOwnFaultMetricFn", "via": {"var": "kvTrtllmOwnFaultMetricFn", "file": "pkg/loxinet/ai_kv_trtllm_ownership.go", "line": 104}, "note": "dispatched through a metric seam variable, so a plain name search finds no caller for the writer at all -- the binding is recorded in via and re-checked on every run; sequence-gap here, ownership-lost at :197" },
      { "symbol": "Decode", "kind": "method", "file": "pkg/loxinet/ai_kv_trtllm_source.go", "def_line": 298, "call_line": 314, "calls": "kvTrtllmOwnershipObserve", "receiver": "trtllmWireDecoder" },
-     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 737, "call_line": 934, "calls": "Decode", "note": "the decoder is held behind the kvWireDecoder interface, so this call site names the method, not the concrete type" },
+     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 743, "call_line": 940, "calls": "Decode", "note": "the decoder is held behind the kvWireDecoder interface, so this call site names the method, not the concrete type" },
      { "tail": "kv-subscriber-rule-config" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_trtllm_ownership.go:191 and :197 through the kvTrtllmOwnFaultMetricFn seam bound at :104. WP-6 owns the invalid-ownership injection; scenario M16 owns the engine tuple."
@@ -3205,7 +3260,7 @@
      { "symbol": "IncKvTrtllmDrainOwnershipHeal", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1746, "writes": "kvTrtllmDrainOwnHealTotal" },
      { "symbol": "kvTrtllmOwnershipObserve", "kind": "func", "file": "pkg/loxinet/ai_kv_trtllm_ownership.go", "def_line": 161, "call_line": 174, "calls": "kvTrtllmOwnHealMetricFn", "via": {"var": "kvTrtllmOwnHealMetricFn", "file": "pkg/loxinet/ai_kv_trtllm_ownership.go", "line": 105}, "note": "dispatched through a metric seam variable, so a plain name search finds no caller for the writer at all -- the binding is recorded in via and re-checked on every run; a second heal site at :127" },
      { "symbol": "Decode", "kind": "method", "file": "pkg/loxinet/ai_kv_trtllm_source.go", "def_line": 298, "call_line": 314, "calls": "kvTrtllmOwnershipObserve", "receiver": "trtllmWireDecoder" },
-     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 737, "call_line": 934, "calls": "Decode" },
+     { "symbol": "runKvSubscriberLoopBinding", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 743, "call_line": 940, "calls": "Decode" },
      { "tail": "kv-subscriber-rule-config" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_trtllm_ownership.go:127 and :174 through the kvTrtllmOwnHealMetricFn seam bound at :105. WP-6 owns the fault-then-recover pair."
@@ -3216,7 +3271,7 @@
     "writer_sources": [
      { "symbol": "SetAiEngineInfo", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1343, "writes": "aiEngineInfo" },
      { "symbol": "LlamacppAdmissionProbe", "kind": "func", "file": "pkg/loxinet/ai_llamacpp_probe.go", "def_line": 161, "call_line": 163, "calls": "SetAiEngineInfo", "note": "publishes engine=\"llamacpp\"; other engines are identified on their own probe paths" },
-     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 3760, "call_line": 5102, "calls": "LlamacppAdmissionProbe", "receiver": "RuleH" },
+     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 3763, "call_line": 5108, "calls": "LlamacppAdmissionProbe", "receiver": "RuleH" },
      { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_llamacpp_probe.go:163. Scenario M16 owns the per-engine proof."
@@ -3227,7 +3282,7 @@
     "writer_sources": [
      { "symbol": "IncLlamacppProbeWarning", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1349, "writes": "llamacppProbeWarnTotal" },
      { "symbol": "LlamacppAdmissionProbe", "kind": "func", "file": "pkg/loxinet/ai_llamacpp_probe.go", "def_line": 161, "call_line": 198, "calls": "IncLlamacppProbeWarning", "note": "one increment per warning kind returned by the probe" },
-     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 3760, "call_line": 5102, "calls": "LlamacppAdmissionProbe", "receiver": "RuleH" },
+     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 3763, "call_line": 5108, "calls": "LlamacppAdmissionProbe", "receiver": "RuleH" },
      { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_llamacpp_probe.go:198. WP-5 owns the known-mismatch arm."

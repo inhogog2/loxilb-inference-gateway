@@ -10530,6 +10530,41 @@ definitions:
               response's first byte comes with the whole completion. 0 or omitted
               leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused)
               in force. Replace and null semantics as fc_max_outstanding.
+          fc_tenant_max_share_pct:
+            type: integer
+            format: int32
+            x-nullable: false
+            minimum: 0
+            maximum: 100
+            default: 0
+            description: >-
+              The most of the service ceiling in force, and of the queue depth,
+              one tenant may hold, in percent (rounded up, at least one). A tenant
+              is the tenant id the request's credential resolved to; requests
+              without one are one tenant. A tenant at its share waits for one of
+              its own units when the pool queues (within its share of the queue),
+              or is refused with 429 admission_tenant_share, while other tenants
+              still admit; waiters held back by their share never make another
+              tenant wait. Inert without fc_max_outstanding. 100 is no share; 0 or
+              omitted leaves the process default (LLB_FC_TENANT_MAX_SHARE_PCT,
+              else no share) in force. Replace and null semantics as
+              fc_max_outstanding.
+          fc_expose_headers:
+            type: string
+            x-nullable: false
+            enum: ["on", "off", "inherit"]
+            description: >-
+              on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and
+              X-Loxilb-Admission-Limit on the head of every admitted inference
+              response (HTTP/1 and HTTP/2, streamed ones included), the same three
+              a capacity refusal carries: the pool's executing units and waiting
+              requests as the response head goes out, and the service ceiling in
+              force (0 is none). Fields of those names from the backend are
+              replaced. off leaves responses as the backend sent them; inherit, or
+              omitted on create, runs on the process default
+              (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or
+              response, where the gateway never sees the response. Replace and
+              null semantics as fc_mode.
           fc_effective:
             type: object
             readOnly: true
@@ -10621,6 +10656,18 @@ definitions:
                 type: integer
                 format: int32
                 description: Endpoints inside their warm-up window.
+              tenant_max_share_pct:
+                type: integer
+                format: int32
+                description: The tenant share in force, in percent; 0 or 100 is no share.
+              tenants_active:
+                type: integer
+                format: int32
+                description: Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.
+              expose_headers:
+                type: string
+                enum: ["on", "off"]
+                description: Whether admitted responses carry the admission headers.
               source:
                 type: object
                 description: >-
@@ -10659,6 +10706,12 @@ definitions:
                     type: string
                     enum: [rule, env, default]
                   ttft_target_ms:
+                    type: string
+                    enum: [rule, env, default]
+                  tenant_max_share_pct:
+                    type: string
+                    enum: [rule, env, default]
+                  expose_headers:
                     type: string
                     enum: [rule, env, default]
           kvExactMode:

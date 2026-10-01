@@ -187,7 +187,7 @@ int proxy_get_qos_stats(proxy_qos_svc_stat_t *out, int max) {
  * second) and must be updated in the same commit as the other two.
  */
 #define PROXY_FC_ROLES 3
-#define PROXY_FC_REASONS 12
+#define PROXY_FC_REASONS 13
 #define PROXY_FC_POOL_LEN 64
 #define PROXY_FC_QWAIT_BUCKETS 8
 #define PROXY_FC_LIMITS 8
@@ -224,20 +224,26 @@ typedef struct proxy_fc_svc_stat {
     uint16_t warming_eps;
     uint64_t adapt_down;
     uint64_t adapt_up;
+    uint32_t tenants_active;
+    uint8_t  tenant_share_pct;
+    uint8_t  src_tenant;
+    uint8_t  expose_headers;
+    uint8_t  src_expose;
 } proxy_fc_svc_stat_t;
 /* Pinned to the layout in sockproxy_metrics.h. */
-_Static_assert(sizeof(proxy_fc_svc_stat_t) == 352, "proxy_fc_svc_stat_t size");
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 368, "proxy_fc_svc_stat_t size");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 136, "pool offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 200, "queued offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 216, "qwait_bucket offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 288, "qwait_count offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, telemetry_stale_ms) == 296, "telemetry_stale_ms offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, src) == 300, "src offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, effective_max_outstanding) == 312, "effective_max_outstanding offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 324, "adaptive offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 330, "warming_eps offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 336, "adapt_down offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 144, "pool offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 208, "queued offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 224, "qwait_bucket offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 296, "qwait_count offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, telemetry_stale_ms) == 304, "telemetry_stale_ms offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, src) == 308, "src offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, effective_max_outstanding) == 320, "effective_max_outstanding offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 332, "adaptive offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 338, "warming_eps offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 344, "adapt_down offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, tenants_active) == 360, "tenants_active offset");
 
 __attribute__((weak))
 int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max) {

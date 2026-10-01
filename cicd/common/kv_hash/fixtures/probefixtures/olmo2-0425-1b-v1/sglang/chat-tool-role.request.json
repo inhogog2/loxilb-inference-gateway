@@ -1,0 +1,1 @@
+{"model": "allenai/OLMo-2-0425-1B-Instruct", "messages": [{"role": "user", "content": "Weather in Seoul?"}, {"role": "assistant", "content": "Checking."}, {"role": "tool", "content": "{\"temp\": 21}"}, {"role": "user", "content": "Thanks"}]}

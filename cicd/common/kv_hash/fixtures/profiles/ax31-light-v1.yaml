@@ -1,0 +1,17 @@
+profileId: ax31-light-v1
+baseModel: skt/A.X-3.1-Light
+modelType: llama
+tokenizerRevision: 9b41bb2406472634d8812c0b8931fa40fa9a6c3a
+tokenizerArtifact: sha256/e3973eceeed921e72d54fbbf597e1bea0a219112a0809ad8eaf62a1754f8ea44
+tokenizerSha256: e3973eceeed921e72d54fbbf597e1bea0a219112a0809ad8eaf62a1754f8ea44
+templateArtifact: sha256/15f2d4a602c42c90a1f03e13fe353510d745422a5c61b9abdefe47d5b77b5113
+templateSha256: 15f2d4a602c42c90a1f03e13fe353510d745422a5c61b9abdefe47d5b77b5113
+templateContentFormat: string
+renderPolicy:
+  addGenerationPrompt: true
+  bosToken: "<|endoftext|>"
+  eosToken: "<|im_end|>"
+supportedApis:
+  - completions
+  - chat
+aliasPolicy: base_model_only

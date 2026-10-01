@@ -1,0 +1,17 @@
+profileId: olmo2-0425-1b-v1
+baseModel: allenai/OLMo-2-0425-1B-Instruct
+modelType: olmo2
+tokenizerRevision: 48d788eca847d4d7548f375ad03d3c9312f6139e
+tokenizerArtifact: sha256/73fd5254624f39a88e3faac6a8e11300fc3c735ed37880d4f4f08db898eaecca
+tokenizerSha256: 73fd5254624f39a88e3faac6a8e11300fc3c735ed37880d4f4f08db898eaecca
+templateArtifact: sha256/fe689ffbd6a4e2d0532d7480696b065b10e0e1eff3f9b9fc4bea415761e4bf4a
+templateSha256: fe689ffbd6a4e2d0532d7480696b065b10e0e1eff3f9b9fc4bea415761e4bf4a
+templateContentFormat: string
+renderPolicy:
+  addGenerationPrompt: true
+  bosToken: "<|endoftext|>"
+  eosToken: "<|endoftext|>"
+supportedApis:
+  - completions
+  - chat
+aliasPolicy: base_model_only

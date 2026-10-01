@@ -3239,6 +3239,9 @@ func kvExactRuntimeValidate(engine string, kvExactMode uint8, modelName, apiMode
 		if wantChat && (deps.chatRenderer == nil || !deps.chatRenderer(modelName)) {
 			return res, fmt.Errorf("profile %q declares chat for model %q but no validated chat renderer is available — refusing rather than falling back to an untemplated hash", profileID, modelName)
 		}
+		if r := kvChatEngineRenderer(p, eng); wantChat && r.name != "" {
+			return res, fmt.Errorf("profile %q (model_type %q) declares chat, but engine %q renders this model's chat with %s, not the chat template — a strict chat surface would hash a prompt the engine never builds; declare kvExactApiMode completions%s", profileID, p.ModelType, eng, r.name, r.alt)
+		}
 		ref, err := deps.contractRef(eng)
 		if err != nil {
 			return res, fmt.Errorf("strict KV-exact rule requires a resolvable engine contract for %q: %w", eng, err)
@@ -4195,6 +4198,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	sockMapCode, err = lbSockMapL7Code(&serv, sockMapCode, nextApiKeyAuth, l7Attached)
 	if err != nil {
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+	}
+	if err := fcExposeSockMapErr(&serv, nextFcCfg, sockMapCode); err != nil {
+		return RuleArgsErr, err
 	}
 	if err := resolveCHWBLContract(&serv, eRule, lBActs.endPoints); err != nil {
 		return RuleUnknownServiceErr, err
@@ -6632,6 +6638,8 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.FcAdaptive = r.fcCfg.adaptive
 	nWork.FcWarmupMs = r.fcCfg.warmupMs
 	nWork.FcTtftTargetMs = r.fcCfg.ttftTargetMs
+	nWork.FcTenantSharePct = uint8(r.fcCfg.tenantSharePct)
+	nWork.FcExposeHeaders = r.fcCfg.exposeHeaders
 	nWork.CbEnable = r.cbEnable
 	nWork.KvExactMode = r.kvExactMode // KV-cache exact routing
 	nWork.KvBlockSize = r.kvBlockSize

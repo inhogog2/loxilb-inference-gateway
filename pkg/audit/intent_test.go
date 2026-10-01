@@ -18,9 +18,13 @@ package audit
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/loxilb-io/loxilb/pkg/logrotate"
 )
 
 func mgmtPair(w *Writer, id string) (*Record, *Record) {
@@ -140,6 +144,80 @@ func TestOrphanScanIgnoresOwnBootAndEmptyDir(t *testing.T) {
 		}
 	}
 	if s := w.Stats(); s.OrphanedIntents != 0 {
+		t.Fatalf("stats %+v", s)
+	}
+}
+
+// The next boot starts the compression worker on the segment it has just
+// recovered and then scans for orphans, so the scan can list X.jsonl and
+// find only X.jsonl.gz when it opens it. That segment is still scanned:
+// the orphan it holds is reported, not lost with the rename.
+func TestOrphanScanReadsASegmentCompressedAfterListing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "audit")
+	w1, err := New(Config{Dir: dir, CreateDir: true, InstanceID: "i"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w1.Start()
+	waitFor(t, "writer running", w1.Running)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	orphanIn, _ := mgmtPair(w1, "orphan-1")
+	if err := w1.Write(ctx, orphanIn); err != nil {
+		t.Fatal(err)
+	}
+	if err := w1.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// The state the scan meets after losing the race: every segment of
+	// the previous boot exists only compressed, under the name it was
+	// listed by plus .gz.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed []string
+	for _, e := range entries {
+		if _, gz, ok := parseSegmentName(e.Name()); ok {
+			p := filepath.Join(dir, e.Name())
+			if !gz {
+				if err := logrotate.GzipFile(p, fileMode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			listed = append(listed, strings.TrimSuffix(p, gzipExt))
+		}
+	}
+	if len(listed) == 0 {
+		t.Fatal("the first boot left no sealed segment")
+	}
+
+	w2, err := New(Config{Dir: dir, InstanceID: "i"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := map[string]struct{}{}
+	var order []string
+	for _, p := range listed {
+		if _, err := os.Stat(p); err == nil {
+			t.Fatalf("%s still exists uncompressed", p)
+		}
+		if hdr, ok := readSegmentHeader(p); !ok || hdr.BootID == "" {
+			t.Fatalf("header of %s not read through its .gz name", p)
+		}
+		w2.scanOrphanFile(p, open, &order)
+	}
+	if _, still := open["orphan-1"]; !still || len(order) != 1 {
+		t.Fatalf("scan of the compressed segment found %v (open %v)", order, open)
+	}
+
+	w2.Start()
+	waitFor(t, "writer running", w2.Running)
+	if err := w2.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s := w2.Stats(); s.OrphanedIntents != 1 || s.LastOrphanEventID != "orphan-1" {
 		t.Fatalf("stats %+v", s)
 	}
 }

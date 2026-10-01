@@ -11,13 +11,24 @@ one-tokenizer-path invariant the goldens proved), and the banked template
 artifact must still hash to the goldens' template_sha256: fixtures derived
 from drifted inputs would pin a parity the executor can no longer reproduce.
 
-Usage: gen_chat_probe_fixtures.py <fixtures_dir> <model_slug> <out_dir>
+The optional goldens file selects the oracle (default: the banked-model
+goldens; kv_chat_render_candidates.json for candidate models). A case the
+template itself refuses (`error`) has no token array to pin and is skipped
+by name. A template that reads the clock renders the current date, so its
+token array holds only at the instant the goldens were rendered: each chat
+fixture of such a template pins that instant as "oracleNow" (the goldens'
+frozen_now, read as UTC), and the attestor re-derives today's ids through
+the gateway's own render while checking the banked ids at oracleNow. Goldens
+without a frozen_now cannot pin one, so a clock template is refused there.
+
+Usage: gen_chat_probe_fixtures.py <fixtures_dir> <model_slug> <out_dir> [goldens.json]
 """
-import hashlib, json, os, sys
+import datetime, hashlib, json, os, sys
 
 fixtures_dir, slug, out_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+goldens = sys.argv[4] if len(sys.argv) > 4 else "kv_chat_render_parity.json"
 
-with open(os.path.join(fixtures_dir, "kv_chat_render_parity.json")) as f:
+with open(os.path.join(fixtures_dir, goldens)) as f:
     parity = json.load(f)
 with open(os.path.join(fixtures_dir, "templates", "SOURCES.json")) as f:
     sources = json.load(f)
@@ -32,8 +43,33 @@ if tpl_sha != model["template_sha256"]:
     sys.exit(f"banked template {tpl_path} digest {tpl_sha} != goldens' "
              f"{model['template_sha256']} — regenerate the goldens first")
 
+# At least one fixture must open without a system message: a template that
+# injects a default system prompt renders that request differently from an
+# engine renderer that does not (mistral_common), and only such a fixture lets
+# the attestation probe see it.
+if not any(c["messages"] and c["messages"][0]["role"] != "system"
+           for c in model["cases"].values()):
+    sys.exit(f"{slug}: every case opens with a system message — the fixture "
+             "set could not detect an engine that skips the template's "
+             "default system prompt")
+
+oracle_now = None
+with open(tpl_path, encoding="utf-8") as f:
+    if "strftime_now" in f.read():
+        frozen = parity.get("frozen_now")
+        if not frozen:
+            sys.exit(f"{slug}: template reads strftime_now but {goldens} records "
+                     "no frozen_now — no instant to pin the token arrays to")
+        at = datetime.datetime.fromisoformat(frozen)
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=datetime.timezone.utc)
+        oracle_now = at.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 os.makedirs(out_dir, exist_ok=True)
 for name, case in sorted(model["cases"].items()):
+    if "error" in case:
+        print(f"chat-{name}: SKIPPED — template refuses: {case['error']}")
+        continue
     if not case["encode_rendered_matches_templated"]:
         sys.exit(f"case {name}: goldens record encode(render) != templated ids "
                  "— the invariant this fixture would pin does not hold")
@@ -50,8 +86,11 @@ for name, case in sorted(model["cases"].items()):
         "expectedTokenIds": case["templated_ids"],
         "api": "chat",
     }
+    if oracle_now:
+        exp["oracleNow"] = oracle_now
     with open(os.path.join(out_dir, f"chat-{name}.request.json"), "wb") as f:
         f.write(req)
     with open(os.path.join(out_dir, f"chat-{name}.expect.json"), "w") as f:
         json.dump(exp, f, indent=1)
-    print(f"chat-{name}: {len(case['templated_ids'])} tokens")
+    print(f"chat-{name}: {len(case['templated_ids'])} tokens"
+          + (f" (oracleNow {oracle_now})" if oracle_now else ""))

@@ -41,6 +41,9 @@ const FcWarmupMsMax = 3600000
 // FcTtftTargetMsMax bounds a rule's TTFT target (an hour).
 const FcTtftTargetMsMax = 3600000
 
+// FcTenantMaxSharePctMax bounds a rule's tenant share, a percentage.
+const FcTenantMaxSharePctMax = 100
+
 // The data plane's encoding of a rule's adaptive switch (enum
 // fc_rule_adaptive), shifted like the mode so a rule can say "off" under an
 // environment that has it on.
@@ -64,6 +67,22 @@ func FcAdaptiveToRule(v string) (uint8, error) {
 	}
 	return 0, NewValidationError("fc_adaptive",
 		"fc_adaptive must be one of on, off or inherit")
+}
+
+// FcExposeHeadersToRule maps a rule's fc_expose_headers to the data plane's
+// encoding (enum fc_rule_expose), shifted like the adaptive switch. Empty and
+// "inherit" both mean the process default; anything else is refused.
+func FcExposeHeadersToRule(v string) (uint8, error) {
+	switch v {
+	case "", "inherit":
+		return FcRuleAdaptiveInherit, nil
+	case "off":
+		return FcRuleAdaptiveOff, nil
+	case "on":
+		return FcRuleAdaptiveOn, nil
+	}
+	return 0, NewValidationError("fc_expose_headers",
+		"fc_expose_headers must be one of on, off or inherit")
 }
 
 // FcAdaptiveFromRule is FcAdaptiveToRule's inverse for the read-back: the

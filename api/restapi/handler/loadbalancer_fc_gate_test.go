@@ -100,6 +100,11 @@ func TestFcGateCreateRefusedBeforeRuleHook(t *testing.T) {
 		{"a warm-up window above an hour", `,"fc_warmup_ms":3600001`},
 		{"a negative TTFT target", `,"fc_ttft_target_ms":-1`},
 		{"a TTFT target above an hour", `,"fc_ttft_target_ms":3600001`},
+		{"null tenant share", `,"fc_tenant_max_share_pct":null`},
+		{"a negative tenant share", `,"fc_tenant_max_share_pct":-1`},
+		{"a tenant share above 100", `,"fc_tenant_max_share_pct":101`},
+		{"null admission headers switch", `,"fc_expose_headers":null`},
+		{"an admission headers switch not on, off or inherit", `,"fc_expose_headers":"yes"`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			stub := &stubLbAddHook{}
@@ -262,6 +267,66 @@ func TestFcAdaptCreateCopiesDeclaration(t *testing.T) {
 			if s.FcAdaptivePresent != c.adPrsnt || s.FcWarmupMsPresent != c.present ||
 				s.FcTtftTargetMsPresent != c.present {
 				t.Fatalf("presence %v/%v/%v", s.FcAdaptivePresent, s.FcWarmupMsPresent, s.FcTtftTargetMsPresent)
+			}
+		})
+	}
+}
+
+// The tenant share reaches the rule layer as declared, with its presence
+// bit, like the rest of the gate.
+func TestFcTenantShareCreateCopiesDeclaration(t *testing.T) {
+	prev := ApiHooks
+	defer func() { ApiHooks = prev }()
+
+	for _, c := range []struct {
+		name, field string
+		pct         uint32
+		present     bool
+	}{
+		{"declared", `,"fc_tenant_max_share_pct":30`, 30, true},
+		{"omitted", ``, 0, false},
+		{"explicit zero", `,"fc_tenant_max_share_pct":0`, 0, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stub := &stubLbAddHook{}
+			ApiHooks = stub
+			ConfigPostLoadbalancer(connectionLimitCreateParams(t, sprintfBody(connectionLimitCreateBody, c.field)), nil)
+			if stub.captured == nil {
+				t.Fatal("never reached the rule layer")
+			}
+			s := stub.captured.Serv
+			if s.FcTenantMaxSharePct != c.pct || s.FcTenantMaxSharePctPresent != c.present {
+				t.Fatalf("reached the rule layer as %d (present %v)", s.FcTenantMaxSharePct, s.FcTenantMaxSharePctPresent)
+			}
+		})
+	}
+}
+
+// The admission headers switch reaches the rule layer as declared, with its
+// presence bit, like the adaptive switch.
+func TestFcExposeHeadersCreateCopiesDeclaration(t *testing.T) {
+	prev := ApiHooks
+	defer func() { ApiHooks = prev }()
+
+	for _, c := range []struct {
+		name, field, want string
+		present           bool
+	}{
+		{"on", `,"fc_expose_headers":"on"`, "on", true},
+		{"off", `,"fc_expose_headers":"off"`, "off", true},
+		{"inherit", `,"fc_expose_headers":"inherit"`, "inherit", true},
+		{"omitted", ``, "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stub := &stubLbAddHook{}
+			ApiHooks = stub
+			ConfigPostLoadbalancer(connectionLimitCreateParams(t, sprintfBody(connectionLimitCreateBody, c.field)), nil)
+			if stub.captured == nil {
+				t.Fatal("never reached the rule layer")
+			}
+			s := stub.captured.Serv
+			if s.FcExposeHeaders != c.want || s.FcExposeHeadersPresent != c.present {
+				t.Fatalf("reached the rule layer as %q (present %v)", s.FcExposeHeaders, s.FcExposeHeadersPresent)
 			}
 		})
 	}

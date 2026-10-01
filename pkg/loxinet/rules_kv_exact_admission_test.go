@@ -264,6 +264,79 @@ func TestKvExactAdmissionChatRefusal(t *testing.T) {
 	}
 }
 
+// TestKvExactAdmissionHarmonyChatRefusal: vLLM and TRT-LLM render gpt_oss
+// chat with the Harmony encoder, not the chat template the gateway executes,
+// while their /tokenize still uses the template — so no probe can catch the
+// mismatch and admission must refuse the strict chat surface on them.
+// SGLang renders the template and is admitted; completions are unaffected.
+func TestKvExactAdmissionHarmonyChatRefusal(t *testing.T) {
+	p := testProfile([]string{"chat", "completions"}, KvAliasPolicyBaseModelOnly, nil)
+	p.BaseModel = "openai/gpt-oss-20b"
+	p.ModelType = kvModelTypeGptOss
+	deps := admissionDeps(func(d *kvExactAdmissionDeps) {
+		d.profileByID = func(id string) (*ModelPromptProfile, uint64, bool) { return p, 7, id == p.ProfileID }
+	})
+	for _, eng := range []string{"", "vllm", "trtllm", "llamacpp"} {
+		for _, mode := range []string{"", KvExactApiChat, KvExactApiBoth} {
+			_, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, mode, p.ProfileID, deps)
+			if err == nil || !strings.Contains(err.Error(), "Harmony") {
+				t.Fatalf("engine %q api %q: gpt_oss strict chat must be refused, got %v", eng, mode, err)
+			}
+		}
+		if _, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, KvExactApiCompletions, p.ProfileID, deps); err != nil {
+			t.Fatalf("engine %q: gpt_oss completions must stay admitted: %v", eng, err)
+		}
+	}
+	res, err := kvExactRuntimeValidate("sglang", 3, p.BaseModel, "", p.ProfileID, deps)
+	if err != nil || !res.APIChat {
+		t.Fatalf("sglang renders gpt_oss chat with the template: want chat admitted, got %+v %v", res, err)
+	}
+	// Any other model type keeps its chat surface on every engine.
+	q := testProfile([]string{"chat"}, KvAliasPolicyBaseModelOnly, nil)
+	q.ModelType = "qwen3"
+	depsQ := admissionDeps(func(d *kvExactAdmissionDeps) {
+		d.profileByID = func(id string) (*ModelPromptProfile, uint64, bool) { return q, 7, id == q.ProfileID }
+	})
+	for _, eng := range []string{"vllm", "trtllm"} {
+		if _, err := kvExactRuntimeValidate(eng, 3, q.BaseModel, KvExactApiChat, q.ProfileID, depsQ); err != nil {
+			t.Fatalf("engine %s: qwen3 chat must be admitted: %v", eng, err)
+		}
+	}
+}
+
+// TestKvExactAdmissionMistralCommonChatRefusal: vLLM and SGLang render
+// mistral3 chat with mistral_common (Ministral-3 measured: no default system
+// prompt, so a user-first request is 10 ids at vLLM and 19 at SGLang, which
+// also adds a second BOS, against 533 from the template) — admission refuses
+// the strict chat surface on both, the default engine included. Completions
+// stay admitted, and TRT-LLM, which renders the template, is untouched.
+func TestKvExactAdmissionMistralCommonChatRefusal(t *testing.T) {
+	p := testProfile([]string{"chat", "completions"}, KvAliasPolicyBaseModelOnly, nil)
+	p.BaseModel = "mistralai/Ministral-3-3B-Instruct-2512"
+	p.ModelType = kvModelTypeMistral3
+	deps := admissionDeps(func(d *kvExactAdmissionDeps) {
+		d.profileByID = func(id string) (*ModelPromptProfile, uint64, bool) { return p, 7, id == p.ProfileID }
+	})
+	for _, eng := range []string{"", "vllm", "sglang"} {
+		for _, mode := range []string{"", KvExactApiChat, KvExactApiBoth} {
+			_, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, mode, p.ProfileID, deps)
+			if err == nil || !strings.Contains(err.Error(), "mistral_common") {
+				t.Fatalf("engine %q api %q: mistral3 strict chat must be refused, got %v", eng, mode, err)
+			}
+			if eng != "sglang" && strings.Contains(err.Error(), "sglang") {
+				t.Fatalf("engine %q: the refusal must not point at another engine as a remedy: %v", eng, err)
+			}
+		}
+		if _, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, KvExactApiCompletions, p.ProfileID, deps); err != nil {
+			t.Fatalf("engine %q: mistral3 completions must stay admitted: %v", eng, err)
+		}
+	}
+	res, err := kvExactRuntimeValidate("trtllm", 3, p.BaseModel, "", p.ProfileID, deps)
+	if err != nil || !res.APIChat {
+		t.Fatalf("engine trtllm: mistral3 chat renders the template there and must stay admitted, got %+v %v", res, err)
+	}
+}
+
 // TestKvExactAdmissionFailClosedWithoutContractSource: strict admission with
 // no engine-contract registry registered must refuse — never compose a
 // binding over an unproven contract identity.

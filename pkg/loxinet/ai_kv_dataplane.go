@@ -26,8 +26,10 @@ package loxinet
 // C guard path falls back to Tier-2 regardless of C-side state.
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -430,6 +432,9 @@ func kvBridgeTokenize(svcID, bindingGen uint32, text, model string, max int) ([]
 	if text == "" || model == "" || max <= 0 {
 		return nil, KvTokErrRequest
 	}
+	if rc := kvBridgeNulGuard(text, bindingGen != 0); rc != 0 {
+		return nil, rc
+	}
 	// Raw completions prompt: encode with specials so the id stream matches
 	// vLLM's add_special_tokens=True completions tokenization (BOS included
 	// on tokenizers that declare one).
@@ -443,6 +448,22 @@ func kvBridgeTokenize(svcID, bindingGen uint32, text, model string, max int) ([]
 		return nil, KvTokErrRequest
 	}
 	return tokens, 0
+}
+
+// kvBridgeNulGuard refuses text carrying a NUL byte (a JSON "\u0000"
+// escape decodes to one). The tokenizer binding hands the text to Rust as a C
+// string, so everything after the NUL would be silently dropped and the
+// gateway would hash a prefix of what the engine tokenizes. Request-class on
+// both paths: strict rules report UNSUPPORTED, legacy rules the generic
+// request failure they already return for unusable input.
+func kvBridgeNulGuard(text string, strict bool) int {
+	if strings.IndexByte(text, 0) < 0 {
+		return 0
+	}
+	if strict {
+		return KvTokErrUnsupported
+	}
+	return KvTokErrRequest
 }
 
 // kvBridgeRuntimeFault forwards a strict path's runtime-fault code and kicks
@@ -473,19 +494,48 @@ func kvBridgeTokenizeChat(svcID, bindingGen uint32, body, model string, max int)
 		return nil, KvTokErrRequest
 	}
 	if strict {
-		if feature := kvChatExcludedFeature(body); feature != "" {
+		// No profile leaves the engine default (true) to compare against;
+		// the render below then faults on the missing renderer anyway.
+		addGen := true
+		e, hasProfile := kvProfileByModel(model)
+		if hasProfile {
+			addGen = e.Profile.RenderPolicy.AddGenerationPrompt
+		}
+		if feature := kvChatExcludedFeature(body, addGen); feature != "" {
 			return nil, KvTokErrUnsupported
 		}
+		if hasProfile {
+			if feature := kvChatTemplateFeature(body, string(e.TemplateBytes)); feature != "" {
+				return nil, KvTokErrUnsupported
+			}
+		}
 	}
-	rendered, ok := kvRenderChatTemplate(model, msgs)
-	if !ok || rendered == "" {
-		if strict {
+	// One instant for every render of this request: a date-printing template
+	// rendered twice across midnight must not look shape-dependent.
+	now := kvChatClock()
+	clock := func() time.Time { return now }
+	rendered, err := kvRenderChatTemplateReq(model, msgs, clock)
+	if err != nil {
+		if !strict {
+			return nil, KvTokErrRequest
+		}
+		if errors.Is(err, errKvNoChatRenderer) {
 			// Admission refuses a declared chat surface without a validated
 			// renderer, so a strict rule reaching this branch means the
 			// renderer itself failed.
 			return nil, kvBridgeRuntimeFault(svcID, KvTokErrRenderer)
 		}
-		return nil, KvTokErrRequest
+		// The validated template refused these messages: request-class,
+		// never readiness-affecting (I-12).
+		return nil, KvTokErrUnsupported
+	}
+	if strict && kvChatContentShapeDependent(model, body, msgs, rendered, clock) {
+		// The engine's prompt depends on the content shape it hands the
+		// template: request-class, like the refusals above.
+		return nil, KvTokErrUnsupported
+	}
+	if rc := kvBridgeNulGuard(rendered, strict); rc != 0 {
+		return nil, rc
 	}
 	// Chat-rendered text: the template already carries its special tokens and
 	// vLLM encodes the render with add_special_tokens=False.

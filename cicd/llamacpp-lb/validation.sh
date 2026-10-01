@@ -131,12 +131,20 @@ fallback_count() {  # [PREFIX_USER_FALLBACK] receipts in the dp log so far
   $dexec llb1 sh -c "n=\$(grep -c 'PREFIX_USER_FALLBACK' /var/log/loxilbdp.log 2>/dev/null); echo \${n:-0}"
 }
 
-post_neg() {  # post_neg <json> — expect the rule POST to be REJECTED
+post_neg() {  # post_neg <json> <sentence> [<sentence2>] — expect the rule POST to be REJECTED by the check that
+  # owns <sentence> (and <sentence2>, when one fragment alone is shared by several refusals)
+  # A non-2xx status alone proves nothing about WHICH check refused: an earlier generic shape check can refuse
+  # the body before the llamacpp guard is ever reached, and the assert would stay green with the guard deleted.
   local out
-  out=$($hexec llb1 curl -s -o /dev/null -w '%{http_code}' \
+  out=$($hexec llb1 curl -s -w '\nHTTPSTATUS:%{http_code}' \
     -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
     -H 'Content-Type: application/json' -d "$1" 2>/dev/null)
-  [ "$out" != "200" ] && [ "$out" != "204" ]
+  local st; st=$(status_of "$out")
+  if [ "$st" = "200" ] || [ "$st" = "204" ] || ! echo "$out" | grep -qF "$2" || \
+     { [ -n "${3:-}" ] && ! echo "$out" | grep -qF "$3"; }; then
+    echo "    refusal: HTTP $st $(echo "$out" | grep -v HTTPSTATUS: | head -c 300)"
+    return 1
+  fi
 }
 
 # clean knob slate + cold mock prefix stores — makes the suite rerun-safe
@@ -152,18 +160,25 @@ echo "$LBS" | grep -q '"port":2044' && echo "$LBS" | grep -q '"kvEngineType":"ll
   echo "$LBS" | grep -q '"port":2045'
 check "A1: llamacpp typed rules :2044 (CHWBL) + :2045 (RR+session) accepted and listed" $?
 
-NEG_BASE='{"serviceArguments":{"externalIP":"'"$VIP"'","port":2099,"protocol":"tcp","sel":8,"mode":4,"kvEngineType":"llamacpp","host":"'"$VIP"'"ARGS},"endpoints":[{"endpointIP":"31.31.31.1","targetPort":8085,"weight":1},{"endpointIP":"32.32.32.1","targetPort":8085,"weight":1}]}'
-post_neg "$(echo "$NEG_BASE" | sed 's/ARGS/,"kvExactMode":1/')"
-check "A2: llamacpp + kvExactMode rejected (no KV event plane)" $?
-post_neg "$(echo "$NEG_BASE" | sed 's/ARGS/,"pd_disagg_mode":true/')"
-check "A3: llamacpp + pd_disagg_mode rejected (no P/D)" $?
-post_neg "$(echo "$NEG_BASE" | sed 's/ARGS/,"kvZmqPort":5561/')"
-check "A4: llamacpp + non-default kvZmqPort rejected" $?
-post_neg "$(echo "$NEG_BASE" | sed 's/ARGS/,"kvDpRankCount":2/')"
-check "A5: llamacpp + kvDpRankCount>1 rejected" $?
-post_neg "$(echo "$NEG_BASE" | sed 's/ARGS/,"kvBlockSize":32/')"
-check "A6: llamacpp + non-default kvBlockSize rejected" $?
-post_neg "$(echo "$NEG_BASE" | sed 's/ARGS/,"kvHashAlgo":"sha256_cbor"/')"
+NEG_BASE='{"serviceArguments":{"externalIP":"'"$VIP"'","port":2099,"protocol":"tcp","sel":8,"mode":4,"kvEngineType":"llamacpp","host":"'"$VIP"'"ARGS},"endpoints":[{"endpointIP":"31.31.31.1","targetPort":8085,"weight":1EP1},{"endpointIP":"32.32.32.1","targetPort":8085,"weight":1EP2}]}'
+neg_body() { echo "$NEG_BASE" | sed -e "s/ARGS/$1/" -e "s/EP1/${2:-}/" -e "s/EP2/${3:-}/"; }
+# Each body is otherwise valid for the check it aims at: kvExactMode=3 (single pool) with a model_name passes the
+# shape checks that refuse mode 1 without P/D, and the P/D body carries one prefill and one decode endpoint, so
+# only the llamacpp guard can refuse them.
+post_neg "$(neg_body ',"kvExactMode":3,"model_name":"llamacpp-guard-probe"')" \
+  "kvExactMode is unsupported for kv-engine-type llamacpp"
+check "A2: llamacpp + kvExactMode rejected by the llamacpp guard (no KV event plane)" $?
+post_neg "$(neg_body ',"pd_disagg_mode":true' ',"ep_role":1' ',"ep_role":2')" \
+  "pd_disagg_mode is unsupported for kv-engine-type llamacpp"
+check "A3: llamacpp + pd_disagg_mode rejected by the llamacpp guard (no P/D)" $?
+post_neg "$(neg_body ',"kvZmqPort":5561')" "kvZmqPort is meaningless for kv-engine-type llamacpp"
+check "A4: llamacpp + non-default kvZmqPort rejected by the llamacpp guard" $?
+# The engine-config check refuses rank fan-out for every non-SGLang engine before the llamacpp guard runs.
+post_neg "$(neg_body ',"kvDpRankCount":2')" "kvDpRankCount greater than 1 requires kvEngineType=sglang"
+check "A5: llamacpp + kvDpRankCount>1 rejected (SGLang-only rank fan-out)" $?
+post_neg "$(neg_body ',"kvBlockSize":32')" "kvBlockSize is meaningless for kv-engine-type llamacpp"
+check "A6: llamacpp + non-default kvBlockSize rejected by the llamacpp guard" $?
+post_neg "$(neg_body ',"kvHashAlgo":"sha256_cbor"')" "kv-hash-algo" "(no KV-exact tier; omit it)"
 check "A7: llamacpp + explicit kvHashAlgo rejected (empty coherence row)" $?
 
 ############################################################################

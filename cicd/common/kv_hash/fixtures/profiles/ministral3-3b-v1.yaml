@@ -1,0 +1,17 @@
+profileId: ministral3-3b-v1
+baseModel: mistralai/Ministral-3-3B-Instruct-2512
+modelType: mistral3
+tokenizerRevision: b35d4dfe56c142746f54dbd64f579faab2744308
+tokenizerArtifact: sha256/99cf274236c60277fcfad861a5a1007518687ad06ba8938760f50b55ffa0b1ef
+tokenizerSha256: 99cf274236c60277fcfad861a5a1007518687ad06ba8938760f50b55ffa0b1ef
+templateArtifact: sha256/0701cfbdc2b7d44fdbad104dff604faee4b0543e8247624568777fe465746f9b
+templateSha256: 0701cfbdc2b7d44fdbad104dff604faee4b0543e8247624568777fe465746f9b
+templateContentFormat: openai
+renderPolicy:
+  addGenerationPrompt: true
+  bosToken: "<s>"
+  eosToken: "</s>"
+supportedApis:
+  - completions
+  - chat
+aliasPolicy: base_model_only

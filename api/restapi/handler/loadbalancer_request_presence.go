@@ -223,7 +223,8 @@ func (p *loadbalancerRequestPresence) applyFcQueue(
 // fcGateKeys are the admission gate's rule fields beyond the queue pair.
 var fcGateKeys = []string{"fc_mode", "fc_max_outstanding", "fc_ep_max_inflight",
 	"fc_prefill_max_inflight", "fc_decode_max_inflight", "fc_telemetry_stale_ms",
-	"fc_adaptive", "fc_warmup_ms", "fc_ttft_target_ms"}
+	"fc_adaptive", "fc_warmup_ms", "fc_ttft_target_ms", "fc_tenant_max_share_pct",
+	"fc_expose_headers"}
 
 // validateFcGateFields checks the admission gate's rule fields on their
 // own, like validateFcQueueFields: null is refused, each ceiling is bounded
@@ -244,6 +245,9 @@ func (p *loadbalancerRequestPresence) validateFcGateFields(
 		return err
 	}
 	if _, err := cmn.FcAdaptiveToRule(src.FcAdaptive); err != nil {
+		return err
+	}
+	if _, err := cmn.FcExposeHeadersToRule(src.FcExposeHeaders); err != nil {
 		return err
 	}
 	for _, c := range []struct {
@@ -268,6 +272,9 @@ func (p *loadbalancerRequestPresence) validateFcGateFields(
 	if src.FcTtftTargetMs < 0 || src.FcTtftTargetMs > cmn.FcTtftTargetMsMax {
 		return fmt.Errorf("fc_ttft_target_ms must be within 0..%d", cmn.FcTtftTargetMsMax)
 	}
+	if src.FcTenantMaxSharePct < 0 || src.FcTenantMaxSharePct > cmn.FcTenantMaxSharePctMax {
+		return fmt.Errorf("fc_tenant_max_share_pct must be within 0..%d", cmn.FcTenantMaxSharePctMax)
+	}
 	return nil
 }
 
@@ -285,6 +292,10 @@ func (p *loadbalancerRequestPresence) applyFcGate(
 		dst.FcAdaptive = src.FcAdaptive
 		dst.FcAdaptivePresent = p.svcPresent("fc_adaptive")
 	}
+	if p.svcPresent("fc_expose_headers") || src.FcExposeHeaders != "" {
+		dst.FcExposeHeaders = src.FcExposeHeaders
+		dst.FcExposeHeadersPresent = p.svcPresent("fc_expose_headers")
+	}
 	for _, f := range []struct {
 		key     string
 		v       int32
@@ -298,6 +309,7 @@ func (p *loadbalancerRequestPresence) applyFcGate(
 		{"fc_telemetry_stale_ms", src.FcTelemetryStaleMs, &dst.FcTelemetryStaleMs, &dst.FcTelemetryStaleMsPresent},
 		{"fc_warmup_ms", src.FcWarmupMs, &dst.FcWarmupMs, &dst.FcWarmupMsPresent},
 		{"fc_ttft_target_ms", src.FcTtftTargetMs, &dst.FcTtftTargetMs, &dst.FcTtftTargetMsPresent},
+		{"fc_tenant_max_share_pct", src.FcTenantMaxSharePct, &dst.FcTenantMaxSharePct, &dst.FcTenantMaxSharePctPresent},
 	} {
 		if p.svcPresent(f.key) || f.v != 0 {
 			*f.dst = uint32(f.v)

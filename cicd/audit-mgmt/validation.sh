@@ -16,9 +16,11 @@
 #           names a principal; without it every record says auth=none
 #   T20     a crash between a durable intent and its result is reported at
 #           the next boot as exactly one sys.intent.orphaned, never guessed
-#   T3      the gate fails closed: 503 audit_unavailable through a generated
-#           route, a raw route and a named route, with the authoritative
-#           state unchanged; the un-wedged repeat leaves a pair sharing one
+#   T3      once a probe has observed the wedge (a full filesystem still takes
+#           appends into the active segment's last page), the gate fails
+#           closed: 503 audit_unavailable through a generated route, a
+#           raw route and a named route, with the authoritative state
+#           unchanged; the un-wedged repeat leaves a pair sharing one
 #           event_id
 #   T19     a full audit filesystem is visible on /metrics and in the
 #           operational log while the writer writes nothing, and the
@@ -539,8 +541,26 @@ W0=$(metric_val loxilb_audit_write_failures_total)
 echo "  before the fill: write_failures_total=$W0"
 
 # Fill to the last byte: a page-sized dd leaves the tail of the last page,
-# a byte-sized one closes it. The writer's next append gets ENOSPC.
+# a byte-sized one closes it. That exhausts the free pages, but not the
+# active segment's last page: tmpfs allocates by page, so appends that fit
+# in its unused tail still succeed. The fill alone is therefore not the
+# wedge; the first refused append is.
 docker exec llb1 sh -c "dd if=/dev/zero of=$WEDGE_DIR/fill bs=4096 >/dev/null 2>&1; dd if=/dev/zero of=$WEDGE_DIR/fill2 bs=1 >/dev/null 2>&1; df -k $WEDGE_DIR | tail -n1"
+
+# Drive audited writes into that tail until the gate refuses one. The probe
+# re-enables a key that is already enabled, so one that lands changes no
+# state and leaves T3-2c's oracle intact. How many landed is printed, not
+# scored: it depends on the segment's length when the fill ran.
+PROBES=0; PROBE_LANDED=0; WEDGED=0
+while (( PROBES < 32 )); do
+  PROBES=$((PROBES+1))
+  api PATCH "/config/ai/apikey/$KEY2" "${AUTH[@]}" "${CT[@]}" -d '{"enabled":true}'
+  if [[ "$RESP_CODE" == 503 && "$RESP_BODY" == *audit_unavailable* ]]; then WEDGED=1; break; fi
+  [[ "$RESP_CODE" =~ ^2 ]] || { echo "  FATAL: wedge probe $PROBES answered $RESP_CODE: ${RESP_BODY:0:200}"; echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
+  PROBE_LANDED=$((PROBE_LANDED+1))
+done
+(( WEDGED )) || { echo "  FATAL: the gate never refused within $PROBES probes; the filesystem is not wedged"; echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
+echo "  wedged after $PROBES probe(s); $PROBE_LANDED landed in the last page's slack"
 
 echo ""
 echo "T3: the gate fails closed while the writer cannot append"

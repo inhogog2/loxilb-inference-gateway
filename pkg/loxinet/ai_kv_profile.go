@@ -66,7 +66,17 @@ type KvRenderPolicy struct {
 	// different bytes silently.
 	BosToken string `yaml:"bosToken,omitempty"`
 	EosToken string `yaml:"eosToken,omitempty"`
+	// ClockPolicy declares how a template that prints the current date (it
+	// calls strftime_now) is rendered. The only value is "utc-date": the
+	// gateway renders from its UTC clock, and the engine must run with
+	// TZ=UTC so both sides print the same date. A template that reads
+	// strftime_now without this declaration is refused at publish — the
+	// gateway cannot know which date the engine prints.
+	ClockPolicy string `yaml:"clockPolicy,omitempty"`
 }
+
+// KvClockPolicyUTCDate is the one supported RenderPolicy.ClockPolicy.
+const KvClockPolicyUTCDate = "utc-date"
 
 // Alias policies. "any" is deliberately not a value: an unconstrained alias
 // set would let a request's model string select a template identity the
@@ -129,6 +139,12 @@ type ModelPromptProfile struct {
 	RendererVersion string `yaml:"rendererVersion,omitempty"`
 	OracleEngine    string `yaml:"oracleEngine,omitempty"`
 	OracleVersion   string `yaml:"oracleVersion,omitempty"`
+	// ModelType mirrors the model's config.json "model_type". Engines pick
+	// the chat renderer from it: for "gpt_oss" vLLM and TRT-LLM render chat
+	// with the Harmony encoder, for "mistral3" vLLM and SGLang render it with
+	// mistral_common, instead of the chat template, so admission refuses a
+	// strict chat surface for such a profile on those engines.
+	ModelType string `yaml:"modelType,omitempty"`
 	// SupportedApis declares the request surfaces this profile serves
 	// ("chat", "completions"). Non-empty.
 	SupportedApis []string `yaml:"supportedApis"`
@@ -227,6 +243,14 @@ func (p *ModelPromptProfile) Validate() error {
 		// would silently render different bytes than the engine caches, so
 		// the declaration is required to be explicit and true.
 		return errors.New("kv-profile: chat api requires renderPolicy.addGenerationPrompt: true (the only supported chat render shape)")
+	}
+	switch p.RenderPolicy.ClockPolicy {
+	case "", KvClockPolicyUTCDate:
+	default:
+		return fmt.Errorf("kv-profile: renderPolicy.clockPolicy %q must be %q", p.RenderPolicy.ClockPolicy, KvClockPolicyUTCDate)
+	}
+	if p.RenderPolicy.ClockPolicy != "" && p.TemplateArtifact == "" {
+		return errors.New("kv-profile: renderPolicy.clockPolicy requires templateArtifact")
 	}
 	switch p.AliasPolicy {
 	case KvAliasPolicyBaseModelOnly:

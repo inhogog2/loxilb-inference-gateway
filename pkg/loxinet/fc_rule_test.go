@@ -176,3 +176,120 @@ func TestFcRuleAdaptiveInForce(t *testing.T) {
 		t.Fatal("a rule that switched it on does not adapt")
 	}
 }
+
+// The tenant share follows the replace rules of the rest of the gate and is
+// a percentage: omitted keeps, present replaces, above 100 is refused.
+func TestFcRuleTenantShareOnReplace(t *testing.T) {
+	stored := &ruleEnt{fcCfg: fcRuleCfg{maxOutstanding: 8, tenantSharePct: 25}}
+	for _, c := range []struct {
+		name  string
+		eRule *ruleEnt
+		serv  cmn.LbServiceArg
+		want  fcRuleCfg
+	}{
+		{"create: declared", nil, cmn.LbServiceArg{FcTenantMaxSharePct: 40},
+			fcRuleCfg{tenantSharePct: 40}},
+		{"replace: omitted keeps", stored, cmn.LbServiceArg{FcMaxOutstanding: 9,
+			FcMaxOutstandingPresent: true}, fcRuleCfg{maxOutstanding: 9, tenantSharePct: 25}},
+		{"replace: present replaces", stored, cmn.LbServiceArg{FcTenantMaxSharePct: 100,
+			FcTenantMaxSharePctPresent: true}, fcRuleCfg{maxOutstanding: 8, tenantSharePct: 100}},
+		{"replace: explicit zero inherits", stored,
+			cmn.LbServiceArg{FcTenantMaxSharePctPresent: true}, fcRuleCfg{maxOutstanding: 8}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := fcRuleResolve(c.eRule, &c.serv)
+			if err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if got != c.want {
+				t.Fatalf("resolved %+v, want %+v", got, c.want)
+			}
+		})
+	}
+	_, err := fcRuleResolve(nil, &cmn.LbServiceArg{FcTenantMaxSharePct: cmn.FcTenantMaxSharePctMax + 1})
+	var invalid *cmn.ValidationError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("a share above 100: err=%v, want a validation refusal", err)
+	}
+	var s cmn.LbServiceArg
+	stored.fcCfg.toServ(&s)
+	if s.FcTenantMaxSharePct != 25 {
+		t.Fatalf("read back %d", s.FcTenantMaxSharePct)
+	}
+}
+
+// The admission headers switch follows the adaptive switch's replace rules:
+// omitted keeps, present replaces, "inherit" clears, anything else is refused.
+func TestFcRuleExposeHeadersOnReplace(t *testing.T) {
+	stored := &ruleEnt{fcCfg: fcRuleCfg{maxOutstanding: 8, exposeHeaders: cmn.FcRuleAdaptiveOn}}
+	for _, c := range []struct {
+		name  string
+		eRule *ruleEnt
+		serv  cmn.LbServiceArg
+		want  fcRuleCfg
+	}{
+		{"create: on", nil, cmn.LbServiceArg{FcExposeHeaders: "on"},
+			fcRuleCfg{exposeHeaders: cmn.FcRuleAdaptiveOn}},
+		{"create: off", nil, cmn.LbServiceArg{FcExposeHeaders: "off"},
+			fcRuleCfg{exposeHeaders: cmn.FcRuleAdaptiveOff}},
+		{"replace: omitted keeps", stored, cmn.LbServiceArg{FcMaxOutstanding: 9,
+			FcMaxOutstandingPresent: true},
+			fcRuleCfg{maxOutstanding: 9, exposeHeaders: cmn.FcRuleAdaptiveOn}},
+		{"replace: present replaces", stored, cmn.LbServiceArg{FcExposeHeaders: "off",
+			FcExposeHeadersPresent: true},
+			fcRuleCfg{maxOutstanding: 8, exposeHeaders: cmn.FcRuleAdaptiveOff}},
+		{"replace: inherit clears", stored, cmn.LbServiceArg{FcExposeHeaders: "inherit",
+			FcExposeHeadersPresent: true}, fcRuleCfg{maxOutstanding: 8}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := fcRuleResolve(c.eRule, &c.serv)
+			if err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if got != c.want {
+				t.Fatalf("resolved %+v, want %+v", got, c.want)
+			}
+		})
+	}
+	_, err := fcRuleResolve(nil, &cmn.LbServiceArg{FcExposeHeaders: "yes"})
+	var invalid *cmn.ValidationError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("an unknown switch value: err=%v, want a validation refusal", err)
+	}
+	var s cmn.LbServiceArg
+	stored.fcCfg.toServ(&s)
+	if s.FcExposeHeaders != "on" {
+		t.Fatalf("read back %q", s.FcExposeHeaders)
+	}
+}
+
+// The headers are refused where the kernel may carry the responses, and only
+// there; a restore replay is let through.
+func TestFcExposeSockMapErr(t *testing.T) {
+	on := fcRuleCfg{exposeHeaders: cmn.FcRuleAdaptiveOn}
+	for _, c := range []struct {
+		name    string
+		cfg     fcRuleCfg
+		code    uint8
+		replay  bool
+		refused bool
+	}{
+		{"on, sockmap off", on, 0, false, false},
+		{"on, sockmap both", on, 1, false, true},
+		{"on, sockmap request", on, 2, false, false},
+		{"on, sockmap response", on, 3, false, true},
+		{"off, sockmap both", fcRuleCfg{exposeHeaders: cmn.FcRuleAdaptiveOff}, 1, false, false},
+		{"inherit, sockmap both", fcRuleCfg{}, 1, false, false},
+		{"on, sockmap both, restore", on, 1, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			serv := cmn.LbServiceArg{ServIP: "10.0.0.1", ServPort: 80,
+				SockMapMode: cmn.SockMapCodeToMode(c.code), RestoreReplay: c.replay}
+			err := fcExposeSockMapErr(&serv, c.cfg, c.code)
+			var invalid *cmn.ValidationError
+			if c.refused != (err != nil) || (err != nil && !errors.As(err, &invalid)) {
+				t.Fatalf("err=%v, want refused=%v as a validation error", err, c.refused)
+			}
+		})
+	}
+}

@@ -38,6 +38,9 @@ Request headers that shape the answer:
   X-Test-Reset: 1         drop the connection with a TCP RST, no answer
   X-Test-Forever: 1       with "stream": true, keep sending SSE chunks until
                           the connection dies
+  X-Test-Spoof-Admission: 1
+                          the answer carries X-Loxilb-Admission-Inflight: 999
+                          of its own, which the gateway must replace
 
 The receipt count is the honest oracle for a refused request: from the
 client side a refusal and a forwarded request whose answer was discarded
@@ -102,8 +105,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
+        self._spoof_header()
         self.end_headers()
         self.wfile.write(payload)
+
+    def _spoof_header(self):
+        if getattr(self, "spoof", False):
+            self.send_header("X-Loxilb-Admission-Inflight", "999")
 
     def _enter(self, nonce):
         global INFLIGHT
@@ -152,6 +160,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── routes ─────────────────────────────────────────────────────────────
     def do_GET(self):
+        self.spoof = False
         global WAITING, METRICS_ON
         path = urlparse(self.path).path
         nonce = self.headers.get("X-Test-Nonce", "")
@@ -242,6 +251,7 @@ class Handler(BaseHTTPRequestHandler):
         fail = int(self.headers.get("X-Test-Fail") or 0)
         reset = self.headers.get("X-Test-Reset", "") == "1"
         forever = self.headers.get("X-Test-Forever", "") == "1"
+        self.spoof = self.headers.get("X-Test-Spoof-Admission", "") == "1"
 
         body = self._body()          # read before anything else: a held
         self._enter(nonce)           # request has fully arrived
@@ -279,6 +289,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Transfer-Encoding", "chunked")
+        self._spoof_header()
         self.end_headers()
 
         def chunk(payload):

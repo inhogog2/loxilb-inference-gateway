@@ -17,7 +17,7 @@ an event type is covered.
 | T15 | canary secrets reach no segment (active, sealed, compressed) and no error body | nine canaries the harness sends (proved from its own request log) plus the raw API keys and the OAuth state the gateway minted |
 | T11 | actor conformance | with `--userservice` every successful result names a principal with `auth=session`; without it every record says `auth=none` and names nobody |
 | T20 | a crash between a durable intent and its result is reported at the next boot, never guessed | the store is paused, a user create blocks after its intent, the process is SIGKILLed; boot 2 writes exactly one `sys.intent.orphaned` naming that `event_id`, the counter reads 1, no result exists |
-| T3 | the gate fails closed with the authoritative state unchanged | the audit directory sits on a 1 MiB tmpfs that is filled to the last byte; a generated route, a raw route and a named route answer 503 `audit_unavailable` and the rule table, the key and the account list are unchanged; freed, the same calls leave a pair sharing one `event_id`, intent before result by `seq` |
+| T3 | the gate fails closed with the authoritative state unchanged | the audit directory sits on a 1 MiB tmpfs that is filled to the last byte, then written into with an idempotent audited probe until the gate refuses one (fatal if it never does); a generated route, a raw route and a named route answer 503 `audit_unavailable` and the rule table, the key and the account list are unchanged; freed, the same calls leave a pair sharing one `event_id`, intent before result by `seq` |
 | T-GW-2 | the audit policy, the remote sink and sealing on demand are management changes like any other | a policy replace and an unsatisfiable one; a sink refused for a missing, out-of-range or unreadable argument and one accepted; `POST /audit/rotate` seals the segment the status named and the next record lands in the new one |
 | T-GW-5 | `loxicmd` drives the three audit paths against a live gateway, and its refusals stay local | `get audit-status` on a running writer and on a boot whose audit directory is unusable; `get audit-sink` unconfigured and configured; a set, a replace that proves the endpoint replaces rather than patches, and `--disable`; five locally refused invocations that leave the audited `mgmt.audit.sink` count untouched, against one the gateway refuses that does not; `-o json` compared key for key with the gateway's own body |
 | T-GW-6 | no admitted management call is left without an answer or a result | every boot's settle probe (`POST /config/loadbalancer` with an empty body) gets an HTTP answer, including on the boots where it reaches the handler because management authentication is off; every probe intent in the trail has its result, with a floor on how many there are; and, once boot 6 has scanned boot 4, the only `sys.intent.orphaned` in the trail is the one T20 makes on purpose |
@@ -45,7 +45,8 @@ boot's segment is sealed at recovery and compressed, never removed.
    T20 crash.
 2. same flags — the orphan report, then an orderly stop.
 3. audit at `/var/log/loxilb/audit-wedge`, a 1 MiB tmpfs — the key for the
-   raw arm is created, the filesystem is filled, T3 / T22 wedged / T19,
+   raw arm is created, the filesystem is filled and the first refusal is
+   observed, T3 / T22 wedged / T19,
    the filesystem is freed, the positive arms and the retroactive record.
 4. no `--userservice` — T11 arm 2, the canary sweep over both directories
    (so it covers the compressed segments of boots 1 and 2), then T-GW-2.
@@ -61,8 +62,12 @@ boot's segment is sealed at recovery and compressed, never removed.
   audit directory or changing its mode does nothing to a file the writer
   already holds open; only the filesystem itself can refuse an append. A
   tmpfs of one MiB filled with `dd` (page-sized, then byte-sized to close
-  the last page) makes the next append fail with ENOSPC, and `rm` undoes
-  it. That is also the "fill the filesystem" arm of T19. The
+  the last page) takes every free page, and `rm` undoes it. The fill alone
+  does not refuse the next append (see *T3's wedge is not airtight* below),
+  so the scenario then drives an idempotent audited probe (re-enabling an
+  enabled key) until the gate answers 503 `audit_unavailable`, and fails
+  outright if it never does; only then do T3's refusals run. That is also
+  the "fill the filesystem" arm of T19. The
   permission-loss arm of T19 is not driven here: a `chmod` of the directory
   cannot reach an open descriptor either; the writer's reaction to EACCES
   is covered by the unit suite through the fault hook.
@@ -140,7 +145,10 @@ boot's segment is sealed at recovery and compressed, never removed.
   appends before `ENOSPC`, exactly at the page boundary. The gate was right
   each time -- the intent it answered for had been written; it is the
   scenario's assumption that a full filesystem takes no append that does
-  not hold.
+  not hold. The scenario now observes the wedge instead of assuming it: the
+  probes described under *The wedge is a full filesystem* run until the
+  first refusal, and the line `wedged after N probe(s); M landed` reports
+  how much slack there was.
 
 ## Red twins
 

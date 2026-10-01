@@ -394,7 +394,7 @@ echo "J: the gate's accounting stayed consistent"
 chk J1 "no accounting anomaly (underflow)"      0 "$(msum loxilb_ai_admission_anomalies_total 'kind="underflow"')"
 chk J2 "no accounting anomaly (unknown permit)" 0 "$(msum loxilb_ai_admission_anomalies_total 'kind="unknown_permit"')"
 chk J3 "no request was refused for no capacity" 0 "$(msum loxilb_ai_admission_decisions_total 'reason="no_healthy_capacity"')"
-chk J4 "every pool is exported"                11 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
+chk J4 "every pool is exported"                15 "$(metrics_raw | grep -c '^loxilb_ai_admission_mode{')"
 
 # ── Q: the bounded queue, FIFO ──────────────────────────────────────────────
 echo ""
@@ -798,6 +798,156 @@ chk_has WU10 "unbounded, connection contexts are not counted" "loxilb_proxy_cont
 chk_has WU11 "the valve is unbounded and says so" "loxilb_proxy_accept_bound 0" "$(metrics_raw)"
 release capWU2
 
+# ── TS / TW: the tenant share ───────────────────────────────────────────────
+# Two keyed pools; a key per tenant. A tenant holds at most half of each
+# pool's ceiling (and of its queue); every other tenant keeps admitting.
+TS_URL="http://$VIP:$PORT_TS/v1/chat/completions"
+TQ_URL="http://$VIP:$PORT_TQ/v1/chat/completions"
+mk_key() { # mk_key <tenant> -> the raw key of a new key for that tenant
+  $hexec l3h1 curl -s -m 10 -X POST "$API/config/ai/apikey" -H 'Content-Type: application/json' \
+    -d "{\"tenant_id\": \"$1\", \"name\": \"$1-key\", \"allowed_models\": [\"$MODEL\"],
+         \"rate_limit_rps\": 1000, \"burst_size\": 1000, \"enabled\": true}" | jq -r '.raw_key // empty'
+}
+# hold_key <dir> <name> <nonce> <url> <key>: one request as that key's
+# tenant, held at the backend until its nonce is released.
+hold_key() {
+  $hexec l3h1 curl -s -o "$1/$2.body" -D "$1/$2.hdr" -w '%{http_code}' --max-time 120 \
+    "${HDRS[@]}" -H "X-Api-Key: $5" -H 'X-Test-Hold: 1' -H "X-Test-Nonce: $3" -H "X-Request-Id: $3" \
+    -d "$BODY" "$4" > "$1/$2.code" 2>/dev/null &
+}
+# send_key <dir> <name> <nonce> <url> <key>: one request, not held, waited for.
+send_key() {
+  $hexec l3h1 curl -s -o "$1/$2.body" -D "$1/$2.hdr" -w '%{http_code}' --max-time 20 \
+    "${HDRS[@]}" -H "X-Api-Key: $5" -H "X-Test-Nonce: $3" -H "X-Request-Id: $3" \
+    -d "$BODY" "$4" > "$1/$2.code" 2>/dev/null
+  cat "$1/$2.code"
+}
+KEY_A=$(mk_key share-a); KEY_B=$(mk_key share-b); KEY_C=$(mk_key share-c)
+echo ""
+echo "TS: tenant A holds its share of the :$PORT_TS ceiling ($FC_TS_MAX at $FC_TS_PCT %); its next is refused, tenant B still admits"
+chk TS0 "three tenant keys issued" 3 "$(for k in "$KEY_A" "$KEY_B" "$KEY_C"; do [ -n "$k" ] && echo; done | wc -l | tr -d ' ')"
+ts0=$(decisions $PORT_TS tenant_share)
+DTS=$(mktemp -d)
+hold_key "$DTS" a1 capTSa1 "$TS_URL" "$KEY_A"
+hold_key "$DTS" a2 capTSa2 "$TS_URL" "$KEY_A"
+chk TS1 "tenant A's two reached the backend"       2 "$(wait_sum_receipts capTSa 2 2 15)"
+chk TS2 "A's third answered 429"                   429 "$(send_key "$DTS" a3 capTSa3 "$TS_URL" "$KEY_A")"
+chk_has TS3 "naming the tenant share"              admission_tenant_share "$(cat "$DTS/a3.body" 2>/dev/null)"
+chk TS4 "it never reached the backend"             0 "$(receipts capTSa3)"
+hold_key "$DTS" b1 capTSb1 "$TS_URL" "$KEY_B"
+hold_key "$DTS" b2 capTSb2 "$TS_URL" "$KEY_B"
+chk TS5 "tenant B's two admitted beside A's"       2 "$(wait_sum_receipts capTSb 2 2 15)"
+chk TS6 "the data plane counts two tenants"        2 "$(wait_lb_field $PORT_TS '(.serviceArguments.fc_effective.tenants_active // 0)' 2 10)"
+chk TS7 "the share in force, from the rule"        "$FC_TS_PCT rule" "$(lb_get $PORT_TS | jq -r '.serviceArguments.fc_effective | "\(.tenant_max_share_pct) \(.source.tenant_max_share_pct)"')"
+chk TS8 "tenant_share decisions moved by one"      1 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((ts0+1)) 25 "$(svc $PORT_TS)" 'reason="tenant_share"') - ts0 ))"
+for n in capTSa1 capTSa2 capTSb1 capTSb2; do release $n; done; wait
+chk TS9 "the four held answered 200"               4 "$(count_codes "$DTS" 200)"
+chk TS10 "no tenant holds anything now"            0 "$(wait_lb_field $PORT_TS '(.serviceArguments.fc_effective.tenants_active // 0)' 0 10)"
+
+echo ""
+echo "TW: on the :$PORT_TQ queue (ceiling $FC_TQ_MAX, a unit and two waiters a tenant) A's waiters hold nobody up"
+DTW=$(mktemp -d)
+tq0=$(decisions $PORT_TQ queued)
+hold_key "$DTW" a1 capTWa1 "$TQ_URL" "$KEY_A"
+chk TW1 "A's first executes"                        1 "$(wait_receipts capTWa1 1 15)"
+hold_key "$DTW" a2 capTWa2 "$TQ_URL" "$KEY_A"; sleep 0.3
+hold_key "$DTW" a3 capTWa3 "$TQ_URL" "$KEY_A"
+chk TW2 "A's next two wait"                         2 "$(wait_effective_queued $PORT_TQ 2 10)"
+chk TW3 "A's fourth is refused at its queue share"  429 "$(send_key "$DTW" a4 capTWa4 "$TQ_URL" "$KEY_A")"
+chk_has TW4 "naming the tenant share"               admission_tenant_share "$(cat "$DTW/a4.body" 2>/dev/null)"
+# Both waiters are A's, and A is at its share: B takes the free unit at once
+# instead of waiting behind them.
+hold_key "$DTW" b1 capTWb1 "$TQ_URL" "$KEY_B"
+chk TW5 "B is admitted past A's waiters"            1 "$(wait_receipts capTWb1 1 8)"
+hold_key "$DTW" c1 capTWc1 "$TQ_URL" "$KEY_C"
+chk TW6 "the ceiling full, C waits behind A's two"  3 "$(wait_effective_queued $PORT_TQ 3 10)"
+# B's unit comes back: A heads the queue but is at its share, so the turn is C's.
+release capTWb1
+chk TW7 "the freed unit went to C"                  1 "$(wait_receipts capTWc1 1 10)"
+chk TW8 "not to A's head waiter"                    0 "$(receipts capTWa2)"
+# A's own unit comes back: now A's head waiter runs, in arrival order.
+release capTWa1
+chk TW9 "A's own unit went to A's head waiter"      1 "$(wait_receipts capTWa2 1 10)"
+chk TW10 "A's second still waits"                   0 "$(receipts capTWa3)"
+release capTWc1
+release capTWa2
+chk TW11 "then A's second"                          1 "$(wait_receipts capTWa3 1 10)"
+release capTWa3; wait
+chk TW12 "the five admitted answered 200"           5 "$(count_codes "$DTW" 200)"
+chk TW13 "the queue is empty"                       0 "$(wait_effective_queued $PORT_TQ 0 10)"
+chk TW14 "no tenant holds anything now"             0 "$(wait_lb_field $PORT_TQ '(.serviceArguments.fc_effective.tenants_active // 0)' 0 10)"
+# TW5 alone cannot tell "admitted at once" from "parked, then woken": the
+# 1 Hz pass wakes the first waiter that can run, so a B parked behind A's
+# waiters still reaches the backend within a second. The decisions can: only
+# A's two and C ever waited. Read once the count arrives, and again one
+# republish later so a fourth has had its chance to show.
+wait_metric_ge loxilb_ai_admission_decisions_total $((tq0 + 3)) 25 "$(svc $PORT_TQ)" 'reason="queued"' >/dev/null
+sleep 11
+tq1=$(decisions $PORT_TQ queued)
+chk TW15 "only A's two and C ever waited"           3 "$( [ "$tq1" -ge 0 ] 2>/dev/null && echo $((tq1 - tq0)) || echo "$tq1")"
+
+# ── XH / XH2: the admission headers on admitted responses ──────────────────
+# :PORT_XH exposes them (ceiling FC_XH_MAX); :PORT_H1 runs on the environment,
+# which leaves them off. Values are read against the pool as the request
+# finds it: two held there, the request itself the third.
+XH_URL="http://$VIP:$PORT_XH/v1/chat/completions"
+xh_send() { # xh_send <dir> <name> <body> [curl args...]: one request, waited for; its code
+  local dir=$1 name=$2 body=$3; shift 3
+  $hexec l3h1 curl -s -N -o "$dir/$name.body" -D "$dir/$name.hdr" -w '%{http_code}' --max-time 20 \
+    "${HDRS[@]}" -H "X-Test-Nonce: capXH$name" -H "X-Request-Id: capXH$name" "$@" \
+    -d "$body" "$XH_URL" > "$dir/$name.code" 2>/dev/null
+  cat "$dir/$name.code"
+}
+xh_vals() { # xh_vals <hdr file> -> "<inflight> <queued> <limit>"
+  local h; h=$(cat "$1" 2>/dev/null)
+  echo "$(hdr_val "$h" X-Loxilb-Admission-Inflight) $(hdr_val "$h" X-Loxilb-Admission-Queued) $(hdr_val "$h" X-Loxilb-Admission-Limit)"
+}
+xh_lines() { grep -ci '^x-loxilb-admission-' "$1" 2>/dev/null || true; }
+echo ""
+echo "XH: :$PORT_XH puts the pool's counts on every admitted response head (ceiling $FC_XH_MAX, two held)"
+DXH=$(mktemp -d)
+hold_burst "$DXH" 2 capXHheld "$XH_URL"
+chk XH1 "two held on the pool"                              2 "$(wait_receipts capXHheld 2 15)"
+chk XH2 "a plain request is admitted"                       200 "$(xh_send "$DXH" plain "$BODY")"
+chk XH3 "its head carries inflight 3, queued 0, limit $FC_XH_MAX" "3 0 $FC_XH_MAX" "$(xh_vals "$DXH/plain.hdr")"
+chk_has XH4 "its body is the backend's"                     '"backend_port"' "$(cat "$DXH/plain.body" 2>/dev/null)"
+SSE_BODY='{"model":"cap-model","stream":true,"messages":[{"role":"user","content":"x"}]}'
+chk XH5 "a streamed request is admitted"                    200 "$(xh_send "$DXH" sse "$SSE_BODY")"
+chk XH6 "its head carries the same three"                   "3 0 $FC_XH_MAX" "$(xh_vals "$DXH/sse.hdr")"
+chk_has XH7 "the head is still an event stream"             text/event-stream "$(cat "$DXH/sse.hdr" 2>/dev/null)"
+# Every event and the terminator arrive whole: the chunks after the head
+# were moved, not rewritten.
+chk XH8 "every event arrived, the terminator last"          "t0 t1 t2 [DONE]" "$(grep -o '"content": "t[0-9]\|\[DONE\]' "$DXH/sse.body" 2>/dev/null | sed 's/.*"t/t/' | tr '\n' ' ' | sed 's/ $//')"
+chk XH9 "a backend's own admission field is replaced"       200 "$(xh_send "$DXH" spoof "$BODY" -H 'X-Test-Spoof-Admission: 1')"
+chk XH10 "one of each, the gateway's values"                "3 3 0 $FC_XH_MAX" "$(xh_lines "$DXH/spoof.hdr") $(xh_vals "$DXH/spoof.hdr")"
+$hexec l3h1 curl -s -o /dev/null -D "$DXH/off.hdr" --max-time 20 "${HDRS[@]}" -H 'X-Test-Nonce: capXHoff' \
+  -d "$BODY" "$H1_URL" >/dev/null 2>&1
+chk XH11 "a pool left on the environment adds none"         0 "$(xh_lines "$DXH/off.hdr")"
+chk XH12 "the rule reads back on, in force from the rule"   "on on rule" "$(lb_get $PORT_XH | jq -r '.serviceArguments | "\(.fc_expose_headers) \(.fc_effective.expose_headers) \(.fc_effective.source.expose_headers)"')"
+# The generated model's enum check refuses it first (its own code, not 400).
+chk_has XH13 "a switch value other than on/off/inherit is refused, naming the field" 'fc_expose_headers in body should be one of' "$(gw_add_rule $PORT_XH ', "fc_expose_headers": "yes"' 8080 8081)"
+# Turned off with the two still held: a gate-only change, applied in place,
+# so the held requests keep running and nothing is drained.
+gw_add_rule $PORT_XH "$(gw_xh_json off)" 8080 8081 >/dev/null
+chk XH14 "turned off, the rule reads back off"              "off off rule" "$(wait_lb_field $PORT_XH '.serviceArguments | "\(.fc_expose_headers) \(.fc_effective.expose_headers) \(.fc_effective.source.expose_headers)"' "off off rule" 10)"
+chk XH15 "the next admitted response carries none"          "200 0" "$(xh_send "$DXH" after "$BODY") $(xh_lines "$DXH/after.hdr")"
+release capXHheld; wait
+chk XH16 "the two held through the change answered 200"     "200 200" "$(cat "$DXH/1.code" 2>/dev/null) $(cat "$DXH/2.code" 2>/dev/null)"
+gw_add_rule $PORT_XH "$(gw_xh_json on)" 8080 8081 >/dev/null
+
+echo ""
+echo "XH2: :$PORT_XH2 puts them on every admitted HTTP/2 stream's response headers"
+XH2_OUT=$($hexec l3h1 python3 "$(pwd)/h2_admit.py" $VIP $PORT_XH2 --streams 3 --delay-ms 2000 --nonce-prefix capXH2 2>&1)
+chk XH2a "three streams admitted"                           3 "$(printf '%s\n' "$XH2_OUT" | jq -r 'select(.summary) | .admitted' 2>/dev/null)"
+printf '%s\n' "$XH2_OUT" | jq -c 'select(.stream) | {stream, status, headers}' 2>/dev/null | sed 's/^/    /'
+# Each stream's values are read as its own response head goes out, while it
+# holds its unit: a stream whose answer already ended has handed its unit
+# back, so a later head may count fewer. Every head carries all three; the
+# first sees all three streams.
+chk XH2b "every admitted stream carries the three, queued 0, limit $FC_XH_MAX" 3 "$(printf '%s\n' "$XH2_OUT" | jq -c "select(.status == \"200\" and (.headers[\"x-loxilb-admission-inflight\"] // \"\" | test(\"^[1-3]$\")) and .headers[\"x-loxilb-admission-queued\"] == \"0\" and .headers[\"x-loxilb-admission-limit\"] == \"$FC_XH_MAX\")" 2>/dev/null | wc -l | tr -d ' ')"
+chk XH2c "the first head counted all three streams"         3 "$(printf '%s\n' "$XH2_OUT" | jq -r 'select(.status == "200") | .headers["x-loxilb-admission-inflight"] // "0"' 2>/dev/null | sort -n | tail -1)"
+chk XH2d "no unit left held"                                0 "$(wait_lb_field $PORT_XH2 '(.serviceArguments.fc_effective | if . == null then "none" else (.inflight // 0) end)' 0 10)"
+
 # ── H: observe mode ─────────────────────────────────────────────────────────
 echo ""
 echo "H: the same load in observe mode is admitted and only counted"
@@ -831,15 +981,20 @@ fi
 
 # ── VA: the process accept valve bites, and says so ─────────────────────────
 echo ""
-echo "VA: a gateway with a connection-context bound of 12 holds accepts back past it"
+# Every listener holds a connection context of its own, so the bound is set
+# one above the listeners this scenario serves: the first held request takes
+# the last context and the rest wait in the listen backlog. A fixed bound
+# would stop meaning that the moment the scenario gained a rule.
+VA_BOUND=$(( $($hexec l3h1 curl -s -m 8 "$API/config/loadbalancer/all" | jq '.lbAttr | length' 2>/dev/null || echo 0) + 1 ))
+echo "VA: a gateway with a connection-context bound of $VA_BOUND (its listeners + 1) holds accepts back past it"
 DVA=$(mktemp -d)
-if GW_EXTRA_ENV="LLB_PD_MAX_TOTAL_INFLIGHT=12" gw_restart enforce; then
-  chk VA1 "the bound is exported" 12 "$(wait_metric loxilb_proxy_accept_bound 12 25)"
+if GW_EXTRA_ENV="LLB_PD_MAX_TOTAL_INFLIGHT=$VA_BOUND" gw_restart enforce; then
+  chk VA1 "the bound is exported" $VA_BOUND "$(wait_metric loxilb_proxy_accept_bound $VA_BOUND 25)"
   hold_burst "$DVA" 10 capVA "http://$VIP:$PORT_WU/v1/chat/completions"
   chk_ge VA2 "accepts were held back at the bound" 1 "$(wait_metric_ge loxilb_proxy_accept_blocked_total 1 25)"
   # Every held request is a client and a backend context; the valve holds
   # accepts back once the count reaches the bound.
-  chk_ge VA3 "connection contexts held are counted, up to the bound" 12 "$(wait_metric_ge loxilb_proxy_context_inflight 12 25)"
+  chk_ge VA3 "connection contexts held are counted, up to the bound" $VA_BOUND "$(wait_metric_ge loxilb_proxy_context_inflight $VA_BOUND 25)"
   # At the bound the valve pauses the listener instead of leaving its backlog
   # to be reported on every poll round (which counted hundreds of thousands of
   # hold-backs a second and spun a core). The window spans two republishes of
@@ -856,7 +1011,7 @@ else
   echo "  [FAIL] VA0 the gateway did not come back with the valve bound"; nfail=$((nfail+1)); code=1
 fi
 
-rm -rf "$DB" "$DN" "$DC" "$E" "$DG" "$DL" "$DQ" "$DT" "$DX" "$DK" "$DD" "$DM" "$DP" "$DO" "$DU" "$DAD" "$DWU" "$DWU2" "$DVA" "${DH:-/nonexistent}" 2>/dev/null
+rm -rf "${DXH:-/nonexistent}" "$DB" "$DN" "$DC" "$E" "$DG" "$DL" "$DQ" "$DT" "$DX" "$DK" "$DD" "$DM" "$DP" "$DO" "$DU" "$DAD" "$DWU" "$DWU2" "$DVA" "${DH:-/nonexistent}" 2>/dev/null
 
 echo ""
 if [ "$code" -eq 0 ]; then
