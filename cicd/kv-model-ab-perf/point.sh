@@ -11,7 +11,9 @@
 #   - every request of both arms completes (HTTP 200, SSE done);
 #   - exact arm: the rule is READY before seeding, every prefill has a connected KV subscriber, tier-1.5 hits
 #     rise by exactly the number of timed requests and the fall-through counter does not move;
-#   - baseline arm: tier-1.5 hits do not move.
+#   - baseline arm: tier-1.5 hits do not move;
+#   - the prefill engines' own request counters show the arm's routing: equal shares for exact (every owner has
+#     the same number of families), a spread over every prefill for the baseline.
 # Anything else stops the point with a typed line and leaves no summary. A banked point is skipped on re-run.
 set -u
 source "$(dirname "$0")/env.sh"
@@ -65,7 +67,16 @@ restart_fleet() {
   done
   echo "FLEET_NOT_READY after restart"; return 1
 }
+case $ENG in vllm) EREQ=vllm:request_success_total ;; sglang) EREQ=sglang:num_requests_total ;; esac
+# served <dir> <node>: requests the engine finished during the timed window (its own counter, after - before)
+served() {
+  grep -q "^$EREQ" "$1/after-engine-$2.prom" || { echo "ENGINE_METRIC_MISSING $EREQ on $2" >&2; return 1; }
+  echo $(( $(msum "$1/after-engine-$2.prom" "$EREQ") - $(msum "$1/before-engine-$2.prom" "$EREQ") ))
+}
 engines_snapshot() { local n; for n in "${PNODES[@]}" "${DNODES[@]}"; do curl -s -m 10 "http://$n:$EPORT/metrics" > "$1/$2-engine-$n.prom"; done; }
+# The prefill engines' own logs for the arm (the containers were restarted at its start): the access lines name
+# the client of every request, so a request the scenario did not send can be attributed.
+engine_logs() { local n; for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker logs kvmc-$ENG-prefill 2>&1" | gzip > "$1/engine-$n.log.gz"; done; }
 
 arm() { # arm <repetition> exact|baseline
   local rep=$1 a=$2 d="$OUT/repetition-$1/$2" http es t
@@ -89,10 +100,11 @@ arm() { # arm <repetition> exact|baseline
   sleep 12   # KV events of the seeds reach the gateway inventory
   scrape "$d/before-gateway.prom" || return 1; engines_snapshot "$d" before
   python3 "$AB_DIR/bench.py" --corpus "$CORPUS" --output "$d/requests.jsonl" --url "http://${VIP}:${PORT}" --model "$MODEL" \
-    --arm "$a" --api "$API" --repetition "$rep" --max-tokens "$MAX_TOKENS" --repeat-count "$REPEAT" --request-rate "$RATE"
+    --arm "$a" --api "$API" --repetition "$rep" --max-tokens "$MAX_TOKENS" --repeat-count "$REPEAT" --request-rate "$RATE" --order-seed "$rep"
   local brc=$?
   sleep 12
   scrape "$d/after-gateway.prom" || return 1; engines_snapshot "$d" after
+  engine_logs "$d"
   [ $brc = 0 ] || { echo "REQUESTS_INCOMPLETE $a: $(grep -c '"completed": false' "$d/requests.jsonl") of $NREQ"; return 1; }
   local h=$(( $(msum "$d/after-gateway.prom" loxilb_pd_kv_tier15_hits_total) - $(msum "$d/before-gateway.prom" loxilb_pd_kv_tier15_hits_total) ))
   local f=$(( $(msum "$d/after-gateway.prom" loxilb_pd_kv_tier15_fallthrough_total) - $(msum "$d/before-gateway.prom" loxilb_pd_kv_tier15_fallthrough_total) ))
@@ -103,7 +115,20 @@ arm() { # arm <repetition> exact|baseline
   else
     [ "$h" = 0 ] || { echo "BASELINE_HITS +$h (the baseline rule must not route by cache)"; return 1; }
   fi
-  echo "    arm $a ok: $NREQ requests, tier-1.5 hits +$h, fall-through +$f"
+  # Where the requests went, from the prefill engines' own counters. Every owner has the same number of
+  # families, so the exact arm puts an equal share on every prefill (a couple of gateway probe requests may
+  # ride on top); the baseline arm must spread too, or it is not a round-robin baseline.
+  local share=$(( NREQ / ${#PNODES[@]} )) s spread=""
+  for n in "${PNODES[@]}"; do
+    s=$(served "$d" "$n") || return 1; spread+="$n=$s "
+    if [ "$a" = exact ]; then
+      [ "$s" -ge "$share" ] && [ "$s" -le $((share + 2)) ] || { echo "EXACT_PREFILL_SHARE $n served $s, want $share"; return 1; }
+    else
+      [ "$s" -ge $((share * 8 / 10)) ] || { echo "BASELINE_NOT_SPREAD $n served $s of $NREQ"; return 1; }
+    fi
+  done
+  echo "$spread" > "$d/prefill-served.txt"
+  echo "    arm $a ok: $NREQ requests, tier-1.5 hits +$h, fall-through +$f, prefill served: $spread"
   del_rule
 }
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import random
 import time
 import urllib.error
 import urllib.request
@@ -171,6 +172,12 @@ def main() -> int:
         default=0,
         help="open-loop offered requests/second; 0 keeps closed-loop concurrency",
     )
+    parser.add_argument(
+        "--order-seed",
+        type=int,
+        default=None,
+        help="shuffle the rows inside every repeat round with this seed (same seed = same order)",
+    )
     args = parser.parse_args()
     if args.concurrency < 1:
         parser.error("--concurrency must be positive")
@@ -182,7 +189,13 @@ def main() -> int:
     source_rows = [json.loads(line) for line in args.corpus.read_text().splitlines() if line]
     rows: list[dict[str, Any]] = []
     for repeat_index in range(args.repeat_count):
-        for source in source_rows:
+        # Corpus order is owner order (family n belongs to prefill n mod N). Offered in that order, a strict
+        # round-robin would line up with the owners, or against them, for the whole run. A seeded shuffle per
+        # round breaks that tie and is identical for both arms of a repetition, so the requests stay paired.
+        round_rows = list(source_rows)
+        if args.order_seed is not None:
+            random.Random(f"{args.order_seed}-{repeat_index}").shuffle(round_rows)
+        for source in round_rows:
             row = dict(source)
             if args.repeat_count > 1:
                 row["source_prompt_id"] = source["prompt_id"]

@@ -31,8 +31,8 @@ fleet_up() {
 }
 fleet_down() {
   local n
-  for n in "${PNODES[@]}"; do PREFILL=$n EVROOT=$BASE "$COMPAT/engine.sh" stop "$ENG" prefill "$PROF"; done
-  for n in "${DNODES[@]}"; do DECODE=$n EVROOT=$BASE "$COMPAT/engine.sh" stop "$ENG" decode "$PROF"; done
+  for n in "${PNODES[@]}"; do PREFILL=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" stop "$ENG" prefill "$PROF"; done
+  for n in "${DNODES[@]}"; do DECODE=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" stop "$ENG" decode "$PROF"; done
 }
 # prompt tokens of one long-prefix chat prompt with <reps> paragraph repetitions, as the first prefill counts them
 ptok() {
