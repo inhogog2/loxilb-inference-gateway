@@ -376,6 +376,18 @@ func TestKvExactAdmissionCompletionsBosQuirkRefusal(t *testing.T) {
 		t.Fatalf("sglang on another contract: completions must stay admitted, got %+v %v", res, err)
 	}
 	contracts["sglang"] = "sglang-kv-rank-v1"
+	// Admission hands the attestation controller the quirks of the contract
+	// the rule resolved, never another contract's.
+	p.EngineQuirks = map[string]KvEngineQuirks{
+		"sglang-kv-rank-v1": {CacheChunk: 64},
+		"vllm-kv-map-v2":    {ChallengeLastBlock: true},
+	}
+	for eng, want := range map[string]KvEngineQuirks{"sglang": {CacheChunk: 64}, "vllm": {ChallengeLastBlock: true}, "trtllm": {}} {
+		res, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, "", p.ProfileID, deps)
+		if err != nil || res.Quirks != want {
+			t.Fatalf("engine %q: admission quirks %+v (err %v), want %+v", eng, res.Quirks, err, want)
+		}
+	}
 	p.EngineQuirks = nil
 	if res, err := kvExactRuntimeValidate("sglang", 3, p.BaseModel, "", p.ProfileID, deps); err != nil || !res.APICompletions {
 		t.Fatalf("sglang without the quirk: completions must stay admitted, got %+v %v", res, err)

@@ -57,12 +57,17 @@ func TestKvProfileParseEngineQuirks(t *testing.T) {
 	if err != nil || !p.EngineQuirks["sglang-kv-rank-v1"].CompletionsBos || p.EngineQuirks["vllm-kv-map-v2"].CompletionsBos {
 		t.Fatalf("engineQuirks.sglang-kv-rank-v1.completionsBos not parsed: %+v %v", p, err)
 	}
+	p, err = KvParseModelPromptProfile([]byte(kvValidProfileDoc() + "engineQuirks:\n  vllm-kv-map-v2:\n    challengeLastBlock: true\n  sglang-kv-rank-v1:\n    cacheChunk: 64\n"))
+	if err != nil || !p.EngineQuirks["vllm-kv-map-v2"].ChallengeLastBlock || p.EngineQuirks["sglang-kv-rank-v1"].CacheChunk != 64 {
+		t.Fatalf("challengeLastBlock / cacheChunk not parsed: %+v %v", p, err)
+	}
 	for name, tail := range map[string]string{
 		"engine family, not a contract": "engineQuirks:\n  sglang:\n    completionsBos: true\n",
 		"unknown contract":              "engineQuirks:\n  sglang-kv-rank-v9:\n    completionsBos: true\n",
 		"entry sets no quirk":           "engineQuirks:\n  sglang-kv-rank-v1:\n    completionsBos: false\n",
 		"unknown quirk":                 "engineQuirks:\n  sglang-kv-rank-v1:\n    completionBos: true\n",
 		"old top-level field":           "restoredBosToken: true\n",
+		"cacheChunk zero only":          "engineQuirks:\n  sglang-kv-rank-v1:\n    cacheChunk: 0\n",
 	} {
 		if _, err := KvParseModelPromptProfile([]byte(kvValidProfileDoc() + tail)); err == nil {
 			t.Errorf("%s: must be refused at parse time", name)

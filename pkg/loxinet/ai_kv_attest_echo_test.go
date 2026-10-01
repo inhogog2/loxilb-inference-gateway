@@ -291,11 +291,11 @@ func TestKvEchoChallengeNoHasherFailsClosed(t *testing.T) {
 // the same nonce reproduces the same chain (repeatability, §6.2).
 func TestKvChallengeNonceUniqueness(t *testing.T) {
 	kvEchoTestSetup(t)
-	p1, tok1, err := kvChallengeBuildPrompt("m-echo", "aaaabbbbccccdddd0000111122223333", kvEchoTestBS)
+	p1, tok1, err := kvChallengeBuildPrompt("m-echo", "aaaabbbbccccdddd0000111122223333", kvEchoTestBS, kvChallengePlan{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	p2, tok2, err := kvChallengeBuildPrompt("m-echo", "ffffeeeeddddcccc4444555566667777", kvEchoTestBS)
+	p2, tok2, err := kvChallengeBuildPrompt("m-echo", "ffffeeeeddddcccc4444555566667777", kvEchoTestBS, kvChallengePlan{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestKvChallengeNonceUniqueness(t *testing.T) {
 	if p1 == p2 {
 		t.Fatalf("distinct nonces produced identical prompts")
 	}
-	p1b, tok1b, _ := kvChallengeBuildPrompt("m-echo", "aaaabbbbccccdddd0000111122223333", kvEchoTestBS)
+	p1b, tok1b, _ := kvChallengeBuildPrompt("m-echo", "aaaabbbbccccdddd0000111122223333", kvEchoTestBS, kvChallengePlan{})
 	if p1 != p1b || fmt.Sprint(tok1) != fmt.Sprint(tok1b) {
 		t.Fatalf("same nonce not reproducible")
 	}
@@ -339,7 +339,7 @@ func TestKvHashWatchConcurrentObservers(t *testing.T) {
 			for j := range tokens {
 				tokens[j] = uint32(i*100 + j)
 			}
-			w := kvHashWatchRegister(9, 0, expected, tokens, kvEchoTestBS)
+			w := kvHashWatchRegister(9, 0, expected, tokens, kvEchoTestBS, kvChallengePlan{})
 			defer kvHashWatchUnregister(w)
 			kvHashWatchObserve(9, 0, 0, kvEvent{Type: kvEventBlockStored, Hashes: expected, Tokens: tokens})
 			select {
@@ -434,5 +434,204 @@ func TestKvEchoChallengeEventBlockSizeRefusals(t *testing.T) {
 				t.Fatalf("finding = %+v, want challenge_failed %q", f, c.want)
 			}
 		})
+	}
+}
+
+// TestKvChallengeBuildPromptCacheChunk: with a cache chunk the prompt grows
+// until the engine's cached prefix, floor((n-1)/chunk)*chunk tokens, holds
+// two full blocks, and the expected sequence stops at that boundary; a chunk
+// that is not a multiple of the block size is refused.
+func TestKvChallengeBuildPromptCacheChunk(t *testing.T) {
+	kvEchoTestSetup(t)
+	const nonce = "aaaabbbbccccdddd0000111122223333"
+	for _, chunk := range []uint32{4, 16, 20} {
+		p, tok, err := kvChallengeBuildPrompt("m-echo", nonce, kvEchoTestBS, kvChallengePlan{cacheChunk: chunk})
+		if err != nil {
+			t.Fatalf("chunk %d: %v", chunk, err)
+		}
+		n := len(kvEchoTestTokenizer(p, "m-echo", kvChallengeMaxTokens))
+		if want := (n - 1) / int(chunk) * int(chunk); len(tok) != want {
+			t.Fatalf("chunk %d: prompt of %d tokens, expected sequence %d tokens, want the cached prefix %d", chunk, n, len(tok), want)
+		}
+		if len(tok) < 2*kvEchoTestBS || len(tok)%int(chunk) != 0 {
+			t.Fatalf("chunk %d: expected sequence %d tokens is not >= 2 blocks on a chunk boundary", chunk, len(tok))
+		}
+	}
+	if _, _, err := kvChallengeBuildPrompt("m-echo", nonce, kvEchoTestBS, kvChallengePlan{cacheChunk: 6}); err == nil ||
+		!strings.Contains(err.Error(), "not a multiple of the rule's block size") {
+		t.Fatalf("chunk 6 on block size %d must be refused, got %v", kvEchoTestBS, err)
+	}
+}
+
+// kvEchoFeedBlocks feeds the armed watch one BlockStored event per listed
+// expected block index (a negative index means the last block), each with
+// that block's own tokens, optionally corrupting the tokens of one block.
+func kvEchoFeedBlocks(t *testing.T, svcID uint32, epIdx int, blocks []int, corrupt int) {
+	t.Helper()
+	go func() {
+		w := kvEchoAwaitWatch(svcID, epIdx)
+		if w == nil {
+			return
+		}
+		hashes, tokens := kvEchoWatchExpectation(w)
+		for _, listed := range blocks {
+			b := listed
+			if b < 0 {
+				b = len(hashes) - 1
+			}
+			toks := append([]uint32(nil), tokens[b*kvEchoTestBS:(b+1)*kvEchoTestBS]...)
+			if listed == corrupt {
+				toks[0]++
+			}
+			kvHashWatchObserve(svcID, epIdx, 0, kvEvent{Type: kvEventBlockStored, Hashes: []uint64{hashes[b]}, Tokens: toks})
+		}
+	}()
+}
+
+// TestKvEchoChallengeLastBlock: a last-block plan passes when the engine
+// stores only the prompt's last full block (vLLM Mamba "align"); without the
+// plan the same echo never completes; a wrong last block, or a wrong earlier
+// block that does arrive, still fails.
+func TestKvEchoChallengeLastBlock(t *testing.T) {
+	kvEchoTestSetup(t)
+	_, ep := kvEchoTestServer(t, "m-echo", 200)
+	info := kvEchoInfo()
+	info.challenge = kvChallengePlan{lastBlock: true}
+
+	kvEchoFeedBlocks(t, info.svcID, ep.EpIdx, []int{-1}, -99)
+	if f := newKvVllmAttest().HashChallenge(ep, info); !f.OK || !strings.Contains(f.Detail, "last of") {
+		t.Fatalf("last block only, last-block plan: want a pass that says so, got %+v", f)
+	}
+
+	kvEchoFeedBlocks(t, info.svcID, ep.EpIdx, []int{0, -1}, -99)
+	if f := newKvVllmAttest().HashChallenge(ep, info); !f.OK {
+		t.Fatalf("first + last block, last-block plan: want a pass, got %+v", f)
+	}
+
+	kvEchoFeedBlocks(t, info.svcID, ep.EpIdx, []int{-1}, -1)
+	if f := newKvVllmAttest().HashChallenge(ep, info); f.OK || f.Reason != KvAttestReasonChallengeFailed {
+		t.Fatalf("wrong tokens on the last block: want challenge_failed, got %+v", f)
+	}
+
+	kvEchoFeedBlocks(t, info.svcID, ep.EpIdx, []int{0, -1}, 0)
+	if f := newKvVllmAttest().HashChallenge(ep, info); f.OK || f.Reason != KvAttestReasonChallengeFailed {
+		t.Fatalf("wrong tokens on an earlier echoed block: want challenge_failed, got %+v", f)
+	}
+
+	kvChallengeTimeoutV = 300 * time.Millisecond
+	kvEchoFeedBlocks(t, info.svcID, ep.EpIdx, []int{0}, -99)
+	if f := newKvVllmAttest().HashChallenge(ep, info); f.OK || f.Reason != KvAttestReasonChallengeTimeout {
+		t.Fatalf("first block only, last-block plan: only the last block ends the watch, want challenge_timeout, got %+v", f)
+	}
+
+	info.challenge = kvChallengePlan{}
+	kvEchoFeedBlocks(t, info.svcID, ep.EpIdx, []int{-1}, -99)
+	if f := newKvVllmAttest().HashChallenge(ep, info); f.OK || f.Reason != KvAttestReasonChallengeTimeout {
+		t.Fatalf("last block only, default plan: every block is required, want challenge_timeout, got %+v", f)
+	}
+}
+
+// TestKvEchoChallengeLastBlockWideEvent: under a last-block plan the last
+// block may arrive inside a wider event block (an engine block spanning
+// several contract blocks carries the hash of the last one it covers). The
+// whole wide block is checked against the gateway's tokens, so a flipped
+// token in its FIRST contract block fails the challenge.
+func TestKvEchoChallengeLastBlockWideEvent(t *testing.T) {
+	kvEchoTestSetup(t)
+	_, ep := kvEchoTestServer(t, "m-echo", 200)
+	info := kvEchoInfo()
+	info.challenge = kvChallengePlan{lastBlock: true}
+	const k = 2
+	feed := func(corrupt bool) {
+		go func() {
+			w := kvEchoAwaitWatch(info.svcID, ep.EpIdx)
+			if w == nil {
+				return
+			}
+			hashes, tokens := kvEchoWatchExpectation(w)
+			last := len(hashes) - 1
+			toks := append([]uint32(nil), tokens[(last+1-k)*kvEchoTestBS:(last+1)*kvEchoTestBS]...)
+			if corrupt {
+				toks[0]++
+			}
+			kvHashWatchObserve(info.svcID, ep.EpIdx, 0, kvEvent{Type: kvEventBlockStored,
+				Hashes: []uint64{hashes[last]}, Tokens: toks, BlockSize: k * kvEchoTestBS})
+		}()
+	}
+
+	feed(false)
+	if f := newKvVllmAttest().HashChallenge(ep, info); !f.OK || !strings.Contains(f.Detail, "last of") {
+		t.Fatalf("wide event carrying the last block, last-block plan: want a pass that says so, got %+v", f)
+	}
+
+	feed(true)
+	f := newKvVllmAttest().HashChallenge(ep, info)
+	if f.OK || f.Reason != KvAttestReasonChallengeFailed || !strings.Contains(f.Detail, "token mismatch") {
+		t.Fatalf("wrong token in the first contract block of the wide last block: want challenge_failed, got %+v", f)
+	}
+}
+
+// TestKvChallengePlanReachesEveryAdapter: each engine adapter hands the
+// rule's challenge plan to BOTH the prompt builder (the expected sequence
+// stops on a cache-chunk boundary) and the watch (the last block alone ends
+// it). An adapter that drops the plan times out or arms a non-chunk sequence.
+func TestKvChallengePlanReachesEveryAdapter(t *testing.T) {
+	const chunk = 20
+	plan := kvChallengePlan{cacheChunk: chunk, lastBlock: true}
+	run := func(t *testing.T, svcID uint32, epIdx int, challenge func() KvAttestFinding) {
+		t.Helper()
+		armed := make(chan int, 1)
+		go func() {
+			w := kvEchoAwaitWatch(svcID, epIdx)
+			if w == nil {
+				armed <- -1
+				return
+			}
+			hashes, tokens := kvEchoWatchExpectation(w)
+			armed <- len(tokens)
+			last := len(hashes) - 1
+			kvHashWatchObserve(svcID, epIdx, 0, kvEvent{Type: kvEventBlockStored,
+				Hashes: []uint64{hashes[last]}, Tokens: tokens[last*kvEchoTestBS : (last+1)*kvEchoTestBS]})
+		}()
+		f := challenge()
+		n := <-armed
+		if !f.OK {
+			t.Fatalf("last block only under a last-block plan: want a pass, got %+v", f)
+		}
+		if n < chunk || n%chunk != 0 {
+			t.Fatalf("armed expected sequence of %d tokens: the cache chunk %d never reached the prompt builder", n, chunk)
+		}
+	}
+	t.Run("vllm", func(t *testing.T) {
+		kvEchoTestSetup(t)
+		_, ep := kvEchoTestServer(t, "m-echo", 200)
+		info := kvEchoInfo()
+		info.challenge = plan
+		run(t, info.svcID, ep.EpIdx, func() KvAttestFinding { return newKvVllmAttest().HashChallenge(ep, info) })
+	})
+	t.Run("sglang", func(t *testing.T) {
+		kvSglTestSetup(t)
+		info := kvSglInfo()
+		info.challenge = plan
+		_, ep, _ := kvSglTestServer(t, kvSglGoodConf())
+		run(t, info.svcID, ep.EpIdx, func() KvAttestFinding { return newKvSglangAttest().HashChallenge(ep, info) })
+	})
+	t.Run("trtllm", func(t *testing.T) {
+		kvTrtTestSetup(t)
+		info := kvTrtInfo()
+		info.challenge = plan
+		_, ep := kvTrtTestServer(t, kvTrtGoodConf())
+		run(t, info.svcID, ep.EpIdx, func() KvAttestFinding { return newKvTrtllmAttest().HashChallenge(ep, info) })
+	})
+}
+
+// TestKvChallengePlanFor: the plan carries every challenge-shaping quirk and
+// nothing else (completionsBos is an admission quirk).
+func TestKvChallengePlanFor(t *testing.T) {
+	if got := kvChallengePlanFor(KvEngineQuirks{CacheChunk: 64, ChallengeLastBlock: true, CompletionsBos: true}); got != (kvChallengePlan{cacheChunk: 64, lastBlock: true}) {
+		t.Fatalf("plan %+v, want chunk 64 + last block", got)
+	}
+	if got := kvChallengePlanFor(KvEngineQuirks{CompletionsBos: true}); got != (kvChallengePlan{}) {
+		t.Fatalf("plan %+v, want the default challenge", got)
 	}
 }
