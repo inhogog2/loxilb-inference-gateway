@@ -114,12 +114,17 @@ arm() { # arm <repetition> exact|baseline
   done
   sleep 12   # KV events of the seeds reach the gateway inventory
   scrape "$d/before-gateway.prom" || return 1; engines_snapshot "$d" before
+  local gwlog l0=0; gwlog=$(ls -t "$LOGD"/loxilb*.log 2>/dev/null | grep -v 'loxilbdp\|/loxilb\.log$' | head -1)
+  [ -n "$gwlog" ] && l0=$(wc -l < "$gwlog")
   python3 "$AB_DIR/bench.py" --corpus "$CORPUS" --output "$d/requests.jsonl" --url "http://${VIP}:${PORT}" --model "$MODEL" \
     --arm "$a" --api "$API" --repetition "$rep" --max-tokens "$MAX_TOKENS" --repeat-count "$REPEAT" --request-rate "$RATE" --order-seed "$rep"
   local brc=$?
   sleep 12
   scrape "$d/after-gateway.prom" || return 1; engines_snapshot "$d" after
   engine_logs "$d"
+  # With LOXILB_KV_TLOAD_LOG=1 on the gateway, its selector logs the in-flight total and the candidate count of
+  # every decision; keep the arm's lines (an empty file when the variable is not set).
+  [ -n "$gwlog" ] && tail -n +"$((l0 + 1))" "$gwlog" | grep -a 'totalLoad=' | gzip > "$d/selector-load.log.gz"
   [ $brc = 0 ] || { echo "REQUESTS_INCOMPLETE $a: $(grep -c '"completed": false' "$d/requests.jsonl") of $NREQ"; return 1; }
   local h=$(( $(msum "$d/after-gateway.prom" loxilb_pd_kv_tier15_hits_total) - $(msum "$d/before-gateway.prom" loxilb_pd_kv_tier15_hits_total) ))
   local f=$(( $(msum "$d/after-gateway.prom" loxilb_pd_kv_tier15_fallthrough_total) - $(msum "$d/before-gateway.prom" loxilb_pd_kv_tier15_fallthrough_total) ))
