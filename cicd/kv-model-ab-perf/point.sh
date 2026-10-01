@@ -4,7 +4,7 @@
 # One A/B point against a RUNNING fleet (validation.sh fleet-up) and the RUNNING gateway: REPS repetitions, the
 # two arms in alternating order (exact-baseline, baseline-exact, exact-baseline). Before EVERY arm the engines
 # are restarted (empty caches), the rule is created fresh, and every prompt family is seeded directly on its
-# owner prefill engine. Then the same requests are offered open-loop at the same rate through the VIP.
+# owner prefill engine and on every decode engine. Then the same requests are offered open-loop at the same rate through the VIP.
 #   exact     strict KV-exact rule on the model's profile (the rule a supported row describes)
 #   baseline  the same rule without KV-exact: round-robin over the prefill engines
 # A point is banked (ab-summary.json) only when, in every repetition:
@@ -97,6 +97,15 @@ arm() { # arm <repetition> exact|baseline
   t=(); for n in "${PNODES[@]}"; do t+=(--target "http://$n:$EPORT"); done
   python3 "$AB_DIR/seed.py" --corpus "$CORPUS" --output "$d/seed-receipts.jsonl" --model "$MODEL" --api "$API" "${t[@]}" \
     || { echo "SEED_FAILED $a"; return 1; }
+  # The decode engines get every family too, in both arms. A decode engine that has never seen a prefix pulls it
+  # whole from the prefill engine, and that first pull costs more than the prefill either arm can save; with it
+  # in the timed window the tail measures decode warm-up, not routing. Seeded, the arms differ only in which
+  # prefill engine is asked.
+  for n in "${DNODES[@]}"; do
+    t=(); for _ in "${PNODES[@]}"; do t+=(--target "http://$n:$EPORT"); done
+    python3 "$AB_DIR/seed.py" --corpus "$CORPUS" --output "$d/seed-receipts-decode-$n.jsonl" --model "$MODEL" --api "$API" "${t[@]}" \
+      || { echo "SEED_FAILED $a decode $n"; return 1; }
+  done
   sleep 12   # KV events of the seeds reach the gateway inventory
   scrape "$d/before-gateway.prom" || return 1; engines_snapshot "$d" before
   python3 "$AB_DIR/bench.py" --corpus "$CORPUS" --output "$d/requests.jsonl" --url "http://${VIP}:${PORT}" --model "$MODEL" \

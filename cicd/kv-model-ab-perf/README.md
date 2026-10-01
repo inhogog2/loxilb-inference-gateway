@@ -31,7 +31,8 @@ per-model launch argument proven there applies unchanged. Evidence goes to `/var
 4. **Three points**: long prefix at 40 % and at 80 % of the calibrated rate, short prefix at 80 %. Each point is
    `REPS` repetitions of both arms in alternating order (exact-baseline, baseline-exact, exact-baseline). Before
    every arm the engines are restarted, the rule is created fresh, and every family is seeded directly on its
-   owner. Then every family is requested `repeat` times, open loop, in a seeded shuffled order that is the same
+   owner prefill engine and on every decode engine (a decode engine's first pull of a prefix would otherwise
+   dominate the tail of both arms). Then every family is requested `repeat` times, open loop, in a seeded shuffled order that is the same
    for both arms of a repetition.
 
 ## When a point counts
