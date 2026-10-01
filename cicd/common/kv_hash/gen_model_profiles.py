@@ -84,10 +84,12 @@ def sha256_file(path):
 #   prompts). The block hashes stay 16-granular and chained, so the last block's hash proves the prefix.
 # cacheChunk: the engine caches a prompt of n tokens only up to floor((n-1)/G)*G. SGLang v0.5.18 on a hybrid-GDN
 #   model with page 16: G = 64 (measured: 350 -> 320, 690 -> 640, 1010 -> 960, 1090 -> 1088 cached tokens).
-# Qwen3.8 shares the architecture but is listed only after its own measurement.
+# Qwen3.8-27B-FP8 measured the same on both engines (784-token page and last full block on vLLM; 100 -> 64,
+#   350 -> 320, 1090 -> 1088, 2400 -> 2368 cached tokens on SGLang).
 ENGINE_QUIRKS = {
     "r1-distill-qwen-15b-v1": {"sglang-kv-rank-v1": {"completionsBos": True}},
     "qwen36-27b-fp8-v1": {"sglang-kv-rank-v1": {"cacheChunk": 64}, "vllm-kv-map-v2": {"challengeLastBlock": True}},
+    "qwen38-27b-fp8-v1": {"sglang-kv-rank-v1": {"cacheChunk": 64}, "vllm-kv-map-v2": {"challengeLastBlock": True}},
 }
 
 
