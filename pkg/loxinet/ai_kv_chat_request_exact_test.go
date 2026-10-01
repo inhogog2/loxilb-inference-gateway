@@ -149,7 +149,7 @@ func TestKvBridgeNulGuard(t *testing.T) {
 func TestKvBridgeStrictRefusalsPrecedeTheTokenizer(t *testing.T) {
 	kvDataplaneTestSetup(t)
 	kvTestRegister(52, "rule-chat-shapes", KvContractAPIBoth)
-	b, err := KvBindingAllocate("rule-chat-shapes", kvTestComponents(1))
+	b, err := KvBindingAllocate("rule-chat-shapes", kvTestStrictComponents(t, 1))
 	if err != nil {
 		t.Fatalf("allocate: %v", err)
 	}

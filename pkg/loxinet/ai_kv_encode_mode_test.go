@@ -100,14 +100,15 @@ func TestKvBridgeTokenizeChatUsesNoSpecials(t *testing.T) {
 }
 
 // TestKvChallengeTokenizeUsesSpecials: the attestation echo challenge posts
-// its prompt to /v1/completions with no add_special_tokens override, so the
-// expected hash chain must be built from the specials-included encoding.
+// its prompt to /v1/completions with no add_special_tokens override, so on an
+// engine that encodes with the tokenizer's own post-processor the expected
+// hash chain must be built from the specials-included encoding.
 func TestKvChallengeTokenizeUsesSpecials(t *testing.T) {
 	rec := kvEncodeModeInstallTokenizer(t, "test-model")
 
-	ids := kvChallengeTokenizeFn("challenge prompt", "test-model", 100)
-	if len(ids) != 3 {
-		t.Fatalf("challenge tokenize returned %v", ids)
+	ids, err := kvChallengeEncode(kvAttestRuleInfo{modelName: "test-model"}, "challenge prompt", 100)
+	if err != nil || len(ids) != 3 {
+		t.Fatalf("challenge encode returned %v (%v)", ids, err)
 	}
 	if len(rec.modes) != 1 || rec.modes[0] != true {
 		t.Fatalf("challenge encoded with modes %v, want [true]", rec.modes)

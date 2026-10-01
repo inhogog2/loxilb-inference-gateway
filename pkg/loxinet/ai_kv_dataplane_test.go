@@ -33,6 +33,18 @@ func kvDataplaneTestSetup(t *testing.T) {
 	})
 }
 
+// kvTestStrictComponents is kvTestComponents for a test that drives the
+// strict completions bridge: the bridge resolves the binding's profile and
+// its engine contract's encoder, so the profile is published and the
+// contract is a compiled one.
+func kvTestStrictComponents(t *testing.T, policyGen uint32) KvExactBindingComponents {
+	t.Helper()
+	c := kvTestComponents(policyGen)
+	c.Contract.ID = "vllm-kv-map-v2"
+	kvBindingTestPublishProfile(t, c.Profile.ID, "acme/m1")
+	return c
+}
+
 func kvTestRegister(svcID uint32, ident string, apiMode uint8) {
 	KvSvcContractRegister(svcID, ident, net.ParseIP("10.0.0.1"), 9100, 6, apiMode)
 }
@@ -312,7 +324,7 @@ func TestKvBridgeGateResolution(t *testing.T) {
 func TestKvBridgeTokenizeTypedCodes(t *testing.T) {
 	kvDataplaneTestSetup(t)
 	kvTestRegister(49, "rule-tok", KvContractAPIBoth)
-	b, err := KvBindingAllocate("rule-tok", kvTestComponents(1))
+	b, err := KvBindingAllocate("rule-tok", kvTestStrictComponents(t, 1))
 	if err != nil {
 		t.Fatalf("allocate: %v", err)
 	}

@@ -44,6 +44,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/loxilb-io/loxilb/pkg/enginecontract"
+
 	tk "github.com/loxilb-io/loxilib"
 )
 
@@ -322,11 +324,23 @@ func kvChallengeTimeout() time.Duration {
 // kvChallengeTokenizeFn is the tokenizer seam for the challenge prompt
 // (default: the data-plane cache path — attesting parity with what scoring
 // uses). Tests override.
-var kvChallengeTokenizeFn = func(text, model string, max int) []uint32 {
-	// The challenge inference posts to /v1/completions without an
-	// add_special_tokens override, so the engine tokenizes it with the vLLM
-	// default (true); the expected hash chain must be built the same way.
-	return kvTokenizeWithCache(text, model, max, true)
+var kvChallengeTokenizeFn kvBaseTokenizeFn = kvTokenizeWithCache
+
+// kvChallengeEncode encodes the challenge prompt the way the rule's engine
+// encodes a text completions prompt — the same encoder module the tokenize
+// bridge serves with, so the expected chain is built from the ids the engine
+// stores. A rule info without a contract (no admission result behind it)
+// resolves its engine family's default contract, as admission does.
+func kvChallengeEncode(info kvAttestRuleInfo, text string, max int) ([]uint32, error) {
+	e := info.challenge.encoding
+	if e.contractID == "" {
+		ref, err := enginecontract.CurrentRef(kvEngineEffective(info.engine))
+		if err != nil {
+			return nil, err
+		}
+		e.contractID = ref.ID
+	}
+	return kvEncodeCompletions(kvChallengeTokenizeFn, e, text, info.modelName, max)
 }
 
 // kvChallengePlan shapes one echo challenge from the profile's measured
@@ -340,19 +354,16 @@ type kvChallengePlan struct {
 	// lastBlock: the engine caches only some blocks, always including the
 	// prompt's last full block; the watch ends on that block alone.
 	lastBlock bool
-	// idPrompt: the engine encodes a completions prompt given as text with
-	// a BOS the gateway's tokenizer does not add, and leaves a prompt given
-	// as token ids as it is (measured on SGLang v0.5.18). The challenge then
-	// posts the gateway's own token ids, so the blocks the engine stores are
-	// the blocks the expected chain was built from. Read by the SGLang
-	// adapter; another adapter posts text, and its challenge fails on the
-	// first block if its engine adds the BOS.
-	idPrompt bool
+	// encoding: how the rule's engine encodes the challenge's text prompt.
+	// The challenge always posts TEXT, so the echo proves the completions
+	// encoding on the engine's own cache path.
+	encoding kvCompletionsEncoding
 }
 
-// kvChallengePlanFor derives the challenge plan from a profile's quirks.
-func kvChallengePlanFor(q KvEngineQuirks) kvChallengePlan {
-	return kvChallengePlan{cacheChunk: q.CacheChunk, lastBlock: q.ChallengeLastBlock, idPrompt: q.CompletionsBos}
+// kvChallengePlanFor derives the challenge plan from the admitted rule's
+// completions encoding (its engine contract and the profile's quirks for it).
+func kvChallengePlanFor(e kvCompletionsEncoding) kvChallengePlan {
+	return kvChallengePlan{cacheChunk: e.quirks.CacheChunk, lastBlock: e.quirks.ChallengeLastBlock, encoding: e}
 }
 
 // kvChallengeBuildPrompt builds the nonce-unique challenge prompt: the nonce
@@ -362,10 +373,11 @@ func kvChallengePlanFor(q KvEngineQuirks) kvChallengePlan {
 // sequence (len == nBlocks*blockSize). With a cache chunk the prompt grows
 // until the engine's cached prefix, floor((n-1)/chunk)*chunk tokens, holds
 // two full blocks, and the sequence stops at that boundary.
-func kvChallengeBuildPrompt(model, nonceHex string, blockSize uint32, plan kvChallengePlan) (string, []uint32, error) {
+func kvChallengeBuildPrompt(info kvAttestRuleInfo, nonceHex string, blockSize uint32) (string, []uint32, error) {
 	if blockSize == 0 {
 		blockSize = 16
 	}
+	model, plan := info.modelName, info.challenge
 	chunk := int(plan.cacheChunk)
 	if chunk > 0 && chunk%int(blockSize) != 0 {
 		return "", nil, fmt.Errorf("profile cacheChunk %d is not a multiple of the rule's block size %d", chunk, blockSize)
@@ -378,7 +390,10 @@ func kvChallengeBuildPrompt(model, nonceHex string, blockSize uint32, plan kvCha
 	sb.WriteString(kvChallengeStem)
 	sb.WriteString(nonceHex)
 	for i := 0; i < 64; i++ {
-		toks := kvChallengeTokenizeFn(sb.String(), model, kvChallengeMaxTokens)
+		toks, err := kvChallengeEncode(info, sb.String(), kvChallengeMaxTokens)
+		if err != nil {
+			return "", nil, fmt.Errorf("challenge prompt encoding: %w", err)
+		}
 		if len(toks) == 0 {
 			return "", nil, fmt.Errorf("challenge prompt tokenization failed for model %q", model)
 		}
@@ -392,28 +407,6 @@ func kvChallengeBuildPrompt(model, nonceHex string, blockSize uint32, plan kvCha
 		sb.WriteString(kvChallengeFiller)
 	}
 	return "", nil, fmt.Errorf("challenge prompt never reached %d tokens", need)
-}
-
-// kvChallengePromptJSON is the challenge request's "prompt" value: the text,
-// or under an id-prompt plan the gateway's token ids of that text.
-func kvChallengePromptJSON(model, prompt string, plan kvChallengePlan) (string, error) {
-	if !plan.idPrompt {
-		return strconv.Quote(prompt), nil
-	}
-	toks := kvChallengeTokenizeFn(prompt, model, kvChallengeMaxTokens)
-	if len(toks) == 0 {
-		return "", fmt.Errorf("challenge prompt tokenization failed for model %q", model)
-	}
-	var sb strings.Builder
-	sb.WriteByte('[')
-	for i, tk := range toks {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(strconv.FormatUint(uint64(tk), 10))
-	}
-	sb.WriteByte(']')
-	return sb.String(), nil
 }
 
 // HashChallenge runs one §6.2 echo challenge against one endpoint.
@@ -437,7 +430,7 @@ func (a *kvVllmAttest) HashChallenge(ep KvAttestEndpoint, info kvAttestRuleInfo)
 	if blockSize == 0 {
 		blockSize = 16
 	}
-	prompt, wantTokens, err := kvChallengeBuildPrompt(info.modelName, nonceHex, blockSize, info.challenge)
+	prompt, wantTokens, err := kvChallengeBuildPrompt(info, nonceHex, blockSize)
 	if err != nil {
 		return KvAttestFinding{Reason: KvAttestReasonChallengeFailed, Detail: err.Error()}
 	}

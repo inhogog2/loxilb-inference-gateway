@@ -39,7 +39,7 @@ const kvEchoTestBS = 4
 // (len(text)+i) so different prompts (different nonces) yield different
 // token sequences. Produces one token per 4 bytes, so the filler loop
 // reaches 2×blockSize quickly.
-func kvEchoTestTokenizer(text, model string, max int) []uint32 {
+func kvEchoTestTokenizer(text, model string, max int, _ bool) []uint32 {
 	n := len(text) / 4
 	if n > max {
 		n = max
@@ -291,11 +291,11 @@ func TestKvEchoChallengeNoHasherFailsClosed(t *testing.T) {
 // the same nonce reproduces the same chain (repeatability, §6.2).
 func TestKvChallengeNonceUniqueness(t *testing.T) {
 	kvEchoTestSetup(t)
-	p1, tok1, err := kvChallengeBuildPrompt("m-echo", "aaaabbbbccccdddd0000111122223333", kvEchoTestBS, kvChallengePlan{})
+	p1, tok1, err := kvChallengeBuildPrompt(kvAttestRuleInfo{modelName: "m-echo", challenge: kvChallengePlan{}}, "aaaabbbbccccdddd0000111122223333", kvEchoTestBS)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p2, tok2, err := kvChallengeBuildPrompt("m-echo", "ffffeeeeddddcccc4444555566667777", kvEchoTestBS, kvChallengePlan{})
+	p2, tok2, err := kvChallengeBuildPrompt(kvAttestRuleInfo{modelName: "m-echo", challenge: kvChallengePlan{}}, "ffffeeeeddddcccc4444555566667777", kvEchoTestBS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestKvChallengeNonceUniqueness(t *testing.T) {
 	if p1 == p2 {
 		t.Fatalf("distinct nonces produced identical prompts")
 	}
-	p1b, tok1b, _ := kvChallengeBuildPrompt("m-echo", "aaaabbbbccccdddd0000111122223333", kvEchoTestBS, kvChallengePlan{})
+	p1b, tok1b, _ := kvChallengeBuildPrompt(kvAttestRuleInfo{modelName: "m-echo", challenge: kvChallengePlan{}}, "aaaabbbbccccdddd0000111122223333", kvEchoTestBS)
 	if p1 != p1b || fmt.Sprint(tok1) != fmt.Sprint(tok1b) {
 		t.Fatalf("same nonce not reproducible")
 	}
@@ -445,11 +445,11 @@ func TestKvChallengeBuildPromptCacheChunk(t *testing.T) {
 	kvEchoTestSetup(t)
 	const nonce = "aaaabbbbccccdddd0000111122223333"
 	for _, chunk := range []uint32{4, 16, 20} {
-		p, tok, err := kvChallengeBuildPrompt("m-echo", nonce, kvEchoTestBS, kvChallengePlan{cacheChunk: chunk})
+		p, tok, err := kvChallengeBuildPrompt(kvAttestRuleInfo{modelName: "m-echo", challenge: kvChallengePlan{cacheChunk: chunk}}, nonce, kvEchoTestBS)
 		if err != nil {
 			t.Fatalf("chunk %d: %v", chunk, err)
 		}
-		n := len(kvEchoTestTokenizer(p, "m-echo", kvChallengeMaxTokens))
+		n := len(kvEchoTestTokenizer(p, "m-echo", kvChallengeMaxTokens, true))
 		if want := (n - 1) / int(chunk) * int(chunk); len(tok) != want {
 			t.Fatalf("chunk %d: prompt of %d tokens, expected sequence %d tokens, want the cached prefix %d", chunk, n, len(tok), want)
 		}
@@ -457,7 +457,7 @@ func TestKvChallengeBuildPromptCacheChunk(t *testing.T) {
 			t.Fatalf("chunk %d: expected sequence %d tokens is not >= 2 blocks on a chunk boundary", chunk, len(tok))
 		}
 	}
-	if _, _, err := kvChallengeBuildPrompt("m-echo", nonce, kvEchoTestBS, kvChallengePlan{cacheChunk: 6}); err == nil ||
+	if _, _, err := kvChallengeBuildPrompt(kvAttestRuleInfo{modelName: "m-echo", challenge: kvChallengePlan{cacheChunk: 6}}, nonce, kvEchoTestBS); err == nil ||
 		!strings.Contains(err.Error(), "not a multiple of the rule's block size") {
 		t.Fatalf("chunk 6 on block size %d must be refused, got %v", kvEchoTestBS, err)
 	}
@@ -625,17 +625,16 @@ func TestKvChallengePlanReachesEveryAdapter(t *testing.T) {
 	})
 }
 
-// TestKvChallengePlanFor: the plan carries every challenge-shaping quirk.
-// completionsBos shapes it too: the engine adds the BOS to a text prompt, so
-// the challenge posts token ids.
+// TestKvChallengePlanFor: the plan carries every challenge-shaping quirk and
+// the rule's completions encoding, which the challenge encodes its text
+// prompt through.
 func TestKvChallengePlanFor(t *testing.T) {
-	if got := kvChallengePlanFor(KvEngineQuirks{CacheChunk: 64, ChallengeLastBlock: true}); got != (kvChallengePlan{cacheChunk: 64, lastBlock: true}) {
-		t.Fatalf("plan %+v, want chunk 64 + last block, text prompt", got)
+	e := kvCompletionsEncoding{contractID: "sglang-kv-rank-v1",
+		quirks: KvEngineQuirks{CacheChunk: 64, ChallengeLastBlock: true, CompletionsBos: true}, bosID: 7, bosOK: true}
+	if got := kvChallengePlanFor(e); got != (kvChallengePlan{cacheChunk: 64, lastBlock: true, encoding: e}) {
+		t.Fatalf("plan %+v, want chunk 64 + last block + the encoding", got)
 	}
-	if got := kvChallengePlanFor(KvEngineQuirks{CompletionsBos: true}); got != (kvChallengePlan{idPrompt: true}) {
-		t.Fatalf("plan %+v, want the default challenge with an id prompt", got)
-	}
-	if got := kvChallengePlanFor(KvEngineQuirks{}); got != (kvChallengePlan{}) {
+	if got := kvChallengePlanFor(kvCompletionsEncoding{}); got != (kvChallengePlan{}) {
 		t.Fatalf("plan %+v, want the default challenge", got)
 	}
 }
