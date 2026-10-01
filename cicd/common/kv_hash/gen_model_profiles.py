@@ -21,6 +21,13 @@ gen_chat_probe_fixtures.py) and probefixtures/<id>/sglang/, the same set minus e
 an assistant turn: SGLang renders a trailing assistant message as a user turn, and the gateway refuses such
 strict chat requests, so the engine is never asked to agree on that render.
 
+For an openai-format template the top (vLLM) set also leaves out every chat case whose render depends on the
+content shape: vLLM hands such a template a string content as one text part (null as []), the gateway renders
+both shapes and refuses the request when they differ, so the case is never hashed on vLLM and banking the
+string-shape ids would hold a strict vLLM rule below READY forever. SGLang keeps a string content a string, so
+its subset keeps these cases. The shape check renders with transformers' own Jinja compiler (it must be
+importable wherever this runs).
+
 Usage: gen_model_profiles.py <fixtures_dir> <artifacts_dir> [profileId ...]
 """
 import hashlib
@@ -124,6 +131,56 @@ def sglang_subset(out):
             shutil.copy(os.path.join(out, base + suffix), sub)
 
 
+def vllm_shape_dependent(template, g):
+    """Chat case names whose render changes when each content takes vLLM's openai shape (or that then raise)."""
+    import datetime as dt
+    from transformers.utils import chat_template_utils as ctu
+
+    frozen = dt.datetime(2026, 3, 5, 7, 8, 9)
+
+    class _Frozen(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen
+
+    ctu.datetime = _Frozen
+    compiled = ctu._compile_jinja_template(template)
+    kw = {"add_generation_prompt": True, "bos_token": g.get("bos_token"), "eos_token": g.get("eos_token")}
+
+    def vllm_shape(msgs):
+        out = []
+        for m in msgs:
+            m = dict(m)
+            c = m.get("content")
+            m["content"] = [] if c is None else ([{"type": "text", "text": c}] if isinstance(c, str) else c)
+            out.append(m)
+        return out
+
+    dep = set()
+    for name, case in g["cases"].items():
+        if "error" in case:
+            continue
+        try:
+            same = compiled.render(messages=vllm_shape(case["messages"]), **kw) == \
+                compiled.render(messages=case["messages"], **kw)
+        except Exception:  # noqa: BLE001 — a raise in either shape is a refusal too
+            same = False
+        if not same:
+            dep.add(name)
+    return dep
+
+
+def drop_vllm_shape_dependent(out, g):
+    dropped = []
+    for name in sorted(vllm_shape_dependent(g["template"], g)):
+        base = os.path.join(out, "chat-" + name)
+        if os.path.exists(base + ".request.json"):
+            for suffix in (".request.json", ".expect.json"):
+                os.remove(base + suffix)
+            dropped.append("chat-" + name)
+    return dropped
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
@@ -160,9 +217,11 @@ def main():
         if r.returncode:
             sys.exit(f"{pid}: chat fixtures refused: {r.stderr.strip()}")
         sglang_subset(out)
+        dropped = drop_vllm_shape_dependent(out, g) if fmt == "openai" else []
         n = len([fn for fn in os.listdir(out) if fn.endswith(".json")])
         print(f"{pid}: type={mtype} format={fmt} clock={clock} tokenizer={toksha[:12]} "
-              f"template={tplsha[:12]} fixtures={n} refused-cases={r.stdout.count('SKIPPED')}")
+              f"template={tplsha[:12]} fixtures={n} refused-cases={r.stdout.count('SKIPPED')} "
+              f"vllm-shape-dropped={','.join(dropped) or '-'}")
 
 
 if __name__ == "__main__":
