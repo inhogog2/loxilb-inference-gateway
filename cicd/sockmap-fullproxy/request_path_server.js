@@ -30,6 +30,9 @@
 //   ?rpause=N  leave the request body unread for N ms. The socket stops being
 //              read, its receive window closes, and whatever the proxy still
 //              has to send piles up in the proxy's backend-side cache
+//   ?interim=100|103
+//              send a 100 Continue or a 103 Early Hints as soon as the request
+//              is in, before the answer (which ?rdelay= can hold back)
 // A backend that closes part way through a response is ?abort=: it promises
 // twice what it sends.
 // A HEAD request gets the GET headers and no body.
@@ -111,6 +114,16 @@ var server = http.createServer(function (req, res) {
     // rdelay-only case cannot produce: with the whole answer held back, a proxy
     // that gives up mid-wait always yields a clean EOF, so a fix that delivers
     // only the opening bytes and drops the rest still looks like a pass.
+    // ?interim= puts an interim response ahead of the answer. It is not the
+    // answer: a proxy that counts it as one believes the request answered
+    // while the answer is still on its way.
+    var interim = query(req.url, 'interim');
+    if (interim === 100) {
+      res.writeContinue();
+    } else if (interim === 103) {
+      res.writeEarlyHints({ link: '</hint.css>; rel=preload' });
+    }
+
     var rdelay = query(req.url, 'rdelay');
     var split = query(req.url, 'split');
     if (rdelay && split === null) {
