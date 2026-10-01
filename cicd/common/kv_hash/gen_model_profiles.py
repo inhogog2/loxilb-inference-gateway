@@ -10,6 +10,7 @@ For each (profileId, template slug, content format) in MODELS, every value is re
   modelType         <artifacts>/<slug>/config.json "model_type" (admission reads it to refuse a strict
                     chat surface on engines that render chat with their own encoder)
   clockPolicy       utc-date when the template reads strftime_now
+  engineQuirks      the profile's entry in ENGINE_QUIRKS (measured on the live engine; see there)
 
 templateContentFormat is the engines' content-format verdict for the template (vLLM's detector; openai =
 a loop over message content parts), fixed per model below.
@@ -67,11 +68,34 @@ def sha256_file(path):
         return hashlib.sha256(f.read()).hexdigest()
 
 
+# Engine x model behaviour measured on the live engine, keyed by engine-contract profile id
+# (engine-contracts/contracts.yaml); only quirks that are set are listed, the gateway refuses an empty entry.
+# completionsBos: the engine encodes the completions prompt with a BOS that the gateway's tokenizer does not add.
+#   SGLang v0.5.18 restores tokenizer_config.json's add_bos_token (transformers v5 drops it) and rebuilds the
+#   post-processor; vLLM v0.28.0 does not. Measured (/v1/completions return_token_ids and /v1/tokenize on the
+#   pinned snapshot), not derived: gemma-4 also asks for a BOS through a v4 Gemma class and SGLang's standalone
+#   get_tokenizer adds one, yet the served multimodal path does not (its P/D leg attests with BOS-less
+#   completions fixtures). A model missing here fails the SGLang P/D leg's completions probe (token_mismatch,
+#   one token long), never silently.
+ENGINE_QUIRKS = {
+    "r1-distill-qwen-15b-v1": {"sglang-kv-rank-v1": {"completionsBos": True}},
+}
+
+
+def quirks_yaml(pid):
+    lines = []
+    for contract, quirks in sorted(ENGINE_QUIRKS.get(pid, {}).items()):
+        lines.append(f"  {contract}:")
+        lines += [f"    {k}: true" for k, v in sorted(quirks.items()) if v]
+    return ["engineQuirks:"] + lines if lines else []
+
+
 def profile_yaml(pid, g, mtype, toksha, tplsha, fmt, clock):
     lines = [
         f"profileId: {pid}",
         f"baseModel: {g['model']}",
         f"modelType: {mtype}",
+    ] + quirks_yaml(pid) + [
         f"tokenizerRevision: {g['revision']}",
         f"tokenizerArtifact: sha256/{toksha}",
         f"tokenizerSha256: {toksha}",

@@ -44,6 +44,30 @@ func TestKvProfileParseValid(t *testing.T) {
 	if p.ProfileID != "acme-m1-v1" || p.BaseModel != "acme/m1" {
 		t.Fatalf("parsed identity wrong: %+v", p)
 	}
+	if len(p.EngineQuirks) != 0 {
+		t.Fatalf("engineQuirks must default to empty: %+v", p.EngineQuirks)
+	}
+}
+
+// TestKvProfileParseEngineQuirks: engineQuirks is keyed by a compiled
+// engine-contract profile id and its key set is closed — an unknown contract,
+// an entry that sets nothing and an unknown quirk name all fail at parse time.
+func TestKvProfileParseEngineQuirks(t *testing.T) {
+	p, err := KvParseModelPromptProfile([]byte(kvValidProfileDoc() + "engineQuirks:\n  sglang-kv-rank-v1:\n    completionsBos: true\n"))
+	if err != nil || !p.EngineQuirks["sglang-kv-rank-v1"].CompletionsBos || p.EngineQuirks["vllm-kv-map-v2"].CompletionsBos {
+		t.Fatalf("engineQuirks.sglang-kv-rank-v1.completionsBos not parsed: %+v %v", p, err)
+	}
+	for name, tail := range map[string]string{
+		"engine family, not a contract": "engineQuirks:\n  sglang:\n    completionsBos: true\n",
+		"unknown contract":              "engineQuirks:\n  sglang-kv-rank-v9:\n    completionsBos: true\n",
+		"entry sets no quirk":           "engineQuirks:\n  sglang-kv-rank-v1:\n    completionsBos: false\n",
+		"unknown quirk":                 "engineQuirks:\n  sglang-kv-rank-v1:\n    completionBos: true\n",
+		"old top-level field":           "restoredBosToken: true\n",
+	} {
+		if _, err := KvParseModelPromptProfile([]byte(kvValidProfileDoc() + tail)); err == nil {
+			t.Errorf("%s: must be refused at parse time", name)
+		}
+	}
 }
 
 func TestKvProfileParseValidChat(t *testing.T) {

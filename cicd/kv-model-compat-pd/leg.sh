@@ -4,7 +4,7 @@
 # older run's lines can never turn a leg green.
 #   0  preconditions: both engines up, serving the profile's model at the manifest's engine version; the engine's
 #      manifest installed (restored to the vLLM one on exit); the engine's fixture set present
-#   1  strict P/D rule (kvExactMode=1, kvExactApiMode=both, the profile) -> ladder READY in this run's trail
+#   1  strict P/D rule (kvExactMode=1, kvExactApiMode=both — chat where admission refuses completions, the profile) -> ladder READY in this run's trail
 #   2  chat x3 through the VIP -> tier-1.5 exact hits +2 and the P/D split proven by COUNTERS: the gateway's P/D
 #      counters for this model, each engine's request counter and the decode engine's KV-transfer counter all
 #      move (an absent series fails; see below for the one absent-before case)
@@ -18,15 +18,19 @@ MODEL=$(profile_field "$PROF" baseModel)
 ENC_MODEL=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MODEL")
 GWLOG=${LOGD}/loxilb$(hostname).log
 case $ENG in
-  vllm)   VER=$VLLM_VERSION; MSRC=$FIX/manifests/$PROF.yaml; FSUB=""
+  # CONTRACT = the engine family's default contract profile, the one a rule declaring only the family binds
+  vllm)   VER=$VLLM_VERSION; MSRC=$FIX/manifests/$PROF.yaml; FSUB=""; CONTRACT=vllm-kv-map-v2
           GWC='^loxilb_ai_pd_(prefill_duration|decode_ttft)_seconds_count'; GWMIN=6
           EREQ_P='^vllm:request_success_total'; EREQ_D='^vllm:request_success_total'; XFER='^vllm:nixl_xfer_time_seconds_count' ;;
-  sglang) VER=$SGL_VERSION; MSRC=$FIX/manifests-sglang/$PROF.yaml; FSUB="/sglang"
+  sglang) VER=$SGL_VERSION; MSRC=$FIX/manifests-sglang/$PROF.yaml; FSUB="/sglang"; CONTRACT=sglang-kv-rank-v1
           # decode exposes no num_requests_total; each transferred request bootstraps once and allocates once
           GWC='^loxilb_ai_pd_requests_total'; GWMIN=3
           EREQ_P='^sglang:num_requests_total'; EREQ_D='^sglang:kv_transfer_bootstrap_ms_count'; XFER='^sglang:kv_transfer_alloc_ms_count' ;;
   *) echo "usage: $0 vllm|sglang <profileId>"; exit 64 ;;
 esac
+# Strict surfaces: both, except where admission refuses completions on this engine's contract
+# (engineQuirks.<contract>.completionsBos: the engine adds a BOS the gateway's tokenizer does not).
+API=both; [ "$(profile_quirk "$PROF" "$CONTRACT" completionsBos)" = true ] && API=chat
 SALT="kvmc${ENG}$(date +%s)$RANDOM"; TS=$(date +%Y%m%dT%H%M%S)
 EV=${EVROOT}/${ENG}-pd-${PROF}-${TS}; mkdir -p "${EV}"
 echo "RUN_ID=${ENG}-pd-${PROF}-${TS}"
@@ -39,7 +43,7 @@ del_rule() { curl -s -m 10 -o /dev/null -X DELETE "${LB}/hosturl/${VIP}/external
 pd_rule() { curl -s -m 10 -o "${EV}/rule-create-$1.json" -w "%{http_code}" -X POST "${LB}" -H 'Content-Type: application/json' -d "{
   \"serviceArguments\": { \"externalIP\": \"${VIP}\", \"port\": ${PORT}, \"protocol\": \"tcp\", \"sel\": 0,
     \"mode\": 4, \"host\": \"${VIP}\", \"probeRetries\": 1, \"pd_disagg_mode\": true, \"kvExactMode\": 1, \"kvBlockSize\": 16,
-    \"kvEngineType\": \"${ENG}\", \"model_name\": \"${MODEL}\", \"kvExactApiMode\": \"both\", \"kvModelProfile\": \"${PROF}\" },
+    \"kvEngineType\": \"${ENG}\", \"model_name\": \"${MODEL}\", \"kvExactApiMode\": \"${API}\", \"kvModelProfile\": \"${PROF}\" },
   \"endpoints\": [ { \"endpointIP\": \"${PREFILL}\", \"targetPort\": ${EPORT}, \"weight\": 1, \"ep_role\": 1 },
                    { \"endpointIP\": \"${DECODE}\", \"targetPort\": ${EPORT}, \"weight\": 1, \"ep_role\": 2 } ] }"; }
 since() { tail -n +$(( $2 + 1 )) "$1"; }

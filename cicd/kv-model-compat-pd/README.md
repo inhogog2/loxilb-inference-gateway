@@ -6,7 +6,7 @@ Qualifies the candidate chat models' strict KV-exact profiles
 | Mode | What it proves | GPU |
 |---|---|---|
 | `preflight` | the gateway's latest registry publish holds every committed candidate profile | no |
-| `admission` | engine-renderer admission: a strict chat surface is refused where the engine renders the model's chat with its own encoder (Ministral-3 on vLLM/SGLang = `mistral_common`; gpt-oss on vLLM/TRT-LLM = Harmony), admitted where the engine renders the pinned template, completions admitted everywhere | no |
+| `admission` | engine-renderer admission: a strict chat surface is refused where the engine renders the model's chat with its own encoder (Ministral-3 on vLLM/SGLang = `mistral_common`; gpt-oss on vLLM/TRT-LLM = Harmony), admitted where the engine renders the pinned template, completions admitted there; and a strict completions surface is refused where the engine encodes completions with a BOS the gateway does not add (R1-distill on SGLang, `engineQuirks.sglang-kv-rank-v1.completionsBos`), chat admitted there | no |
 | `pd` | strict P/D chat legs, each run twice: ladder READY, three chats whose prefill/decode split is proven by counters (gateway P/D counters, both engines' request counters, the decode engine's KV-transfer counter), then a red arm (one flipped expected token id → the rule must stop at `token_mismatch`, blamed on the prefill endpoint only) | yes |
 
 Default P/D run list: vLLM × {gemma-3-1b-it, Phi-4-mini, granite-4.2-3b (hybrid Mamba)}, SGLang × Phi-4-mini.
