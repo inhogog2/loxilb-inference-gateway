@@ -20,7 +20,8 @@ source "$(dirname "$0")/env.sh"
 ENG=$1 PROF=$2 ID=$3 CORPUS=$4 RATE=$5 REPEAT=$6 API=${7:-chat}
 MODEL=$(profile_field "$PROF" baseModel)
 ENC_MODEL=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MODEL")
-OUT=${ABROOT}/${ENG}-${PROF}/${ID}
+OUT=${AB_BASE:-${ABROOT}/${ENG}-${PROF}}/${ID}
+PNAME=kvmc-$ENG-$ROLE1                        # container of an engine the rule routes the prompt to
 [ -s "$OUT/ab-summary.json" ] && { echo "POINT_ALREADY_BANKED $OUT"; exit 0; }
 rm -rf "$OUT"; mkdir -p "$OUT"; cp "$CORPUS" "$OUT/corpus.jsonl"
 case $ENG in
@@ -39,22 +40,27 @@ state() { curl -s -m 5 "${LB}/externalipaddress/${VIP}/port/${PORT}/protocol/tcp
 msum() { awk -v m="$2" '$1 ~ ("^" m "({|$)") {s += $NF} END {printf "%d", s + 0}' "$1"; }
 scrape() { curl -fsS -m 10 "${MET}" > "$1" && grep -q "^loxilb_" "$1" || { echo "GATEWAY_SCRAPE_FAILED $1"; return 1; }; }
 rule() { # rule exact|baseline <dir>
-  python3 - "$1" "$VIP" "$PORT" "$ENG" "$MODEL" "$PROF" "$EPORT" "$PREFILLS" "$DECODES" > "$2/rule.json" <<'PY'
+  python3 - "$1" "$VIP" "$PORT" "$ENG" "$MODEL" "$PROF" "$EPORT" "$PREFILLS" "$DECODES" "$TOPOLOGY" > "$2/rule.json" <<'PY'
 import json, sys
-arm, vip, port, eng, model, prof, eport, pre, dec = sys.argv[1:]
+arm, vip, port, eng, model, prof, eport, pre, dec, topo = sys.argv[1:]
 sa = {"externalIP": vip, "port": int(port), "protocol": "tcp", "sel": 0, "mode": 4, "host": vip, "probeRetries": 1,
-      "pd_disagg_mode": True, "sse_mode": True, "model_name": model, "kvExactMode": 0}
-if arm == "exact":
-    sa.update(kvExactMode=1, kvBlockSize=16, kvEngineType=eng, kvExactApiMode="both", kvModelProfile=prof)
-eps = [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 1} for n in pre.split()]
-eps += [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 2} for n in dec.split()]
+      "sse_mode": True, "model_name": model, "kvExactMode": 0}
+if topo == "pd":
+    sa["pd_disagg_mode"] = True
+if arm == "exact":   # exact mode 1 = prefill/decode rule, 3 = converged (role-less endpoints)
+    sa.update(kvExactMode=1 if topo == "pd" else 3, kvBlockSize=16, kvEngineType=eng, kvExactApiMode="both", kvModelProfile=prof)
+if topo == "pd":
+    eps = [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 1} for n in pre.split()]
+    eps += [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 2} for n in dec.split()]
+else:
+    eps = [{"endpointIP": n, "targetPort": int(eport), "weight": 1} for n in pre.split()]
 print(json.dumps({"serviceArguments": sa, "endpoints": eps}, indent=1))
 PY
   curl -s -m 10 -o "$2/rule-create.json" -w "%{http_code}" -X POST "${LB}" -H 'Content-Type: application/json' --data-binary "@$2/rule.json"
 }
 restart_fleet() {
   local n
-  for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker restart kvmc-$ENG-prefill >/dev/null" & done
+  for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker restart $PNAME >/dev/null" & done
   for n in "${DNODES[@]}"; do $SSH -n root@"$n" "docker restart kvmc-$ENG-decode >/dev/null" & done
   wait
   for _ in $(seq 1 120); do
@@ -76,7 +82,7 @@ served() {
 engines_snapshot() { local n; for n in "${PNODES[@]}" "${DNODES[@]}"; do curl -s -m 10 "http://$n:$EPORT/metrics" > "$1/$2-engine-$n.prom"; done; }
 # The prefill engines' own logs for the arm (the containers were restarted at its start): the access lines name
 # the client of every request, so a request the scenario did not send can be attributed.
-engine_logs() { local n; for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker logs kvmc-$ENG-prefill 2>&1" | gzip > "$1/engine-$n.log.gz"; done; }
+engine_logs() { local n; for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker logs $PNAME 2>&1" | gzip > "$1/engine-$n.log.gz"; done; }
 
 arm() { # arm <repetition> exact|baseline
   local rep=$1 a=$2 d="$OUT/repetition-$1/$2" http es t
@@ -149,9 +155,9 @@ arm() { # arm <repetition> exact|baseline
   del_rule
 }
 
-echo "=== point $ID: $ENG x $PROF, $API, rate $RATE req/s, $NREQ requests per arm, ${#PNODES[@]} prefill + ${#DNODES[@]} decode ==="
+echo "=== point $ID: $ENG x $PROF, $TOPOLOGY, $API, rate $RATE req/s, $NREQ requests per arm, ${#PNODES[@]} $ROLE1 + ${#DNODES[@]} decode ==="
 docker inspect -f '{{.Config.Image}}' "$GW_CTR" > "$OUT/gateway-image.txt" || { echo GATEWAY_NOT_RUNNING; exit 2; }
-printf '%s\n' "engine=$ENG profile=$PROF model=$MODEL api=$API rate=$RATE repeat=$REPEAT requests_per_arm=$NREQ" \
+printf '%s\n' "engine=$ENG profile=$PROF topology=$TOPOLOGY model=$MODEL api=$API rate=$RATE repeat=$REPEAT requests_per_arm=$NREQ" \
   "prefill=$PREFILLS" "decode=$DECODES" "max_tokens=$MAX_TOKENS" > "$OUT/point.txt"
 for rep in $(seq 1 "$REPS"); do
   if [ $((rep % 2)) = 1 ]; then order="exact baseline"; else order="baseline exact"; fi

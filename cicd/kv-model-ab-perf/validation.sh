@@ -20,19 +20,20 @@ source "$(dirname "$0")/env.sh"
 MODE=${1:-}; ENG=${2:-}; PROF=${3:-}
 [ -n "$PROF" ] || { echo "usage: $0 model|fleet-up|fleet-down|report <vllm|sglang> <profileId>"; exit 64; }
 MODEL=$(profile_field "$PROF" baseModel)
-BASE=${ABROOT}/${ENG}-${PROF}; mkdir -p "$BASE"
+[ "$TOPOLOGY" = pd ] && BASE=${ABROOT}/${ENG}-${PROF} || BASE=${ABROOT}/${ENG}-${PROF}-${TOPOLOGY}
+mkdir -p "$BASE"; export AB_BASE=$BASE
 code=0
 
 fleet_up() {
   local n pids=() rc=0
-  for n in "${PNODES[@]}"; do PREFILL=$n "$COMPAT/engine.sh" start "$ENG" prefill "$PROF" & pids+=($!); done
+  for n in "${PNODES[@]}"; do PREFILL=$n CONVERGED=$n "$COMPAT/engine.sh" start "$ENG" "$ROLE1" "$PROF" & pids+=($!); done
   for n in "${DNODES[@]}"; do DECODE=$n "$COMPAT/engine.sh" start "$ENG" decode "$PROF" & pids+=($!); done
   for p in "${pids[@]}"; do wait "$p" || rc=1; done
   return $rc
 }
 fleet_down() {
   local n
-  for n in "${PNODES[@]}"; do PREFILL=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" stop "$ENG" prefill "$PROF"; done
+  for n in "${PNODES[@]}"; do PREFILL=$n CONVERGED=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" stop "$ENG" "$ROLE1" "$PROF"; done
   for n in "${DNODES[@]}"; do DECODE=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" stop "$ENG" decode "$PROF"; done
 }
 # prompt tokens of one long-prefix chat prompt with <reps> paragraph repetitions, as the first prefill counts them
@@ -55,13 +56,18 @@ corpora() {
 calibrate() {
   [ -s "$BASE/calibration.json" ] && { echo "  calibration already banked"; return 0; }
   local enc; enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MODEL")
-  python3 - "$VIP" "$PORT" "$MODEL" "$EPORT" "$PREFILLS" "$DECODES" > "$BASE/cal-rule.json" <<'PY'
+  python3 - "$VIP" "$PORT" "$MODEL" "$EPORT" "$PREFILLS" "$DECODES" "$TOPOLOGY" > "$BASE/cal-rule.json" <<'PY'
 import json, sys
-vip, port, model, eport, pre, dec = sys.argv[1:]
-eps = [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 1} for n in pre.split()]
-eps += [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 2} for n in dec.split()]
-print(json.dumps({"serviceArguments": {"externalIP": vip, "port": int(port), "protocol": "tcp", "sel": 0, "mode": 4, "host": vip,
-      "probeRetries": 1, "pd_disagg_mode": True, "sse_mode": True, "model_name": model, "kvExactMode": 0}, "endpoints": eps}))
+vip, port, model, eport, pre, dec, topo = sys.argv[1:]
+sa = {"externalIP": vip, "port": int(port), "protocol": "tcp", "sel": 0, "mode": 4, "host": vip,
+      "probeRetries": 1, "sse_mode": True, "model_name": model, "kvExactMode": 0}
+if topo == "pd":
+    sa["pd_disagg_mode"] = True
+    eps = [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 1} for n in pre.split()]
+    eps += [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 2} for n in dec.split()]
+else:
+    eps = [{"endpointIP": n, "targetPort": int(eport), "weight": 1} for n in pre.split()]
+print(json.dumps({"serviceArguments": sa, "endpoints": eps}))
 PY
   # Closed loop at falling concurrency until every request completes. Too many cold prefills at once is not a
   # capacity number: the decode engines pull each prefix late, the prefill engine's KV lease runs out, and the
@@ -108,9 +114,10 @@ for f in sorted(glob.glob(base + "/*/ab-summary.json")):
     d = os.path.dirname(f); s = json.load(open(f)); meta = dict(x.split("=", 1) for x in open(d + "/point.txt").readline().split())
     e, b, fx = s["arms"]["exact"], s["arms"]["baseline"], s["effects"]
     npre = len(open(d + "/point.txt").read().split("prefill=")[1].split("\n")[0].split()); ndec = len(open(d + "/point.txt").read().split("decode=")[1].split("\n")[0].split())
+    topo = f"pd-{npre}p{ndec}d" if ndec else f"converged-{npre}e"
     print(f"# {os.path.basename(d)}: p95 {fx['ttft_p95_delta_percent']:+.1f}% ({fx['ttft_p95_separation']}), CI {fx['ttft_p95_delta_95ci_percent']}, "
           f"p50 {fx['ttft_p50_delta_percent']:+.1f}% ({fx['ttft_p50_separation']}), TPOT p95 {fx['tpot_p95_delta_percent']:+.1f}%, tokens/s {fx['output_tokens_per_sec_delta_percent']:+.1f}%")
-    print(f"- {{topology: pd-{npre}p{ndec}d, surface: {meta['api']}, corpus: {os.path.basename(d).split('-')[0]}, rateRps: {meta['rate']}, "
+    print(f"- {{topology: {topo}, surface: {meta['api']}, corpus: {os.path.basename(d).split('-')[0]}, rateRps: {meta['rate']}, "
           f"requestsPerArm: {e['requests']}, exactTtftP95Ms: {e['ttft_p95_ms']}, baselineTtftP95Ms: {b['ttft_p95_ms']}, "
           f"exactTtftP50Ms: {e['ttft_p50_ms']}, baselineTtftP50Ms: {b['ttft_p50_ms']}, date: \"{os.popen('date -r ' + f + ' +%F').read().strip()}\"}}")
 PY
@@ -121,7 +128,7 @@ case $MODE in
   fleet-down) fleet_down ;;
   report) report ;;
   model)
-    echo "=== A/B $ENG x $PROF ($MODEL): ${#PNODES[@]} prefill [$PREFILLS] + ${#DNODES[@]} decode [$DECODES] ==="
+    echo "=== A/B $ENG x $PROF ($MODEL), $TOPOLOGY: ${#PNODES[@]} $ROLE1 [$PREFILLS] + ${#DNODES[@]} decode [$DECODES] ==="
     if fleet_up && corpora && calibrate; then
       lo=$(cal rate_low); hi=$(cal rate_high)
       point "long-r$lo" "$BASE/corpus-long.jsonl" "$lo"
