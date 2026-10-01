@@ -1,0 +1,120 @@
+#!/bin/bash
+# point.sh vllm|sglang <profileId> <pointId> <corpus.jsonl> <rate req/s> <repeat> [chat|completions]
+#
+# One A/B point against a RUNNING fleet (validation.sh fleet-up) and the RUNNING gateway: REPS repetitions, the
+# two arms in alternating order (exact-baseline, baseline-exact, exact-baseline). Before EVERY arm the engines
+# are restarted (empty caches), the rule is created fresh, and every prompt family is seeded directly on its
+# owner prefill engine. Then the same requests are offered open-loop at the same rate through the VIP.
+#   exact     strict KV-exact rule on the model's profile (the rule a supported row describes)
+#   baseline  the same rule without KV-exact: round-robin over the prefill engines
+# A point is banked (ab-summary.json) only when, in every repetition:
+#   - every request of both arms completes (HTTP 200, SSE done);
+#   - exact arm: the rule is READY before seeding, every prefill has a connected KV subscriber, tier-1.5 hits
+#     rise by exactly the number of timed requests and the fall-through counter does not move;
+#   - baseline arm: tier-1.5 hits do not move.
+# Anything else stops the point with a typed line and leaves no summary. A banked point is skipped on re-run.
+set -u
+source "$(dirname "$0")/env.sh"
+ENG=$1 PROF=$2 ID=$3 CORPUS=$4 RATE=$5 REPEAT=$6 API=${7:-chat}
+MODEL=$(profile_field "$PROF" baseModel)
+ENC_MODEL=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MODEL")
+OUT=${ABROOT}/${ENG}-${PROF}/${ID}
+[ -s "$OUT/ab-summary.json" ] && { echo "POINT_ALREADY_BANKED $OUT"; exit 0; }
+rm -rf "$OUT"; mkdir -p "$OUT"; cp "$CORPUS" "$OUT/corpus.jsonl"
+case $ENG in
+  vllm)   MSRC=$FIX/manifests/$PROF.yaml ;;
+  sglang) MSRC=$FIX/manifests-sglang/$PROF.yaml ;;
+  *) echo "engine must be vllm|sglang"; exit 64 ;;
+esac
+restore_manifest() { install -o root -g root -m 0644 "$FIX/manifests/$PROF.yaml" "$REG/manifests/$PROF.yaml"; }
+del_rule() { curl -s -m 10 -o /dev/null -X DELETE "${LB}/hosturl/${VIP}/externalipaddress/${VIP}/port/${PORT}/protocol/tcp?model_name=${ENC_MODEL}"; sleep 2; }
+trap 'del_rule; restore_manifest' EXIT
+install -o root -g root -m 0644 "$MSRC" "$REG/manifests/$PROF.yaml"
+NREQ=$(( $(wc -l < "$CORPUS") * REPEAT ))
+state() { curl -s -m 5 "${LB}/externalipaddress/${VIP}/port/${PORT}/protocol/tcp/kvexactstatus" \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); a=d['kvExactStatusAttr'][0]; print(a['enforcedState'], ','.join(a.get('reasonCodes') or []))" 2>/dev/null; }
+# msum <file> <metric name>: sum over every label child; a metric with no sample reads 0 only for a scrape that answered
+msum() { awk -v m="$2" '$1 ~ ("^" m "({|$)") {s += $NF} END {printf "%d", s + 0}' "$1"; }
+scrape() { curl -fsS -m 10 "${MET}" > "$1" && grep -q "^loxilb_" "$1" || { echo "GATEWAY_SCRAPE_FAILED $1"; return 1; }; }
+rule() { # rule exact|baseline <dir>
+  python3 - "$1" "$VIP" "$PORT" "$ENG" "$MODEL" "$PROF" "$EPORT" "$PREFILLS" "$DECODES" > "$2/rule.json" <<'PY'
+import json, sys
+arm, vip, port, eng, model, prof, eport, pre, dec = sys.argv[1:]
+sa = {"externalIP": vip, "port": int(port), "protocol": "tcp", "sel": 0, "mode": 4, "host": vip, "probeRetries": 1,
+      "pd_disagg_mode": True, "sse_mode": True, "model_name": model, "kvExactMode": 0}
+if arm == "exact":
+    sa.update(kvExactMode=1, kvBlockSize=16, kvEngineType=eng, kvExactApiMode="both", kvModelProfile=prof)
+eps = [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 1} for n in pre.split()]
+eps += [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 2} for n in dec.split()]
+print(json.dumps({"serviceArguments": sa, "endpoints": eps}, indent=1))
+PY
+  curl -s -m 10 -o "$2/rule-create.json" -w "%{http_code}" -X POST "${LB}" -H 'Content-Type: application/json' --data-binary "@$2/rule.json"
+}
+restart_fleet() {
+  local n
+  for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker restart kvmc-$ENG-prefill >/dev/null" & done
+  for n in "${DNODES[@]}"; do $SSH -n root@"$n" "docker restart kvmc-$ENG-decode >/dev/null" & done
+  wait
+  for _ in $(seq 1 120); do
+    local up=0
+    for n in "${PNODES[@]}" "${DNODES[@]}"; do
+      curl -s -m 3 "http://$n:$EPORT/v1/models" | grep -qF "\"id\":\"$MODEL\"" && curl -fsS -m 3 "http://$n:$EPORT/health" >/dev/null 2>&1 && up=$((up+1))
+    done
+    [ $up = $(( ${#PNODES[@]} + ${#DNODES[@]} )) ] && return 0
+    sleep 5
+  done
+  echo "FLEET_NOT_READY after restart"; return 1
+}
+engines_snapshot() { local n; for n in "${PNODES[@]}" "${DNODES[@]}"; do curl -s -m 10 "http://$n:$EPORT/metrics" > "$1/$2-engine-$n.prom"; done; }
+
+arm() { # arm <repetition> exact|baseline
+  local rep=$1 a=$2 d="$OUT/repetition-$1/$2" http es t
+  mkdir -p "$d"; echo "--- repetition $rep, arm $a ($(date -Is)) ---"
+  del_rule
+  restart_fleet || return 1
+  http=$(rule "$a" "$d"); [ "$http" = 200 ] || { echo "RULE_CREATE_FAILED $a $http $(head -c 200 "$d/rule-create.json")"; return 1; }
+  if [ "$a" = exact ]; then
+    es=""; for _ in $(seq 1 100); do es=$(state); [[ "$es" == READY* ]] && break; sleep 3; done
+    echo "$es" > "$d/state.txt"
+    [[ "$es" == READY* ]] || { echo "EXACT_RULE_NOT_READY '$es'"; return 1; }
+    sleep 3; scrape "$d/subscribers.prom" || return 1
+    local sub; sub=$(grep -c '^loxilb_kv_subscriber_connected{.*} 1$' "$d/subscribers.prom")
+    [ "$sub" -ge ${#PNODES[@]} ] || { echo "KV_SUBSCRIBERS $sub connected, want ${#PNODES[@]}"; return 1; }
+  else
+    sleep 5
+  fi
+  t=(); for n in "${PNODES[@]}"; do t+=(--target "http://$n:$EPORT"); done
+  python3 "$AB_DIR/seed.py" --corpus "$CORPUS" --output "$d/seed-receipts.jsonl" --model "$MODEL" --api "$API" "${t[@]}" \
+    || { echo "SEED_FAILED $a"; return 1; }
+  sleep 12   # KV events of the seeds reach the gateway inventory
+  scrape "$d/before-gateway.prom" || return 1; engines_snapshot "$d" before
+  python3 "$AB_DIR/bench.py" --corpus "$CORPUS" --output "$d/requests.jsonl" --url "http://${VIP}:${PORT}" --model "$MODEL" \
+    --arm "$a" --api "$API" --repetition "$rep" --max-tokens "$MAX_TOKENS" --repeat-count "$REPEAT" --request-rate "$RATE"
+  local brc=$?
+  sleep 12
+  scrape "$d/after-gateway.prom" || return 1; engines_snapshot "$d" after
+  [ $brc = 0 ] || { echo "REQUESTS_INCOMPLETE $a: $(grep -c '"completed": false' "$d/requests.jsonl") of $NREQ"; return 1; }
+  local h=$(( $(msum "$d/after-gateway.prom" loxilb_pd_kv_tier15_hits_total) - $(msum "$d/before-gateway.prom" loxilb_pd_kv_tier15_hits_total) ))
+  local f=$(( $(msum "$d/after-gateway.prom" loxilb_pd_kv_tier15_fallthrough_total) - $(msum "$d/before-gateway.prom" loxilb_pd_kv_tier15_fallthrough_total) ))
+  echo "$h" > "$d/tier15-hit-delta.txt"; echo "$f" > "$d/tier15-fallthrough-delta.txt"
+  if [ "$a" = exact ]; then
+    [ "$h" = "$NREQ" ] || { echo "EXACT_HITS $h, want $NREQ"; return 1; }
+    [ "$f" = 0 ] || { echo "EXACT_FALLTHROUGH +$f"; return 1; }
+  else
+    [ "$h" = 0 ] || { echo "BASELINE_HITS +$h (the baseline rule must not route by cache)"; return 1; }
+  fi
+  echo "    arm $a ok: $NREQ requests, tier-1.5 hits +$h, fall-through +$f"
+  del_rule
+}
+
+echo "=== point $ID: $ENG x $PROF, $API, rate $RATE req/s, $NREQ requests per arm, ${#PNODES[@]} prefill + ${#DNODES[@]} decode ==="
+docker inspect -f '{{.Config.Image}}' "$GW_CTR" > "$OUT/gateway-image.txt" || { echo GATEWAY_NOT_RUNNING; exit 2; }
+printf '%s\n' "engine=$ENG profile=$PROF model=$MODEL api=$API rate=$RATE repeat=$REPEAT requests_per_arm=$NREQ" \
+  "prefill=$PREFILLS" "decode=$DECODES" "max_tokens=$MAX_TOKENS" > "$OUT/point.txt"
+for rep in $(seq 1 "$REPS"); do
+  if [ $((rep % 2)) = 1 ]; then order="exact baseline"; else order="baseline exact"; fi
+  for a in $order; do arm "$rep" "$a" || { echo "POINT_VOID $ID (repetition $rep, arm $a)"; exit 1; }; done
+done
+python3 "$AB_DIR/analyze.py" --input-dir "$OUT" --summary "$OUT/ab-summary.json" --self-test || { rm -f "$OUT/ab-summary.json"; echo "POINT_VOID $ID (analysis)"; exit 1; }
+(cd "$OUT" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+echo "POINT_BANKED $ID evidence=$OUT"
