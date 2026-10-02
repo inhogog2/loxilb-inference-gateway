@@ -95,6 +95,10 @@ func TestHalfCloseResolve(t *testing.T) {
 		{"hold given to a P/D rule by a replace", &ruleEnt{},
 			cmn.LbServiceArg{HalfCloseMode: "hold", HalfCloseModePresent: true, PDDisaggMode: true}, fp},
 		{"P/D switched on under a stored hold", stored, cmn.LbServiceArg{PDDisaggMode: true}, fp},
+		// A replace is judged on the stored security mode, which cannot change:
+		// a TLS rule replaced without naming its security is still TLS.
+		{"hold given to a TLS rule by a replace that omits security", &ruleEnt{secMode: cmn.LBServHTTPS},
+			cmn.LbServiceArg{HalfCloseMode: "hold", HalfCloseModePresent: true}, fp},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := halfCloseResolve(c.eRule, &c.serv, c.mode)

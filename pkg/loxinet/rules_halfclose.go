@@ -32,9 +32,9 @@ import (
 // check is on the rule as it will stand after a replace - the mode it keeps
 // and the P/D switch it is given - so neither order slips through: hold on a
 // P/D rule, nor P/D switched on under a stored hold. The security mode cannot
-// change on a live rule. A snapshot restore replay is let through as unset
-// with a warning instead, so that one field cannot keep the rule from coming
-// back.
+// change on a live rule, so a replace is judged on the stored one, whatever
+// the request says. A snapshot restore replay is let through as unset with a
+// warning instead, so that one field cannot keep the rule from coming back.
 func halfCloseResolve(eRule *ruleEnt, serv *cmn.LbServiceArg, mode cmn.LBMode) (uint8, error) {
 	next, err := cmn.HalfCloseModeToRule(serv.HalfCloseMode)
 	if err != nil {
@@ -46,11 +46,15 @@ func halfCloseResolve(eRule *ruleEnt, serv *cmn.LbServiceArg, mode cmn.LBMode) (
 	if next != cmn.HalfCloseRuleHold {
 		return next, nil
 	}
+	sec := serv.Security
+	if eRule != nil {
+		sec = eRule.secMode
+	}
 	why := ""
 	switch {
 	case mode != cmn.LBModeFullProxy:
 		why = "available on fullproxy services only"
-	case serv.Security != cmn.LBServPlain:
+	case sec != cmn.LBServPlain:
 		why = "not available on a service whose clients use TLS: TLS connections are never held"
 	case serv.PDDisaggMode:
 		why = "not available on a P/D (pd_disagg_mode) service yet"
