@@ -662,8 +662,16 @@ chk    T16-2h "the compliance receiver does hold every record of that range" "$(
 chk_ge T16-2i "the status counts the pruned segments" 1 "$(astatus | jq -r '.pruned // 0')"
 # The pass that prunes also writes, and what it writes can seal the segment
 # the compliance sink is reading. A sink that kept up is never called behind.
-chk    T16-2j "no loss is recorded against the sink that kept up" 0 \
-  "$(printf '%s\n' "$T" | jq -c 'select(.event_type=="sys.segment.lost_to_retention" and (.detail.sinks_pending | index("compliance")))' | grep -c .)"
+AGAINST=$(printf '%s\n' "$T" | jq -c 'select(.event_type=="sys.segment.lost_to_retention" and (.detail.sinks_pending | index("compliance")))')
+chk    T16-2j "no loss is recorded against the sink that kept up" 0 "$(printf '%s' "$AGAINST" | grep -c .)"
+# A red row here is either a loss that did not happen or a sink that did
+# fall behind; what the receiver holds of each range tells the two apart.
+while IFS= read -r rec; do
+  [[ -z "$rec" ]] && continue
+  a=$(printf '%s' "$rec" | jq -r '.detail.seq_from // 0'); b=$(printf '%s' "$rec" | jq -r '.detail.seq_to // 0')
+  held=$(rcv_seqs compliance "$(printf '%s' "$rec" | jq -r '.boot_id')" | awk -v a="$a" -v b="$b" '$1>=a && $1<=b' | grep -c .)
+  echo "    loss at seq $(printf '%s' "$rec" | jq -r '.seq') names compliance for $a..$b; its receiver holds $held of $((b - a + 1)): $(printf '%s' "$rec" | jq -c '.detail')"
+done <<< "$AGAINST"
 
 rcv_start secondary || code=1
 wait_caught secondary 120; chk T16-3a "with its receiver back the secondary sink catches up" 0 $?
