@@ -81,6 +81,17 @@ type trailSegment struct {
 	prev   string
 	gz     bool
 	active bool
+	// damaged is a sealed file that is there and whose header cannot be
+	// read. It has no identity; its place among the others is its name.
+	damaged bool
+}
+
+// errSegmentUnreadable is wrapped with the file's name when a reader's
+// way leads into a sealed segment whose header cannot be read.
+var errSegmentUnreadable = errors.New("the segment's header cannot be read")
+
+func (s trailSegment) unreadable() error {
+	return fmt.Errorf("audit: %s: %w", s.name, errSegmentUnreadable)
 }
 
 // TrailReader returns the records of an audit directory in the order they
@@ -145,7 +156,7 @@ func (r *TrailReader) Holds(uuid string) (bool, error) {
 		return false, err
 	}
 	for i := range segs {
-		if segs[i].uuid == uuid {
+		if !segs[i].damaged && segs[i].uuid == uuid {
 			return true, nil
 		}
 	}
@@ -245,6 +256,9 @@ func (r *TrailReader) advance() (bool, error) {
 	var next *trailSegment
 	at := -1
 	for i := range segs {
+		if segs[i].damaged {
+			continue
+		}
 		if segs[i].uuid == r.cur.seg.uuid {
 			at = i
 			continue
@@ -285,6 +299,9 @@ func (r *TrailReader) advance() (bool, error) {
 			return true, nil
 		}
 	}
+	if next.damaged {
+		return false, next.unreadable()
+	}
 	o, err := openTrailSegment(*next)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -314,15 +331,31 @@ func (r *TrailReader) openStart() error {
 				return ErrTrailIdle
 			}
 		} else {
+			var damaged *trailSegment
 			for i := range segs {
+				if segs[i].damaged {
+					if damaged == nil {
+						damaged = &segs[i]
+					}
+					continue
+				}
 				if segs[i].uuid == r.start.SegmentUUID {
 					pick = &segs[i]
 					break
 				}
 			}
 			if pick == nil {
+				if damaged != nil {
+					// The segment the position names may be the one
+					// that cannot be read. Calling the position lost
+					// would send the caller on past it.
+					return damaged.unreadable()
+				}
 				return ErrPositionLost
 			}
+		}
+		if pick.damaged {
+			return pick.unreadable()
 		}
 		o, err := openTrailSegment(*pick)
 		if err != nil {
@@ -386,9 +419,22 @@ func (r *TrailReader) scan() ([]trailSegment, error) {
 		}
 		hdr, ok := r.hdrs[name]
 		if !ok || seg.active {
-			// A file that vanished since ReadDir, or whose header is
-			// not written yet, is simply not listed this time.
+			// A file that vanished since ReadDir, or an active segment
+			// whose header is not written yet, is simply not listed
+			// this time. A sealed file that is still there is complete
+			// under either of its names, so a header that cannot be
+			// read is damage: it is listed, in its place by name, so
+			// that a reader arriving there stops and does not step
+			// over what the file held.
 			if hdr, ok = readSegmentHeader(seg.path); !ok || hdr.SegmentUUID == "" {
+				if seg.active {
+					continue
+				}
+				if _, serr := os.Stat(seg.path); serr != nil {
+					continue
+				}
+				seg.damaged = true
+				out = append(out, seg)
 				continue
 			}
 			if !seg.active {

@@ -542,6 +542,85 @@ func TestTrailReaderLostLinkAndNoFooter(t *testing.T) {
 	}
 }
 
+func TestTrailReaderStopsAtASegmentWhoseHeaderCannotBeRead(t *testing.T) {
+	// A sealed file that is there and does not say which segment it is
+	// held records. A reader that went on in directory order would pass
+	// over them without a word.
+	dir := t.TempDir()
+	damaged := filepath.Join(dir, "audit-20260101-000001.000.jsonl")
+	writeHandSegment(t, filepath.Join(dir, "audit-20260101-000000.000.jsonl"),
+		handSegment{uuid: "u1", first: 1, records: 2, footer: true})
+	if err := os.WriteFile(damaged, []byte("not a segment\n"), fileMode); err != nil {
+		t.Fatal(err)
+	}
+	writeHandSegment(t, filepath.Join(dir, ActiveSegmentName),
+		handSegment{uuid: "u3", prev: "u2", first: 5, records: 2})
+
+	r := NewTrailReader(dir, Position{})
+	defer r.Close()
+	var got []uint64
+	var err error
+	for {
+		var l TrailLine
+		if l, err = r.Next(); err != nil {
+			break
+		}
+		got = append(got, l.Pos.Seq)
+	}
+	if fmt.Sprint(got) != "[1 2]" {
+		t.Fatalf("got %v before the damaged segment, want [1 2]", got)
+	}
+	if !errors.Is(err, errSegmentUnreadable) || !strings.Contains(err.Error(), filepath.Base(damaged)) {
+		t.Fatalf("got %v, want the damaged segment named", err)
+	}
+	// It stays there for as long as the file does.
+	if _, err := r.Next(); !errors.Is(err, errSegmentUnreadable) {
+		t.Fatalf("a second read got %v", err)
+	}
+	// A position inside the segment before it is found as before, and
+	// leads to the same place.
+	r2 := NewTrailReader(dir, Position{SegmentUUID: "u1", Seq: 1})
+	defer r2.Close()
+	if l, err := r2.Next(); err != nil || l.Pos.Seq != 2 {
+		t.Fatalf("resume before the damaged segment: %v %v", l.Pos, err)
+	}
+	// A position that is in no readable segment may be in the damaged
+	// one; it is not called lost.
+	r3 := NewTrailReader(dir, Position{SegmentUUID: "u2", Seq: 3})
+	defer r3.Close()
+	if _, err := r3.Next(); !errors.Is(err, errSegmentUnreadable) {
+		t.Fatalf("a position in no readable segment got %v", err)
+	}
+
+	// With the file gone the reader continues with what is left.
+	if err := os.Remove(damaged); err != nil {
+		t.Fatal(err)
+	}
+	if got := seqs(drain(t, r)); fmt.Sprint(got) != "[5 6]" {
+		t.Fatalf("after the removal: got %v, want [5 6]", got)
+	}
+}
+
+func TestTrailReaderDamagedSegmentBehindTheReaderIsNotInItsWay(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "audit-20260101-000000.000.jsonl"), []byte("not a segment\n"), fileMode); err != nil {
+		t.Fatal(err)
+	}
+	writeHandSegment(t, filepath.Join(dir, "audit-20260101-000001.000.jsonl"),
+		handSegment{uuid: "u2", prev: "u1", first: 3, records: 2, footer: true})
+	writeHandSegment(t, filepath.Join(dir, ActiveSegmentName),
+		handSegment{uuid: "u3", prev: "u2", first: 5, records: 1})
+
+	r := NewTrailReader(dir, Position{SegmentUUID: "u2", Seq: 3})
+	defer r.Close()
+	if got := seqs(drain(t, r)); fmt.Sprint(got) != "[4 5]" {
+		t.Fatalf("got %v, want [4 5]", got)
+	}
+	if held, err := r.Holds("u2"); err != nil || !held {
+		t.Fatalf("Holds(u2) = %v, %v", held, err)
+	}
+}
+
 func TestTrailReaderSegmentListedInBothForms(t *testing.T) {
 	// Between the compressed file's rename and the plain file's removal
 	// one segment is listed twice. Its records are returned once.

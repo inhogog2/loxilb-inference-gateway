@@ -972,6 +972,69 @@ func TestSinkTailerReportsASegmentItCannotRead(t *testing.T) {
 	}
 }
 
+func TestSinkTailerDoesNotPassOverASegmentWithoutAHeader(t *testing.T) {
+	cfg := testConfig(t)
+	w := startWriter(t, cfg)
+	writeN(t, w, 3, "one")
+	sink := &fakeSink{}
+	tc := tailerConfig(cfg.Dir, "siem", sink, w)
+	tc.Compliance = true
+	tl := startTailer(t, tc)
+	settled(t, cfg.Dir, sink, 0)
+	stopTailer(t, tl)
+
+	// The newer of two sealed segments no longer says which segment it
+	// is: nothing in it can be read, not even its first line.
+	sealNow(t, w)
+	writeN(t, w, 3, "two")
+	sealNow(t, w)
+	writeN(t, w, 2, "three")
+	waitCompressed(t, cfg.Dir)
+	var damaged string
+	entries, _ := os.ReadDir(cfg.Dir)
+	for _, e := range entries {
+		if _, gz, ok := parseSegmentName(e.Name()); ok && gz {
+			damaged = filepath.Join(cfg.Dir, e.Name())
+		}
+	}
+	if damaged == "" {
+		t.Fatal("no compressed segment to damage")
+	}
+	if err := os.WriteFile(damaged, []byte("not a compressed segment\n"), fileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	before := len(sink.got())
+	arrived := func() string {
+		var out []string
+		for _, f := range sink.got()[before:] {
+			out = append(out, string(f.raw))
+		}
+		return strings.Join(out, "\n")
+	}
+	tl2 := startTailer(t, tc)
+	waitFor(t, "the sink to stall", func() bool { return tl2.Stats().State == SinkStalled })
+	waitFor(t, "further attempts on the same segment", func() bool { return tl2.Stats().ReadErrors >= 4 })
+	if strings.Contains(arrived(), `"/three/`) {
+		t.Fatal("the sink went past a segment it could not read")
+	}
+	if last := tl2.Stats().LastError; !strings.Contains(last, filepath.Base(damaged)) {
+		t.Fatalf("the sink does not name the segment it stands before: %q", last)
+	}
+
+	// The damaged file cannot be parsed by the helpers that read the
+	// whole directory, so the trail is looked at once it is gone.
+	if err := os.Remove(damaged); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the records behind the damaged segment", func() bool {
+		return strings.Contains(arrived(), `"/three/1"`)
+	})
+	if n := len(eventsOf(t, cfg.Dir, "sys.sink.cursor_recovery_failed")); n != 1 {
+		t.Fatalf("%d cursor_recovery_failed records for one stall, want 1", n)
+	}
+}
+
 func TestSinkTailerStallsWithoutAReservedNumber(t *testing.T) {
 	cfg := testConfig(t)
 	w := startWriter(t, cfg)

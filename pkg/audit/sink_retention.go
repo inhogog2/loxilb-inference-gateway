@@ -81,6 +81,12 @@ func (s *segmenter) forgetRange(uuid string) {
 // the writer goroutine is not where that may happen: the read is started
 // on its own goroutine and ok is false until it has finished.
 func (s *segmenter) rangeOf(seg SegmentInfo, uuid string) (r segRange, ok bool) {
+	if uuid == "" {
+		// The header could not be read, so there is no identity to keep
+		// a range under and no reason to expect the rest to read. A pass
+		// that waited for this range would wait at every pass.
+		return segRange{unknown: true}, true
+	}
 	s.uuidMu.Lock()
 	r, ok = s.ranges[uuid]
 	start := !ok && !s.resolving[uuid]

@@ -3,7 +3,7 @@
   "generated_by": "cicd/audit-mgmt/gen-coverage-manifest.py",
   "stage_claimed": "1b",
   "event_types": 65,
-  "matrix_digest": "1ec08f85ba12f0c9e8d5de64c85304b6a028dbe418e83ddb04f6fddfca82b27f",
+  "matrix_digest": "146c9ad79c77002baa38bdac8c621e7c1f8ca24a064b285a7192a0ae173045e3",
   "requirements_by_stage": {
     "1b": {
       "covered and tested": 4
@@ -1391,7 +1391,8 @@
           "unit_tests": [
             "TestPruneRecordsWhatASinkWasNeverSent",
             "TestPruneWaitsForTheRangeOfASegmentItDidNotSeal",
-            "TestPruneDoesNotReadASegmentNoSinkIsBehind"
+            "TestPruneDoesNotReadASegmentNoSinkIsBehind",
+            "TestPruneTakesASegmentWhoseHeaderCannotBeRead"
           ],
           "red_twin_run_id": "llbigw-2-twin-2-sink-nolost-r1",
           "state": "covered and tested"
@@ -1640,11 +1641,13 @@
             "errno_class",
             "cursor"
           ],
-          "behaviour": "a segment that is listed and cannot be read out stalls the sink at its place: one record per stall, nothing behind the segment is sent until it is gone",
+          "behaviour": "a sealed segment that cannot be read, from its header on or further in, stalls the sink at its place: one record per stall, nothing behind the segment is sent until it is gone",
           "scenario": "unit",
           "assertion_ids": [],
           "unit_tests": [
-            "TestSinkTailerReportsASegmentItCannotRead"
+            "TestSinkTailerReportsASegmentItCannotRead",
+            "TestSinkTailerDoesNotPassOverASegmentWithoutAHeader",
+            "TestTrailReaderStopsAtASegmentWhoseHeaderCannotBeRead"
           ],
           "red_twin_run_id": null,
           "note": "no bed row",

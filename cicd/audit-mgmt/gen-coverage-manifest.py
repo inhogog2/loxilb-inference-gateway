@@ -457,7 +457,8 @@ MATRIX = [
             scenario="audit-sink",
             twin="2-sink-nolost",
             unit=["TestPruneRecordsWhatASinkWasNeverSent", "TestPruneWaitsForTheRangeOfASegmentItDidNotSeal",
-                  "TestPruneDoesNotReadASegmentNoSinkIsBehind"]),
+                  "TestPruneDoesNotReadASegmentNoSinkIsBehind",
+                  "TestPruneTakesASegmentWhoseHeaderCannotBeRead"]),
         req("2", ["sinks_pending"],
             "a sink that was sent the segment is not named: the pass's own records can seal the "
             "active segment under it, and a sink standing in a segment sealed since the pass listed "
@@ -513,9 +514,12 @@ MATRIX = [
     ]),
     entry("sys.sink.cursor_recovery_failed", "A", [
         req("2", ["errno_class", "cursor"],
-            "a segment that is listed and cannot be read out stalls the sink at its place: one "
-            "record per stall, nothing behind the segment is sent until it is gone",
-            unit=["TestSinkTailerReportsASegmentItCannotRead"],
+            "a sealed segment that cannot be read, from its header on or further in, stalls the "
+            "sink at its place: one record per stall, nothing behind the segment is sent until "
+            "it is gone",
+            unit=["TestSinkTailerReportsASegmentItCannotRead",
+                  "TestSinkTailerDoesNotPassOverASegmentWithoutAHeader",
+                  "TestTrailReaderStopsAtASegmentWhoseHeaderCannotBeRead"],
             note="no bed row"),
     ]),
     entry("sys.replay.completed", "A", [later("2", ["replay_event_id", "sink", "seq_from", "seq_to"], "replay finished")]),

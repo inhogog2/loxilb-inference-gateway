@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // sealedTrail is a trail of two sealed segments and an active one, with
@@ -305,6 +306,56 @@ func TestPruneDoesNotReadASegmentNoSinkIsBehind(t *testing.T) {
 	st.w.seg.uuidMu.Unlock()
 	if read || reading {
 		t.Error("the segment was read although no sink was behind it")
+	}
+}
+
+// A sealed segment whose header cannot be read has no identity to file a
+// range under. It must still be pruned: a pass that waited for that range
+// would wait at every pass, and nothing older than it would ever go.
+func TestPruneTakesASegmentWhoseHeaderCannotBeRead(t *testing.T) {
+	st := newSealedTrail(t)
+	closeWriter(t, st.w)
+	segs, err := st.w.seg.listSealed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	damaged := segs[0].Path
+	if err := os.WriteFile(damaged, []byte("not a compressed segment\n"), fileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	st.w = startWriter(t, st.cfg)
+	st.sinks(SinkProgress{Name: "behind"})
+	st.w.SetRetention(Retention{MaxBytes: 1})
+	for pass := 0; pass < 20; pass++ {
+		st.w.prunePassNow(t)
+		if _, err := os.Stat(damaged); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := os.Stat(damaged); !os.IsNotExist(err) {
+		t.Fatal("twenty passes did not prune the segment: retention waits for a range that cannot be read")
+	}
+	closeWriter(t, st.w)
+
+	// The loss is still on record ahead of the prune, naming the sink; it
+	// states no range, because none could be read.
+	var lost []line
+	for _, l := range ofType(readDir(t, st.cfg.Dir), "sys.segment.lost_to_retention") {
+		if l.detail()["resource"] == "audit_segment:" {
+			lost = append(lost, l)
+		}
+	}
+	if len(lost) != 1 {
+		t.Fatalf("%d loss records for the unreadable segment, want 1", len(lost))
+	}
+	d := lost[0].detail()
+	if got := stringsOf(d["sinks_pending"]); !reflect.DeepEqual(got, []string{"behind"}) {
+		t.Errorf("sinks_pending %v, want [behind]", got)
+	}
+	if d["seq_from"] != nil || d["seq_to"] != nil {
+		t.Errorf("the loss states a range for a segment that could not be read: %v", d)
 	}
 }
 
