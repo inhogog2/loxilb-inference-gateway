@@ -2947,7 +2947,7 @@
     "evidence": "runtime evidence 2026-09-30/2026-10-01, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known client shapes five times each through off/request/response/both rules and reads /metrics before and after, asserting the cells that move and that no other cell does. +5 on the response-only rule for FINs in one segment with the request and 20 ms after it, +5 on the both rule when the kernel refused the request direction (client no longer established), 0 when both directions were paired."
    },
    "loxilb_proxy_halfclose_accel_skipped_total": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseHoldCollector", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 171, "writes": "halfCloseAccelSkippedDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 202, "call_line": 203, "calls": "halfCloseHoldCollector", "entry_point": "registry-collector" }
@@ -2957,7 +2957,7 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1088, "call_line": 1186, "calls": "updateHoldStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-10-01: api/prometheus/halfclose_hold_metrics.go emits every series of the family from holdStore at scrape time, at zero until the datapath counts; halfclose_hold_metrics_test.go drives the collector (series per family, labels and values from the store) and the merge (gauges as read, counters never backwards), and pins the end-reason labels against loxilb-ebpf/common/sockproxy_hold_core.h. The C side is sockproxy_hold.c (the hold, its close points, the 1 Hz pass and the pairing check); its pure half is driven by make -C common test_hold. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-10-01/2026-10-02, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known half-close shapes through hold rules on the off/request/response/both arms with a 10 s bound, five times each, and reads /metrics before and after, asserting the cells that move and that no other cell does (20 shapes, all pass); a second probe reads the gauges while a client is held. +5 on each of the request, response and both arms when the FIN arrived with the request, before the pairing, and the client then got its answer; 0 when the FIN came 20 ms after."
    },
    "loxilb_proxy_halfclose_fin_gap_seconds": {
     "status": "verified-runtime",
@@ -2986,7 +2986,7 @@
     "evidence": "runtime evidence 2026-09-30/2026-10-01, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known client shapes five times each through off/request/response/both rules and reads /metrics before and after, asserting the cells that move and that no other cell does. outcome owed for half-closes with an answer owed, idle for clients closing after their answer, partial for a FIN behind half a request, accel on response/request/both rules once a verdict entry exists; entries eof, connect_wait, setup_park and fc_park all observed (the last three without the assertion). The layer that passes the EOF branch twice still counts one per FIN."
    },
    "loxilb_proxy_halfclose_held": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseHoldCollector", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 171, "writes": "halfCloseHeldDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 202, "call_line": 203, "calls": "halfCloseHoldCollector", "entry_point": "registry-collector" }
@@ -2996,10 +2996,10 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1088, "call_line": 1186, "calls": "updateHoldStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-10-01: api/prometheus/halfclose_hold_metrics.go emits every series of the family from holdStore at scrape time, at zero until the datapath counts; halfclose_hold_metrics_test.go drives the collector (series per family, labels and values from the store) and the merge (gauges as read, counters never backwards), and pins the end-reason labels against loxilb-ebpf/common/sockproxy_hold_core.h. The C side is sockproxy_hold.c (the hold, its close points, the 1 Hz pass and the pairing check); its pure half is driven by make -C common test_hold. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-10-01/2026-10-02, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known half-close shapes through hold rules on the off/request/response/both arms with a 10 s bound, five times each, and reads /metrics before and after, asserting the cells that move and that no other cell does (20 shapes, all pass); a second probe reads the gauges while a client is held. 1 while a client that stopped reading was held, 0 once its hold had ended; with new holds blocked the client already held stayed counted until it finished."
    },
    "loxilb_proxy_halfclose_held_oldest_seconds": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseHoldCollector", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 171, "writes": "halfCloseHeldOldestDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 202, "call_line": 203, "calls": "halfCloseHoldCollector", "entry_point": "registry-collector" }
@@ -3009,10 +3009,10 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1088, "call_line": 1186, "calls": "updateHoldStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-10-01: api/prometheus/halfclose_hold_metrics.go emits every series of the family from holdStore at scrape time, at zero until the datapath counts; halfclose_hold_metrics_test.go drives the collector (series per family, labels and values from the store) and the merge (gauges as read, counters never backwards), and pins the end-reason labels against loxilb-ebpf/common/sockproxy_hold_core.h. The C side is sockproxy_hold.c (the hold, its close points, the 1 Hz pass and the pairing check); its pure half is driven by make -C common test_hold. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-10-01/2026-10-02, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known half-close shapes through hold rules on the off/request/response/both arms with a 10 s bound, five times each, and reads /metrics before and after, asserting the cells that move and that no other cell does (20 shapes, all pass); a second probe reads the gauges while a client is held. 3.98 s thirteen seconds into a hold (the datapath's 1 Hz pass behind the 10 s export), 14.0 s eleven seconds later, 0 after the hold ended."
    },
    "loxilb_proxy_halfclose_hold_allowed": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseHoldCollector", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 171, "writes": "halfCloseHoldAllowedDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 202, "call_line": 203, "calls": "halfCloseHoldCollector", "entry_point": "registry-collector" }
@@ -3022,10 +3022,10 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1088, "call_line": 1186, "calls": "updateHoldStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-10-01: api/prometheus/halfclose_hold_metrics.go emits every series of the family from holdStore at scrape time, at zero until the datapath counts; halfclose_hold_metrics_test.go drives the collector (series per family, labels and values from the store) and the merge (gauges as read, counters never backwards), and pins the end-reason labels against loxilb-ebpf/common/sockproxy_hold_core.h. The C side is sockproxy_hold.c (the hold, its close points, the 1 Hz pass and the pairing check); its pure half is driven by make -C common test_hold. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-10-01/2026-10-02, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known half-close shapes through hold rules on the off/request/response/both arms with a 10 s bound, five times each, and reads /metrics before and after, asserting the cells that move and that no other cell does (20 shapes, all pass); a second probe reads the gauges while a client is held. 1 by default, 0 after POST /config/halfclose {\"allow\":false}, 1 again once allowed."
    },
    "loxilb_proxy_halfclose_hold_cap_seconds": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseHoldCollector", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 171, "writes": "halfCloseHoldCapDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 202, "call_line": 203, "calls": "halfCloseHoldCollector", "entry_point": "registry-collector" }
@@ -3035,10 +3035,10 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1088, "call_line": 1186, "calls": "updateHoldStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-10-01: api/prometheus/halfclose_hold_metrics.go emits every series of the family from holdStore at scrape time, at zero until the datapath counts; halfclose_hold_metrics_test.go drives the collector (series per family, labels and values from the store) and the merge (gauges as read, counters never backwards), and pins the end-reason labels against loxilb-ebpf/common/sockproxy_hold_core.h. The C side is sockproxy_hold.c (the hold, its close points, the 1 Hz pass and the pairing check); its pure half is driven by make -C common test_hold. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-10-01/2026-10-02, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known half-close shapes through hold rules on the off/request/response/both arms with a 10 s bound, five times each, and reads /metrics before and after, asserting the cells that move and that no other cell does (20 shapes, all pass); a second probe reads the gauges while a client is held. the bound as set through /config/halfclose: 10, 30, then 240."
    },
    "loxilb_proxy_halfclose_hold_ended_total": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseHoldCollector", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 171, "writes": "halfCloseHoldEndedDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 202, "call_line": 203, "calls": "halfCloseHoldCollector", "entry_point": "registry-collector" }
@@ -3048,10 +3048,10 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1088, "call_line": 1186, "calls": "updateHoldStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-10-01: api/prometheus/halfclose_hold_metrics.go emits every series of the family from holdStore at scrape time, at zero until the datapath counts; halfclose_hold_metrics_test.go drives the collector (series per family, labels and values from the store) and the merge (gauges as read, counters never backwards), and pins the end-reason labels against loxilb-ebpf/common/sockproxy_hold_core.h. The C side is sockproxy_hold.c (the hold, its close points, the 1 Hz pass and the pairing check); its pure half is driven by make -C common test_hold. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-10-01/2026-10-02, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known half-close shapes through hold rules on the off/request/response/both arms with a 10 s bound, five times each, and reads /metrics before and after, asserting the cells that move and that no other cell does (20 shapes, all pass); a second probe reads the gauges while a client is held. answered +5 for the request and FIN in one segment, a FIN 20 ms later, a 103 interim answer and a close-delimited answer; backend_first +5 for a backend that left mid-answer; reset +5 for a client that reset 200 ms after its FIN; expired +2 for clients that stopped reading past the bound; released +2 after /config/halfclose/release."
    },
    "loxilb_proxy_halfclose_hold_expired_total": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseHoldCollector", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 171, "writes": "halfCloseHoldExpiredDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 202, "call_line": 203, "calls": "halfCloseHoldCollector", "entry_point": "registry-collector" }
@@ -3061,7 +3061,7 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1088, "call_line": 1186, "calls": "updateHoldStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-10-01: api/prometheus/halfclose_hold_metrics.go emits every series of the family from holdStore at scrape time, at zero until the datapath counts; halfclose_hold_metrics_test.go drives the collector (series per family, labels and values from the store) and the merge (gauges as read, counters never backwards), and pins the end-reason labels against loxilb-ebpf/common/sockproxy_hold_core.h. The C side is sockproxy_hold.c (the hold, its close points, the 1 Hz pass and the pairing check); its pure half is driven by make -C common test_hold. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-10-01/2026-10-02, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known half-close shapes through hold rules on the off/request/response/both arms with a 10 s bound, five times each, and reads /metrics before and after, asserting the cells that move and that no other cell does (20 shapes, all pass); a second probe reads the gauges while a client is held. answer_started=\"true\",stream=\"unknown\" +2 for clients that stopped reading after their answer began; no other cell moved."
    },
    "loxilb_proxy_halfclose_hold_refused_total": {
     "status": "verified-static",
@@ -3077,7 +3077,7 @@
     "evidence": "source verification 2026-10-01: api/prometheus/halfclose_hold_metrics.go emits every series of the family from holdStore at scrape time, at zero until the datapath counts; halfclose_hold_metrics_test.go drives the collector (series per family, labels and values from the store) and the merge (gauges as read, counters never backwards), and pins the end-reason labels against loxilb-ebpf/common/sockproxy_hold_core.h. The C side is sockproxy_hold.c (the hold, its close points, the 1 Hz pass and the pairing check); its pure half is driven by make -C common test_hold. Not yet observed on a bed."
    },
    "loxilb_proxy_halfclose_hold_spurious_wakeups_total": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseHoldCollector", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 171, "writes": "halfCloseHoldSpuriousDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 202, "call_line": 203, "calls": "halfCloseHoldCollector", "entry_point": "registry-collector" }
@@ -3087,10 +3087,10 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1088, "call_line": 1186, "calls": "updateHoldStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-10-01: api/prometheus/halfclose_hold_metrics.go emits every series of the family from holdStore at scrape time, at zero until the datapath counts; halfclose_hold_metrics_test.go drives the collector (series per family, labels and values from the store) and the merge (gauges as read, counters never backwards), and pins the end-reason labels against loxilb-ebpf/common/sockproxy_hold_core.h. The C side is sockproxy_hold.c (the hold, its close points, the 1 Hz pass and the pairing check); its pure half is driven by make -C common test_hold. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-10-01/2026-10-02, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known half-close shapes through hold rules on the off/request/response/both arms with a 10 s bound, five times each, and reads /metrics before and after, asserting the cells that move and that no other cell does (20 shapes, all pass); a second probe reads the gauges while a client is held. eof_reentry 0 on every shape - it had counted 30 per slow-reader hold before the dispatcher stopped reading held clients, which is how that defect was found; empty_out 1 per hold for a slow reader and for 64 KB chunks 300 ms apart, 0 at 600 ms."
    },
    "loxilb_proxy_halfclose_hold_total": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseHoldCollector", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 171, "writes": "halfCloseHoldDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 202, "call_line": 203, "calls": "halfCloseHoldCollector", "entry_point": "registry-collector" }
@@ -3100,7 +3100,7 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1088, "call_line": 1186, "calls": "updateHoldStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-10-01: api/prometheus/halfclose_hold_metrics.go emits every series of the family from holdStore at scrape time, at zero until the datapath counts; halfclose_hold_metrics_test.go drives the collector (series per family, labels and values from the store) and the merge (gauges as read, counters never backwards), and pins the end-reason labels against loxilb-ebpf/common/sockproxy_hold_core.h. The C side is sockproxy_hold.c (the hold, its close points, the 1 Hz pass and the pairing check); its pure half is driven by make -C common test_hold. Not yet observed on a bed."
+    "evidence": "runtime evidence 2026-10-01/2026-10-02, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known half-close shapes through hold rules on the off/request/response/both arms with a 10 s bound, five times each, and reads /metrics before and after, asserting the cells that move and that no other cell does (20 shapes, all pass); a second probe reads the gauges while a client is held. +5 per shape that half-closes with an answer owed on a hold rule; +0 on a rule without half_close_mode, with holds blocked, and on accelerated arms whose FIN came after the pairing."
    },
    "loxilb_proxy_halfclose_tls_fin_total": {
     "status": "verified-static",
