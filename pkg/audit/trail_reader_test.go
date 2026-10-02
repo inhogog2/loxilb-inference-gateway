@@ -699,6 +699,153 @@ func TestTrailReaderSegmentRemovedWhileBeingRead(t *testing.T) {
 	}
 }
 
+// onceAfterList runs fn in the gap of the next scan only: after the
+// directory was listed and before the files it listed are read.
+func onceAfterList(t *testing.T, fn func()) {
+	t.Helper()
+	fired := false
+	trailAfterList = func() {
+		if !fired {
+			fired = true
+			fn()
+		}
+	}
+	t.Cleanup(func() { trailAfterList = func() {} })
+}
+
+// sealByHand does to the active segment what the writer's seal does first:
+// the footer and the rename. The next segment is not there yet.
+func sealByHand(t *testing.T, dir, uuid, sealedName string) {
+	t.Helper()
+	active := filepath.Join(dir, ActiveSegmentName)
+	ft, _ := json.Marshal(segmentFooter{Kind: kindFooter, SegmentUUID: uuid})
+	appendRaw(t, active, append(ft, '\n'))
+	if err := os.Rename(active, filepath.Join(dir, sealedName)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// compressByHand replaces a sealed segment by its compressed form, as the
+// writer's compression does.
+func compressByHand(t *testing.T, path string) {
+	t.Helper()
+	plain, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	zw := gzip.NewWriter(&b)
+	if _, err := zw.Write(plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+gzipExt, b.Bytes(), fileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTrailReaderSegmentSealedBetweenTheListingAndTheRead(t *testing.T) {
+	// The reader has read the active segment out and looks at the
+	// directory. The listing still has the segment under the active name;
+	// before that file's header is read the writer seals it. The scan
+	// finds it under neither name. It was renamed, not removed, and the
+	// reader's place in it is not lost.
+	dir := t.TempDir()
+	writeHandSegment(t, filepath.Join(dir, ActiveSegmentName), handSegment{uuid: "u1", first: 1, records: 2})
+	r := NewTrailReader(dir, Position{})
+	defer r.Close()
+	if got := seqs(drain(t, r)); fmt.Sprint(got) != "[1 2]" {
+		t.Fatalf("got %v, want [1 2]", got)
+	}
+
+	onceAfterList(t, func() { sealByHand(t, dir, "u1", "audit-20260101-000000.000.jsonl") })
+	if l, err := r.Next(); !errors.Is(err, ErrTrailIdle) {
+		t.Fatalf("got %v %v, want ErrTrailIdle: the segment is still in the directory", l.Pos, err)
+	}
+
+	// The writer opens the next segment, and the reader goes on into it.
+	writeHandSegment(t, filepath.Join(dir, ActiveSegmentName), handSegment{uuid: "u2", prev: "u1", first: 3, records: 2})
+	if got := seqs(drain(t, r)); fmt.Sprint(got) != "[3 4]" {
+		t.Fatalf("got %v, want [3 4]", got)
+	}
+}
+
+func TestTrailReaderResumesInASegmentSealedBetweenTheListingAndTheRead(t *testing.T) {
+	// The same gap, for a reader that starts from a saved position in the
+	// segment being sealed.
+	dir := t.TempDir()
+	writeHandSegment(t, filepath.Join(dir, ActiveSegmentName), handSegment{uuid: "u1", first: 1, records: 3})
+	r := NewTrailReader(dir, Position{SegmentUUID: "u1", Seq: 1})
+	defer r.Close()
+
+	onceAfterList(t, func() { sealByHand(t, dir, "u1", "audit-20260101-000000.000.jsonl") })
+	if got := seqs(drain(t, r)); fmt.Sprint(got) != "[2 3]" {
+		t.Fatalf("got %v, want [2 3]", got)
+	}
+}
+
+func TestTrailReaderResumesInASegmentCompressedBetweenTheListingAndTheRead(t *testing.T) {
+	// A reader that has not seen the sealed file before has to read its
+	// header to know which segment it is. The listing has the plain name;
+	// before the header is read compression replaces the file. The header
+	// is then read from the compressed file, and the segment is found.
+	dir := t.TempDir()
+	s1 := filepath.Join(dir, "audit-20260101-000000.000.jsonl")
+	writeHandSegment(t, s1, handSegment{uuid: "u1", first: 1, records: 3, footer: true})
+	writeHandSegment(t, filepath.Join(dir, ActiveSegmentName), handSegment{uuid: "u2", prev: "u1", first: 4, records: 1})
+	r := NewTrailReader(dir, Position{SegmentUUID: "u1", Seq: 1})
+	defer r.Close()
+
+	onceAfterList(t, func() { compressByHand(t, s1) })
+	if got := seqs(drain(t, r)); fmt.Sprint(got) != "[2 3 4]" {
+		t.Fatalf("got %v, want [2 3 4]", got)
+	}
+}
+
+func TestTrailReaderStartsAtTheOldestSegmentThoughItIsBeingCompressed(t *testing.T) {
+	// A reader starting from nothing begins at the oldest segment. With
+	// that one compressed between the listing and the read of its header,
+	// the scan's oldest is the segment after it; beginning there would
+	// pass over a whole segment without a word.
+	dir := t.TempDir()
+	s1 := filepath.Join(dir, "audit-20260101-000000.000.jsonl")
+	writeHandSegment(t, s1, handSegment{uuid: "u1", first: 1, records: 3, footer: true})
+	writeHandSegment(t, filepath.Join(dir, ActiveSegmentName), handSegment{uuid: "u2", prev: "u1", first: 4, records: 1})
+	r := NewTrailReader(dir, Position{})
+	defer r.Close()
+
+	onceAfterList(t, func() { compressByHand(t, s1) })
+	if got := seqs(drain(t, r)); fmt.Sprint(got) != "[1 2 3 4]" {
+		t.Fatalf("got %v, want [1 2 3 4]", got)
+	}
+}
+
+func TestTrailReaderHoldsASegmentMovedDuringTheScan(t *testing.T) {
+	dir := t.TempDir()
+	s1 := filepath.Join(dir, "audit-20260101-000000.000.jsonl")
+	writeHandSegment(t, s1, handSegment{uuid: "u1", first: 1, records: 1, footer: true})
+	writeHandSegment(t, filepath.Join(dir, ActiveSegmentName), handSegment{uuid: "u2", prev: "u1", first: 2, records: 1})
+	r := NewTrailReader(dir, Position{})
+	defer r.Close()
+
+	onceAfterList(t, func() { compressByHand(t, s1) })
+	if held, err := r.Holds("u1"); err != nil || !held {
+		t.Fatalf("held=%v err=%v: the segment was compressed, not removed", held, err)
+	}
+	onceAfterList(t, func() { sealByHand(t, dir, "u2", "audit-20260101-000001.000.jsonl") })
+	if held, err := r.Holds("u2"); err != nil || !held {
+		t.Fatalf("held=%v err=%v: the segment was sealed, not removed", held, err)
+	}
+	if held, err := r.Holds("u9"); err != nil || held {
+		t.Fatalf("held=%v err=%v for a segment that was never there", held, err)
+	}
+}
+
 func TestTrailReaderRecordsAppendedJustBeforeTheSeal(t *testing.T) {
 	// The reader finds nothing more in the active segment. Before it
 	// looks at the directory the writer appends two records, seals the
