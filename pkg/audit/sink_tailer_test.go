@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -254,6 +255,92 @@ func TestSinkTailerProgressRunsAheadOfTheSavedCursor(t *testing.T) {
 	}
 	if c := tl.Stats().Cursor; c.Seq != 0 {
 		t.Fatalf("the cursor was saved at seq %d; the test needs the tailer between two saves", c.Seq)
+	}
+}
+
+// The pruner gives a pass to a sink that is connected, so Progress says
+// whether this one is: after a record was accepted, and not once a
+// submission has failed.
+func TestSinkTailerProgressSaysWhetherTheSinkIsConnected(t *testing.T) {
+	cfg := testConfig(t)
+	w := startWriter(t, cfg)
+	var down atomic.Bool
+	sink := &fakeSink{verdict: func(int, []byte) error {
+		if down.Load() {
+			return errors.New("receiver is down")
+		}
+		return nil
+	}}
+	tl := startTailer(t, tailerConfig(cfg.Dir, "follower", sink, nil))
+	if tl.Progress().Connected && tl.Stats().Submitted == 0 {
+		t.Fatal("a sink that has sent nothing is reported connected")
+	}
+	writeN(t, w, 2, "one")
+	waitFor(t, "the sink to be connected", func() bool { return tl.Progress().Connected })
+	down.Store(true)
+	writeN(t, w, 1, "two")
+	waitFor(t, "the sink to be disconnected", func() bool { return !tl.Progress().Connected })
+}
+
+// A sink that keeps up is, at any moment, a few records short of the end.
+// When its segment is sealed and the quota is small, the pass that follows
+// finds it there. It is given that pass: nothing is recorded as lost, the
+// sink is sent the rest, and the segment goes at the next pass as one the
+// sink has in full.
+func TestPruneGivesAFollowingTailerOnePassToFinishItsSegment(t *testing.T) {
+	cfg := testConfig(t)
+	w := startWriter(t, cfg)
+	writeN(t, w, 6, "one")
+
+	hold := make(chan struct{})
+	var held atomic.Bool
+	sink := &fakeSink{verdict: func(attempt int, _ []byte) error {
+		if attempt == 4 {
+			held.Store(true)
+			<-hold
+		}
+		return nil
+	}}
+	tl := startTailer(t, tailerConfig(cfg.Dir, "follower", sink, nil))
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			close(hold)
+		}
+	}
+	defer release()
+	waitFor(t, "the tailer to stand inside the segment", func() bool { return held.Load() && tl.Progress().Connected })
+
+	sealNow(t, w)
+	waitCompressed(t, cfg.Dir)
+	w.SetSinkProgress(func() []SinkProgress { return []SinkProgress{tl.Progress()} })
+	w.SetRetention(Retention{MaxBytes: 1})
+	w.prunePassNow(t)
+	if left, _ := w.seg.listSealed(); len(left) != 1 {
+		t.Fatalf("%d sealed segments after the pass, want the one the sink is inside", len(left))
+	}
+	if got := w.Stats().LostToRetention; got != 0 {
+		t.Fatalf("%d records counted as lost to a sink that is connected and inside the segment", got)
+	}
+
+	release()
+	settled(t, cfg.Dir, sink, 0)
+	w.prunePassNow(t)
+	if left, _ := w.seg.listSealed(); len(left) != 0 {
+		t.Fatalf("%d sealed segments after the second pass, want none", len(left))
+	}
+	closeWriter(t, w)
+	ls := readDir(t, cfg.Dir)
+	if lost := ofType(ls, "sys.segment.lost_to_retention"); len(lost) != 0 {
+		t.Fatalf("a loss is recorded against a sink that was sent the segment: %v", lost[0].detail())
+	}
+	prunes := ofType(ls, "sys.segment.prune")
+	if len(prunes) != 1 {
+		t.Fatalf("%d prune records, want 1", len(prunes))
+	}
+	if got, want := stringsOf(prunes[0].detail()["exported_to"]), []string{"follower"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("exported to %v, want %v", got, want)
 	}
 }
 

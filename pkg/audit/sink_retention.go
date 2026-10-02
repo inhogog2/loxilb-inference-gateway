@@ -34,6 +34,9 @@ type SinkProgress struct {
 	// Position is the last record the sink is past; the zero Position is a
 	// sink that has not passed any.
 	Position Position
+	// Connected says the sink's receiver took the last record it was
+	// offered.
+	Connected bool
 }
 
 // SetSinkProgress tells the writer how to ask where the sinks are. The
@@ -156,22 +159,23 @@ func readSegmentRange(path string) segRange {
 }
 
 // sinkStandings sorts the sinks into those that have been sent all of the
-// sealed segment segs[at] and those that have not. ready is false when that
-// cannot be decided yet: the segment's range is still being read.
+// sealed segment segs[at] and those that have not. connected says that one
+// of those that have not is connected. ready is false when that cannot be
+// decided yet: the segment's range is still being read.
 //
 // A sink is past the segment when its place is in a later one. One whose
 // place is in the segment itself is past it only at the segment's last
 // record. One whose place is in no segment the directory holds has lost
 // its place already and will continue from the oldest segment, which is
 // this one or a later one, so it has not been sent this one either.
-func (w *Writer) sinkStandings(segs []SegmentInfo, at int, uuid string) (exported, pending []string, rng segRange, ready bool) {
+func (w *Writer) sinkStandings(segs []SegmentInfo, at int, uuid string) (exported, pending []string, connected bool, rng segRange, ready bool) {
 	fn := w.sinkProgress.Load()
 	if fn == nil {
-		return nil, nil, segRange{}, true
+		return nil, nil, false, segRange{}, true
 	}
 	sinks := (*fn)()
 	if len(sinks) == 0 {
-		return nil, nil, segRange{}, true
+		return nil, nil, false, segRange{}, true
 	}
 	active := w.seg.currentUUID()
 	// order is the place of each sealed segment in the directory, read
@@ -209,11 +213,15 @@ func (w *Writer) sinkStandings(segs []SegmentInfo, at int, uuid string) (exporte
 		return sealedNow[u]
 	}
 	var inside []SinkProgress
+	behind := func(s SinkProgress) {
+		pending = append(pending, s.Name)
+		connected = connected || s.Connected
+	}
 	for _, s := range sinks {
 		p := s.Position
 		switch {
 		case p.SegmentUUID == "":
-			pending = append(pending, s.Name)
+			behind(s)
 		case p.SegmentUUID == active:
 			exported = append(exported, s.Name)
 		case p.SegmentUUID == uuid:
@@ -226,27 +234,27 @@ func (w *Writer) sinkStandings(segs []SegmentInfo, at int, uuid string) (exporte
 			case !ok && sealedSince(p.SegmentUUID):
 				exported = append(exported, s.Name)
 			default:
-				pending = append(pending, s.Name)
+				behind(s)
 			}
 		}
 	}
 	if len(pending) == 0 && len(inside) == 0 {
 		sort.Strings(exported)
-		return exported, nil, segRange{}, true
+		return exported, nil, false, segRange{}, true
 	}
 	rng, ok := w.seg.rangeOf(segs[at], uuid)
 	if !ok {
-		return nil, nil, segRange{}, false
+		return nil, nil, false, segRange{}, false
 	}
 	for _, s := range inside {
 		if rng.empty || (!rng.unknown && s.Position.Seq >= rng.last) {
 			exported = append(exported, s.Name)
 		} else {
-			pending = append(pending, s.Name)
+			behind(s)
 		}
 	}
 	// By name, so that the same standing is always the same record.
 	sort.Strings(exported)
 	sort.Strings(pending)
-	return exported, pending, rng, true
+	return exported, pending, connected, rng, true
 }

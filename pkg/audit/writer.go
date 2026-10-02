@@ -266,6 +266,9 @@ type Writer struct {
 	recovered *recovery
 	pendingP  *panicInfo
 	sysDepth  int
+	// passSaw is the name of the newest sealed segment the last prune pass
+	// listed; a later name was sealed since.
+	passSaw string
 }
 
 // New validates the directory, recovers any segment the previous process
