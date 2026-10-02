@@ -139,7 +139,7 @@ bf3: subsys-clean
 # api/build_api.sh (dockerized go-swagger 0.30.3 — the same step the CI runs) from the
 # committed api/swagger.yml, and NO-OPS when they are already present (incremental builds
 # and CI runners that already generated are unaffected). Requires Docker for the first
-# build of a clean checkout. See README.md "Build and run from source".
+# build of a clean checkout. See docs/BUILD.md.
 .PHONY: api-models
 api-models:
 	@if grep -rqsE 'type Cert struct' api/models/ 2>/dev/null; then \
