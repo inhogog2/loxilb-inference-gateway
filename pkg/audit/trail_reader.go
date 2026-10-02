@@ -73,6 +73,22 @@ const (
 // seal and open the next segment unseen. The tests put exactly that there.
 var trailBeforeScan = func() {}
 
+// trailAfterList runs inside a scan, between the listing of the directory
+// and the reads of the files it listed. The tests put there what the writer
+// can do to a segment in that gap.
+var trailAfterList = func() {}
+
+// lostScans is how many scans in a row must miss a segment before its
+// position is called lost. A scan is a listing followed by reads of the
+// files listed, and the writer can seal the active segment between the two:
+// the listing has it under the active name, and by the time that file is
+// read it holds the next segment or nothing. The scan then finds the sealed
+// segment under neither name, though it never left the directory. A segment
+// is sealed once, so that hides it from one scan, and a second scan that
+// does not find it has no such excuse. Compression does not hide a segment:
+// a sealed file that is gone is opened under its compressed name.
+const lostScans = 2
+
 // trailSegment is one segment file as a directory scan found it.
 type trailSegment struct {
 	path   string
@@ -151,13 +167,21 @@ func (r *TrailReader) Seek(after Position) {
 
 // Holds reports whether the directory still holds the segment uuid names.
 func (r *TrailReader) Holds(uuid string) (bool, error) {
-	segs, err := r.scan()
-	if err != nil {
-		return false, err
-	}
-	for i := range segs {
-		if !segs[i].damaged && segs[i].uuid == uuid {
-			return true, nil
+	return r.present(uuid, lostScans)
+}
+
+// present scans the directory until a scan lists the segment uuid names, at
+// most n times.
+func (r *TrailReader) present(uuid string, n int) (bool, error) {
+	for ; n > 0; n-- {
+		segs, err := r.scan()
+		if err != nil {
+			return false, err
+		}
+		for i := range segs {
+			if !segs[i].damaged && segs[i].uuid == uuid {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
@@ -290,6 +314,17 @@ func (r *TrailReader) advance() (bool, error) {
 			// a reader that stayed here would never move again.
 			next = &segs[at+1]
 		case at < 0:
+			// One scan that does not list the segment is not yet its
+			// removal: sealed between the listing and the read of the
+			// active file, it is under a name the listing did not
+			// have. It is there to be found the next time.
+			still, err := r.present(r.cur.seg.uuid, lostScans-1)
+			if err != nil {
+				return false, err
+			}
+			if still {
+				return false, nil
+			}
 			// The segment was removed while it was being read and
 			// nothing follows it by name. Where to continue is the
 			// caller's decision, as it is for any lost position.
@@ -329,7 +364,10 @@ func (r *TrailReader) advance() (bool, error) {
 // openStart opens the segment the start position names, or the oldest one
 // for the zero Position.
 func (r *TrailReader) openStart() error {
-	for attempt := 0; ; attempt++ {
+	// misses counts scans that did not list the start position's segment;
+	// vanished, opens that found the picked file gone.
+	misses, vanished := 0, 0
+	for {
 		segs, err := r.scan()
 		if err != nil {
 			return err
@@ -361,6 +399,12 @@ func (r *TrailReader) openStart() error {
 					// would send the caller on past it.
 					return damaged.unreadable()
 				}
+				// Sealed between the listing and the read of the active
+				// file, the segment is under a name the listing did not
+				// have.
+				if misses++; misses < lostScans {
+					continue
+				}
 				return ErrPositionLost
 			}
 		}
@@ -369,7 +413,8 @@ func (r *TrailReader) openStart() error {
 		}
 		o, err := openTrailSegment(*pick)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) && attempt == 0 {
+			if errors.Is(err, os.ErrNotExist) && vanished == 0 {
+				vanished++
 				continue
 			}
 			return err
@@ -409,6 +454,7 @@ func (r *TrailReader) scan() ([]trailSegment, error) {
 	if err != nil {
 		return nil, err
 	}
+	trailAfterList()
 	var out []trailSegment
 	present := make(map[string]bool, len(entries))
 	for _, e := range entries {
