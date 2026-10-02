@@ -126,6 +126,17 @@ type sinkReceiver struct {
 
 	mu     sync.Mutex
 	frames []sinkFrame
+	conns  []net.Conn
+}
+
+// stop takes the receiver away: no new session, and the ones it has end.
+func (r *sinkReceiver) stop() {
+	_ = r.ln.Close()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.conns {
+		_ = c.Close()
+	}
 }
 
 func newSinkReceiver(t *testing.T, pki sinkPKI) *sinkReceiver {
@@ -142,6 +153,9 @@ func newSinkReceiver(t *testing.T, pki sinkPKI) *sinkReceiver {
 			if err != nil {
 				return
 			}
+			r.mu.Lock()
+			r.conns = append(r.conns, c)
+			r.mu.Unlock()
 			r.wg.Add(1)
 			go r.read(c)
 		}

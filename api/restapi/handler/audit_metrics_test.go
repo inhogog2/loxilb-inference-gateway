@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/loxilb-io/loxilb/api/models"
 	"github.com/loxilb-io/loxilb/pkg/audit"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -85,7 +86,7 @@ func TestAuditMetricsFollowTheWriter(t *testing.T) {
 	}
 	// Every family the collector describes is emitted, so a consumer can
 	// tell a zero from an absence.
-	if n := testutil.CollectAndCount(auditCollector{}); n < 18 {
+	if n := testutil.CollectAndCount(auditCollector{}); n < 19 {
 		t.Fatalf("%d series emitted, want every family present", n)
 	}
 	if v := gatheredGauge(t, "loxilb_audit_last_write_timestamp_seconds"); v == 0 {
@@ -94,6 +95,113 @@ func TestAuditMetricsFollowTheWriter(t *testing.T) {
 	if v := gatheredGauge(t, "loxilb_audit_last_heartbeat_timestamp_seconds"); v == 0 {
 		t.Fatal("heartbeat timestamp is 0 on a running writer")
 	}
+}
+
+// A sink is on the scrape while it is configured, under its name: whether
+// its receiver is there, what it was sent, and how far behind it is. With
+// the receiver away the sink holds the oldest record it could not send, and
+// the lag is counted from that record and from the place in the file.
+func TestAuditMetricsFollowTheSinks(t *testing.T) {
+	withAuthMode(t, true)
+	f := newGateFixture(t)
+	resetAuditSink(t)
+	if n := testutil.CollectAndCount(auditCollector{}, "loxilb_audit_sink_connected"); n != 0 {
+		t.Fatalf("%d sink series with no sink configured", n)
+	}
+	if v := sinkSeries(t, "loxilb_audit_records_lost_to_retention_total", ""); v != 0 {
+		t.Fatalf("%v records lost to retention on a fresh trail", v)
+	}
+	pki := newSinkPKI(t)
+	all, some := newSinkReceiver(t, pki), newSinkReceiver(t, pki)
+	if code := postSink(f, models.AuditSink{Enabled: true, Address: all.addr, CaBundlePath: pki.caPath}); code != http.StatusNoContent {
+		t.Fatalf("enabling the compliance sink answered %d", code)
+	}
+	if code := putNamedSink(f, "mgmt-only", mgmtOnly(some, pki)); code != http.StatusNoContent {
+		t.Fatalf("configuring the secondary sink answered %d", code)
+	}
+	mutate(f, 3)
+	some.waitCount(10)
+	caughtUp := func(sink string) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			if sinkSeries(t, "loxilb_audit_sink_connected", sink) == 1 && sinkSeries(t, "loxilb_audit_sink_cursor_lag_bytes", sink) == 0 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("sink %s did not come to connected with nothing behind it", sink)
+			}
+		}
+	}
+	caughtUp(auditComplianceSink)
+	caughtUp("mgmt-only")
+	if n := testutil.CollectAndCount(auditCollector{}, "loxilb_audit_sink_connected"); n != 2 {
+		t.Fatalf("%d connected series, want one for each of the two sinks", n)
+	}
+	if got, want := sinkSeries(t, "loxilb_audit_sink_records_exported_total", "mgmt-only"), float64(namedTailer("mgmt-only").Stats().Submitted); got != want || got < 10 {
+		t.Errorf("exported %v for the secondary sink, want its %v submissions (at least 10)", got, want)
+	}
+	for _, name := range []string{"loxilb_audit_sink_cursor_lag_seconds", "loxilb_audit_sink_export_failures_total", "loxilb_audit_sink_poison_total", "loxilb_audit_sink_lag_drops_total"} {
+		if v := sinkSeries(t, name, auditComplianceSink); v != 0 {
+			t.Errorf("%s is %v for a sink that kept up", name, v)
+		}
+	}
+
+	// The compliance receiver goes away; what is written now stays behind
+	// that sink and not behind the other.
+	all.stop()
+	mutate(f, 3)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if sinkSeries(t, "loxilb_audit_sink_connected", auditComplianceSink) == 0 &&
+			sinkSeries(t, "loxilb_audit_sink_export_failures_total", auditComplianceSink) > 0 &&
+			sinkSeries(t, "loxilb_audit_sink_cursor_lag_seconds", auditComplianceSink) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the lost receiver is not on the scrape: connected %v, failures %v, lag %v s",
+				sinkSeries(t, "loxilb_audit_sink_connected", auditComplianceSink),
+				sinkSeries(t, "loxilb_audit_sink_export_failures_total", auditComplianceSink),
+				sinkSeries(t, "loxilb_audit_sink_cursor_lag_seconds", auditComplianceSink))
+		}
+	}
+	if v := sinkSeries(t, "loxilb_audit_sink_cursor_lag_bytes", auditComplianceSink); v <= 0 {
+		t.Errorf("%v bytes behind a sink whose receiver is away", v)
+	}
+	caughtUp("mgmt-only")
+}
+
+// sinkSeries scrapes the collector and returns the named family's value for
+// one sink, or the unlabelled value when sink is empty.
+func sinkSeries(t *testing.T, name, sink string) float64 {
+	t.Helper()
+	reg := prometheus.NewPedanticRegistry()
+	if err := reg.Register(auditCollector{}); err != nil {
+		t.Fatal(err)
+	}
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fam := range families {
+		if fam.GetName() != name {
+			continue
+		}
+		for _, m := range fam.Metric {
+			label := ""
+			for _, l := range m.Label {
+				if l.GetName() == "sink" {
+					label = l.GetValue()
+				}
+			}
+			if label == sink {
+				if m.Gauge != nil {
+					return m.GetGauge().GetValue()
+				}
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+	t.Fatalf("no series of %s for sink %q", name, sink)
+	return 0
 }
 
 // gatheredGauge scrapes the collector through a registry of its own and

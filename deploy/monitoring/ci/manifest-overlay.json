@@ -10,14 +10,14 @@
   "Combined codes (D+P etc.) apply both behaviors."
  ],
  "expected": {
-  "total": 305,
+  "total": 313,
   "owners": {
-   "loxilb": 282,
+   "loxilb": 290,
    "loxilb-ai-controller": 19,
    "loxilb-kv-agent": 4
   },
   "classes": {
-   "default": 249,
+   "default": 257,
    "dpu-doca": 24,
    "aictrl-bridge": 8,
    "kv-agent-health": 1,
@@ -373,7 +373,15 @@
   "loxilb_audit_segments_pruned_total": "C",
   "loxilb_audit_reserve_breached": "C",
   "loxilb_audit_originator_dropped_total": "C",
-  "loxilb_audit_delegation_lookups_total": "C"
+  "loxilb_audit_delegation_lookups_total": "C",
+  "loxilb_audit_records_lost_to_retention_total": "C",
+  "loxilb_audit_sink_connected": "C",
+  "loxilb_audit_sink_records_exported_total": "C",
+  "loxilb_audit_sink_export_failures_total": "C",
+  "loxilb_audit_sink_poison_total": "C",
+  "loxilb_audit_sink_lag_drops_total": "C",
+  "loxilb_audit_sink_cursor_lag_bytes": "C",
+  "loxilb_audit_sink_cursor_lag_seconds": "C"
  },
  "priority": {
   "default": "diagnostic",
@@ -490,7 +498,15 @@
   "loxilb_audit_originator_dropped_total": "counter",
   "loxilb_audit_delegation_lookups_total": "counter",
   "loxilb_proxy_response_first_write_gap_seconds": "histogram",
-  "loxilb_proxy_response_max_write_gap_seconds": "histogram"
+  "loxilb_proxy_response_max_write_gap_seconds": "histogram",
+  "loxilb_audit_records_lost_to_retention_total": "counter",
+  "loxilb_audit_sink_connected": "gauge",
+  "loxilb_audit_sink_records_exported_total": "counter",
+  "loxilb_audit_sink_export_failures_total": "counter",
+  "loxilb_audit_sink_poison_total": "counter",
+  "loxilb_audit_sink_lag_drops_total": "counter",
+  "loxilb_audit_sink_cursor_lag_bytes": "gauge",
+  "loxilb_audit_sink_cursor_lag_seconds": "gauge"
  },
  "locked_revision": {
   "rev": "f08b18beda587217265c9ba6419159119914795c",
@@ -577,6 +593,14 @@
    "loxilb_audit_reserve_breached",
    "loxilb_audit_originator_dropped_total",
    "loxilb_audit_delegation_lookups_total",
+   "loxilb_audit_records_lost_to_retention_total",
+   "loxilb_audit_sink_connected",
+   "loxilb_audit_sink_records_exported_total",
+   "loxilb_audit_sink_export_failures_total",
+   "loxilb_audit_sink_poison_total",
+   "loxilb_audit_sink_lag_drops_total",
+   "loxilb_audit_sink_cursor_lag_bytes",
+   "loxilb_audit_sink_cursor_lag_seconds",
    "loxilb_ai_admission_mode",
    "loxilb_ai_admission_inflight",
    "loxilb_ai_admission_limit",
@@ -3459,146 +3483,210 @@
    "loxilb_audit_writer_up": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditWriterUpDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditWriterUpDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_records_written_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditRecordsWrittenDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditRecordsWrittenDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_records_dropped_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditRecordsDroppedDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditRecordsDroppedDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_result_write_failures_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditResultWriteFailuresDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditResultWriteFailuresDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_write_failures_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditWriteFailuresDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditWriteFailuresDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_sync_failures_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditSyncFailuresDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditSyncFailuresDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_mgmt_timeouts_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditMgmtTimeoutsDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditMgmtTimeoutsDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_writer_panics_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditWriterPanicsDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditWriterPanicsDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_writer_restarts_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditWriterRestartsDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditWriterRestartsDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_last_write_timestamp_seconds": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditLastWriteDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditLastWriteDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_last_heartbeat_timestamp_seconds": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditLastHeartbeatDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditLastHeartbeatDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_records_unattributed_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditUnattributedDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditUnattributedDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_orphaned_intents_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditOrphanedIntentsDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditOrphanedIntentsDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_segment_seal_failures_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditSealFailuresDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditSealFailuresDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_segments_pruned_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditSegmentsPrunedDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditSegmentsPrunedDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_reserve_breached": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditReserveBreachedDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditReserveBreachedDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_originator_dropped_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditOriginatorDroppedDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditOriginatorDroppedDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
    },
    "loxilb_audit_delegation_lookups_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 126, "writes": "auditDelegationLookupsDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
-     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 173, "call_line": 174, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditDelegationLookupsDesc", "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
+   },
+   "loxilb_audit_records_lost_to_retention_total": {
+    "status": "verified-static",
+    "writer_sources": [
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditLostToRetentionDesc", "note": "read from the audit writer's Stats snapshot at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+    ],
+    "evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks reads the family at zero on a fresh trail; pkg/audit TestPruneRecordsWhatASinkWasNeverSent drives the counter behind it."
+   },
+   "loxilb_audit_sink_connected": {
+    "status": "verified-static",
+    "writer_sources": [
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditSinkConnectedDesc", "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+    ],
+    "evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+   },
+   "loxilb_audit_sink_records_exported_total": {
+    "status": "verified-static",
+    "writer_sources": [
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditSinkExportedDesc", "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+    ],
+    "evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+   },
+   "loxilb_audit_sink_export_failures_total": {
+    "status": "verified-static",
+    "writer_sources": [
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditSinkExportFailuresDesc", "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+    ],
+    "evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+   },
+   "loxilb_audit_sink_poison_total": {
+    "status": "verified-static",
+    "writer_sources": [
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditSinkPoisonDesc", "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+    ],
+    "evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+   },
+   "loxilb_audit_sink_lag_drops_total": {
+    "status": "verified-static",
+    "writer_sources": [
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditSinkLagDropsDesc", "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+    ],
+    "evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+   },
+   "loxilb_audit_sink_cursor_lag_bytes": {
+    "status": "verified-static",
+    "writer_sources": [
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditSinkLagBytesDesc", "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+    ],
+    "evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+   },
+   "loxilb_audit_sink_cursor_lag_seconds": {
+    "status": "verified-static",
+    "writer_sources": [
+     { "symbol": "Collect", "kind": "method", "receiver": "auditCollector", "file": "api/restapi/handler/audit_metrics.go", "def_line": 169, "writes": "auditSinkLagSecondsDesc", "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric" },
+     { "symbol": "init", "kind": "func", "file": "api/restapi/handler/audit_metrics.go", "def_line": 245, "call_line": 246, "calls": "auditCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+    ],
+    "evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
    }
   }
  }

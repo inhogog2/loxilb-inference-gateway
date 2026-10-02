@@ -108,6 +108,7 @@ func (f SinkFilter) validate() error {
 
 // filterFields is the part of a record a filter looks at.
 type filterFields struct {
+	TS        string `json:"ts"`
 	Seq       uint64 `json:"seq"`
 	Stream    Stream `json:"stream"`
 	EventType string `json:"event_type"`
@@ -284,6 +285,15 @@ type SinkTailer struct {
 	state   string
 	cursor  SinkCursor
 	reached Position
+	// readOff is the offset in reached's segment file behind the record
+	// reached names; -1 when it is not known.
+	readOff int64
+	// pendingTS is the time of the record in hand, the oldest one the
+	// sink has not been sent; empty when none is in hand.
+	pendingTS string
+	// idle is set while the sink has been through everything the trail
+	// held when it last asked.
+	idle    bool
 	lastErr string
 }
 
@@ -340,6 +350,7 @@ func NewSinkTailer(cfg SinkTailerConfig) (*SinkTailer, error) {
 		done:  make(chan struct{}),
 		state: SinkStarting,
 	}
+	t.readOff = -1
 	t.die = func(point string) {
 		fmt.Fprintf(os.Stderr, "audit: fault point %s: exiting\n", point)
 		os.Exit(86)
@@ -420,10 +431,55 @@ func (t *SinkTailer) setCursor(c SinkCursor) {
 	t.mu.Unlock()
 }
 
-func (t *SinkTailer) setReached(p Position) {
+// setReached moves the sink past the record at p, which ends at off in its
+// segment's file.
+func (t *SinkTailer) setReached(p Position, off int64) {
 	t.mu.Lock()
-	t.reached = p
+	t.reached, t.readOff, t.pendingTS = p, off, ""
 	t.mu.Unlock()
+}
+
+// setPending notes the time of the record in hand.
+func (t *SinkTailer) setPending(ts string) {
+	t.mu.Lock()
+	t.pendingTS, t.idle = ts, false
+	t.mu.Unlock()
+}
+
+func (t *SinkTailer) setIdle(idle bool) {
+	t.mu.Lock()
+	t.idle = idle
+	t.mu.Unlock()
+}
+
+// SinkPlace is where a sink stands, for measuring how far behind it is.
+type SinkPlace struct {
+	// Position is the last record the sink is past.
+	Position Position
+	// Offset is where that record ends in its segment's file; -1 when it
+	// is not known, which is the case before the first record of a run
+	// and inside a compressed segment.
+	Offset int64
+	// Idle says the sink had been through every record the trail held
+	// when it last asked.
+	Idle bool
+	// Oldest is the time of the oldest record the sink has read and not
+	// been able to send; zero when it holds none.
+	Oldest time.Time
+}
+
+// Place reports where the sink stands.
+func (t *SinkTailer) Place() SinkPlace {
+	t.mu.Lock()
+	p := SinkPlace{Position: t.reached, Offset: t.readOff, Idle: t.idle}
+	ts := t.pendingTS
+	t.mu.Unlock()
+	if ts != "" {
+		if at, err := time.Parse(tsLayout, ts); err == nil {
+			p.Oldest = at
+		}
+	}
+	return p
 }
 
 // wait sleeps for d and reports false when the tailer was asked to stop.
@@ -578,7 +634,7 @@ func (t *SinkTailer) run() {
 		} else {
 			pos, dirty = cur.Pos, true
 			inBatch++
-			t.setReached(pos)
+			t.setReached(pos, rd.offset())
 		}
 		have = false
 		if inBatch >= t.cfg.Batch {
@@ -597,6 +653,7 @@ func (t *SinkTailer) run() {
 			case err == nil:
 				cur, have = l, true
 			case errors.Is(err, ErrTrailIdle):
+				t.setIdle(!resending)
 				commit()
 				if !t.wait(t.cfg.Idle) {
 					finish()
@@ -604,6 +661,7 @@ func (t *SinkTailer) run() {
 				}
 				continue
 			case errors.Is(err, ErrPositionLost):
+				t.setIdle(false)
 				if resending {
 					// The window reached back into a segment that is
 					// gone. The window is a courtesy; the place is not.
@@ -622,6 +680,7 @@ func (t *SinkTailer) run() {
 				rd.Seek(Position{})
 				continue
 			default:
+				t.setIdle(false)
 				t.readErrors.Add(1)
 				// Reported when the sink stalls, not on every attempt
 				// that finds it still stalled.
@@ -660,6 +719,9 @@ func (t *SinkTailer) run() {
 
 		var ff filterFields
 		decoded := json.Unmarshal(cur.Raw, &ff) == nil
+		if !resending {
+			t.setPending(ff.TS)
+		}
 		// The compliance sink has no filter: one is refused when the
 		// sink is built.
 		if !t.cfg.Filter.empty() && decoded && !t.cfg.Filter.match(&ff) {

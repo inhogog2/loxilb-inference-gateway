@@ -258,6 +258,70 @@ func TestSinkTailerProgressRunsAheadOfTheSavedCursor(t *testing.T) {
 	}
 }
 
+// A sink that cannot send holds the oldest record it has not sent, and its
+// place says when that record was written and where in the file the last
+// one it did send ends. Once it has been through everything it is idle and
+// holds nothing.
+func TestSinkTailerPlaceSaysHowFarBehindTheSinkIs(t *testing.T) {
+	cfg := testConfig(t)
+	w := startWriter(t, cfg)
+	writeN(t, w, 6, "one")
+	all := rawRecords(t, cfg.Dir)
+	third, fourth := frame{raw: all[2]}, frame{raw: all[3]}
+
+	hold := make(chan struct{})
+	var held atomic.Bool
+	sink := &fakeSink{verdict: func(attempt int, _ []byte) error {
+		if attempt == 4 {
+			held.Store(true)
+			<-hold
+		}
+		return nil
+	}}
+	tl := startTailer(t, tailerConfig(cfg.Dir, "held", sink, nil))
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			close(hold)
+		}
+	}
+	defer release()
+	waitFor(t, "the fourth record to be in hand", func() bool {
+		return held.Load() && fmt.Sprint(tl.Place().Position.Seq) == third.field(t, "seq")
+	})
+
+	p := tl.Place()
+	if p.Idle {
+		t.Fatal("a sink holding a record it has not sent is reported idle")
+	}
+	if got, want := p.Oldest.UTC().Format(tsLayout), fourth.field(t, "ts"); got != want {
+		t.Errorf("the oldest unsent record is of %s, want the fourth record's %s", got, want)
+	}
+	file, err := os.ReadFile(filepath.Join(cfg.Dir, ActiveSegmentName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := int64(bytes.Index(file, third.raw) + len(third.raw) + 1)
+	if p.Offset != end {
+		t.Errorf("the place is at offset %d, want %d, where the third record ends", p.Offset, end)
+	}
+	if got, want := w.TrailBytesBehind(p), int64(len(file))-end; got != want {
+		t.Errorf("%d bytes behind, want %d", got, want)
+	}
+
+	release()
+	settled(t, cfg.Dir, sink, 0)
+	waitFor(t, "the sink to be idle", func() bool { return tl.Place().Idle })
+	p = tl.Place()
+	if !p.Oldest.IsZero() {
+		t.Errorf("an idle sink still holds a record of %s", p.Oldest)
+	}
+	if got := w.TrailBytesBehind(p); got != 0 {
+		t.Errorf("an idle sink is %d bytes behind", got)
+	}
+}
+
 // The pruner gives a pass to a sink that is connected, so Progress says
 // whether this one is: after a record was accepted, and not once a
 // submission has failed.

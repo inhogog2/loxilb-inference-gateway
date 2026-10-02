@@ -66,6 +66,21 @@ api() {
 }
 json() { printf '%s' "$RESP_BODY" | jq -r "$1" 2>/dev/null; }
 astatus() { docker exec llb1 curl -s -m 5 "$API/audit/status"; }
+# metric_int <family> [<label substring>] → the sample as a whole number,
+# empty when the scrape has no such series
+metric_int() {
+  docker exec llb1 curl -s -m 5 "$API/metrics" 2>/dev/null |
+    awk -v f="$1" -v l="${2:-}" '($1 ~ ("^" f "(\\{|$)")) && (l == "" || index($1, l)) { printf "%d\n", $2; exit }'
+}
+# metric_wait <family> <label substring> <value> [seconds] → the sample came to the value
+metric_wait() {
+  local i
+  for i in $(seq 1 "${4:-20}"); do
+    [[ "$(metric_int "$1" "$2")" == "$3" ]] && return 0
+    sleep 1
+  done
+  return 1
+}
 # sink_field <name> <jq path> → one field of the sink's row in /audit/status
 sink_field() { astatus | jq -r ".sinks[]? | select(.name==\"$1\") | $2"; }
 # named <name> <jq path> → one field of GET /audit/sinks/{name}
@@ -391,6 +406,12 @@ chk ST-3b "with its receiver, its number and its filter" "$SIEM2:6514 $PEN mgmt"
 chk ST-3c "no certificate material is served by the read" 0 "$(printf '%s' "$RESP_BODY" | grep -c 'BEGIN CERTIFICATE')"
 chk_ge ST-3d "the change is on the trail, naming the receiver" 1 \
   "$(count ".event_type==\"mgmt.audit.sink\" and .phase==\"result\" and .outcome.ok==true and .detail.endpoint==\"$SIEM2:6514\"")"
+# The same on the scrape, one series per sink.
+chk    MT-1a "the scrape says the compliance sink has its receiver" 1 "$(metric_int loxilb_audit_sink_connected 'sink="compliance"')"
+chk    MT-1b "and the secondary sink" 1 "$(metric_int loxilb_audit_sink_connected 'sink="secondary"')"
+metric_wait loxilb_audit_sink_cursor_lag_bytes 'sink="compliance"' 0 20
+chk    MT-1c "nothing of the trail is behind a sink that caught up" 0 $?
+chk_ge MT-1d "the secondary sink's exported count is what its receiver was sent" "$(rcv_stat secondary '.frames')" "$(metric_int loxilb_audit_sink_records_exported_total 'sink="secondary"')"
 
 # ════════════════════════════════════════════════════════════════════════════
 echo ""
@@ -423,6 +444,12 @@ for i in $(seq 1 40); do
   sleep 1
 done
 chk T5-1a "the sink reports the loss of its receiver" disconnected "$(sink_field compliance '.state')"
+chk    MT-2a "the scrape says the compliance sink has no receiver" 0 "$(metric_int loxilb_audit_sink_connected 'sink="compliance"')"
+chk_ge MT-2b "its failed submissions are counted" 1 "$(metric_int loxilb_audit_sink_export_failures_total 'sink="compliance"')"
+chk_ge MT-2c "bytes of the trail are behind it" 1 "$(metric_int loxilb_audit_sink_cursor_lag_bytes 'sink="compliance"')"
+sleep 2
+chk_ge MT-2d "and the oldest record it could not send has an age" 1 "$(metric_int loxilb_audit_sink_cursor_lag_seconds 'sink="compliance"')"
+chk    MT-2e "the other sink is not touched by that" 1 "$(metric_int loxilb_audit_sink_connected 'sink="secondary"')"
 S1=$(astatus | jq -r '.seq_high')
 # The receiver that comes back remembers nothing, so the claim is about the
 # range written during the outage, not about holes counted from 1.
@@ -439,6 +466,9 @@ chk    T5-1f "and how far back the sink will go when it reconnects" 64 "$(printf
 wait_record ".event_type==\"sys.sink.connect\" and .detail.resource==\"audit_sink:compliance\" and .boot_id==\"$BOOT\" and .seq>$DSEQ" 30
 chk    T5-1g "followed by the reconnect: a pair, not a silent gap" 0 $?
 wait_caught compliance 60 || code=1
+metric_wait loxilb_audit_sink_cursor_lag_bytes 'sink="compliance"' 0 20
+chk    MT-2f "with the receiver back nothing is behind the sink" 0 $?
+chk    MT-2g "and it holds no unsent record" 0 "$(metric_int loxilb_audit_sink_cursor_lag_seconds 'sink="compliance"')"
 
 # ════════════════════════════════════════════════════════════════════════════
 echo ""
@@ -677,6 +707,8 @@ rcv_start secondary || code=1
 wait_caught secondary 120; chk T16-3a "with its receiver back the secondary sink catches up" 0 $?
 chk_ge T16-3b "and reports that the segment it was in was removed under it" 1 "$(named secondary '.lag_drops // 0')"
 chk    T16-3c "the receiver that came back saw no number twice" 0 "$(xseq_reuse)"
+chk_ge MT-3a "the scrape counts the records lost to retention" "$((LTO - LFROM + 1))" "$(metric_int loxilb_audit_records_lost_to_retention_total)"
+chk    MT-3b "and the removals under the secondary sink, as the sink reports them" "$(named secondary '.lag_drops // 0')" "$(metric_int loxilb_audit_sink_lag_drops_total 'sink="secondary"')"
 
 # ════════════════════════════════════════════════════════════════════════════
 echo ""
