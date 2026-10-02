@@ -31,6 +31,18 @@ const (
 	FaultSegmentGzipFailed   = "segment.compress_failed"
 )
 
+// Fault points of the sink path. They do not inject an error: an armed one
+// ends the process at that step, because what they prove is what a crash
+// between two steps leaves on disk.
+const (
+	// FaultSinkCursorAfterRename stops after a cursor file was renamed
+	// into place and before its directory was flushed.
+	FaultSinkCursorAfterRename = "sink.cursor.after_rename"
+	// FaultSinkBeforeCursorWrite stops after a batch was written to the
+	// receiver and before the cursor that says so was saved.
+	FaultSinkBeforeCursorWrite = "sink.cursor.before_write"
+)
+
 // faults is the per-writer fault selector: the compiled-in selector plus a
 // test hook. The hook is a pointer load on the write path, which is the
 // cheapest check that still lets tests run without the build tag.
