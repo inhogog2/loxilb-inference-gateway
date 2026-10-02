@@ -110,6 +110,19 @@ def main():
         rc, s = analyze(tmp, "a10", bad)
         check("A10 a row without a per-token time -> void", rc == 1 and s is None, (rc, s))
 
+        print("first-round warmth")
+
+        def round1(name, first_ms, later_ms, suffix=True):
+            f = pathlib.Path(tmp) / f"{name}.jsonl"
+            data = [{"prompt_id": f"family-{n:03d}" + (f"-repeat-{k:03d}" if suffix else ""), "ttft_ms": ms + n}
+                    for k, ms in ((1, first_ms), (2, later_ms), (3, later_ms)) for n in range(20)]
+            f.write_text("".join(json.dumps(r) + "\n" for r in data))
+            return subprocess.run([sys.executable, str(HERE / "round1.py"), str(f)], capture_output=True, text=True).returncode
+        check("R1 first round as fast as the later ones -> warm", round1("r1", 55, 50) == 0)
+        check("R2 first round 3.6x the later ones -> cold, refused", round1("r2", 180, 50) == 1)
+        check("R3 first round 1.4x (a decode pull) -> still warm", round1("r3", 350, 250) == 0)
+        check("R4 rows without a round number -> cannot judge, refused", round1("r4", 55, 50, suffix=False) == 2)
+
         print("load generator")
         srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stub)
         threading.Thread(target=srv.serve_forever, daemon=True).start()

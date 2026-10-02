@@ -48,6 +48,9 @@ with the typed line and leaves no summary.
 | exact arm: tier-1.5 hits rise by exactly the number of timed requests | `EXACT_HITS` |
 | exact arm: the fall-through counter does not move | `EXACT_FALLTHROUGH` |
 | exact arm: every prefill engine served the requests the gateway counted as hits on it (the engine's own request counter); spills past a loaded owner are recorded, not refused | `EXACT_PREFILL_SHARE` |
+| exact arm: the first round is not slower than the later ones (median TTFT ratio under 2): the seeded prefixes are the ones hit | `EXACT_ROUND1_COLD` |
+| exact arm: no prefill engine is left without a request | `EXACT_ENGINE_IDLE` |
+| no arm is seeded on one UTC day and timed on the next (a chat template may print the date; an arm that would straddle 00:00 UTC waits for it) | `ARM_CROSSED_UTC_MIDNIGHT` |
 | baseline arm: tier-1.5 hits do not move | `BASELINE_HITS` |
 | baseline arm: every prefill engine served at least 80 % of an equal share | `BASELINE_NOT_SPREAD` |
 | three repetitions, every request present in both arms, no duplicate | `POINT_VOID` (analysis) |

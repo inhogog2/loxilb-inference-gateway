@@ -12,6 +12,8 @@
 #   - exact arm: the rule is READY before seeding, every prefill has a connected KV subscriber, tier-1.5 hits
 #     rise by exactly the number of timed requests and the fall-through counter does not move;
 #   - baseline arm: tier-1.5 hits do not move;
+#   - exact arm: the first round is as fast as the later ones (the seeded prefixes are the ones hit) and no
+#     engine is left without a request; no arm straddles 00:00 UTC;
 #   - the prefill engines' own request counters show the arm's routing: equal shares for exact (every owner has
 #     the same number of families), a spread over every prefill for the baseline.
 # Anything else stops the point with a typed line and leaves no summary. A banked point is skipped on re-run.
@@ -86,7 +88,12 @@ engine_logs() { local n; for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker l
 
 arm() { # arm <repetition> exact|baseline
   local rep=$1 a=$2 d="$OUT/repetition-$1/$2" http es t
-  mkdir -p "$d"; echo "--- repetition $rep, arm $a ($(date -Is)) ---"
+  mkdir -p "$d"
+  # A chat template may print today's date at the top of the prompt. Seeds rendered before 00:00 UTC then share
+  # no block with requests rendered after it, so an arm must not straddle that instant: start it on the far side.
+  local left=$(( 86400 - $(date -u +%s) % 86400 ))
+  [ "$left" -lt $(( ARM_SECONDS + 240 )) ] && { echo "    waiting ${left}s for 00:00 UTC before the arm"; sleep $(( left + 5 )); }
+  echo "--- repetition $rep, arm $a ($(date -Is)) ---"
   del_rule
   restart_fleet || return 1
   http=$(rule "$a" "$d"); [ "$http" = 200 ] || { echo "RULE_CREATE_FAILED $a $http $(head -c 200 "$d/rule-create.json")"; return 1; }
@@ -100,6 +107,7 @@ arm() { # arm <repetition> exact|baseline
   else
     sleep 5
   fi
+  local day0; day0=$(date -u +%F)
   t=(); for n in "${PNODES[@]}"; do t+=(--target "http://$n:$EPORT"); done
   python3 "$AB_DIR/seed.py" --corpus "$CORPUS" --output "$d/seed-receipts.jsonl" --model "$MODEL" --api "$API" "${t[@]}" \
     || { echo "SEED_FAILED $a"; return 1; }
@@ -119,6 +127,7 @@ arm() { # arm <repetition> exact|baseline
   python3 "$AB_DIR/bench.py" --corpus "$CORPUS" --output "$d/requests.jsonl" --url "http://${VIP}:${PORT}" --model "$MODEL" \
     --arm "$a" --api "$API" --repetition "$rep" --max-tokens "$MAX_TOKENS" --repeat-count "$REPEAT" --request-rate "$RATE" --order-seed "$rep"
   local brc=$?
+  [ "$(date -u +%F)" = "$day0" ] || { echo "ARM_CROSSED_UTC_MIDNIGHT $a: seeded on $day0"; return 1; }
   sleep 12
   scrape "$d/after-gateway.prom" || return 1; engines_snapshot "$d" after
   engine_logs "$d"
@@ -132,6 +141,10 @@ arm() { # arm <repetition> exact|baseline
   if [ "$a" = exact ]; then
     [ "$h" = "$NREQ" ] || { echo "EXACT_HITS $h, want $NREQ"; return 1; }
     [ "$f" = 0 ] || { echo "EXACT_FALLTHROUGH +$f"; return 1; }
+    # A hit on every request does not say the seeded prefix was the one hit: see round1.py.
+    if [ "$REPEAT" -gt 1 ]; then
+      python3 "$AB_DIR/round1.py" "$d/requests.jsonl" > "$d/round1.txt" || { echo "EXACT_ROUND1_COLD $(cat "$d/round1.txt")"; return 1; }
+    fi
   else
     [ "$h" = 0 ] || { echo "BASELINE_HITS +$h (the baseline rule must not route by cache)"; return 1; }
   fi
@@ -150,6 +163,8 @@ arm() { # arm <repetition> exact|baseline
       hi=$(( $(msum "$d/after-gateway.prom" "loxilb_pd_kv_tier15_hits_total{ep_idx=\"$i\"}") - $(msum "$d/before-gateway.prom" "loxilb_pd_kv_tier15_hits_total{ep_idx=\"$i\"}") ))
       off=$(( s > hi ? s - hi : hi - s ))
       [ "$off" -le 2 ] || { echo "EXACT_PREFILL_SHARE $n served $s, the gateway counted $hi hits on endpoint $i"; return 1; }
+      # Every engine owns families, so an engine that served nothing was never chosen for its own prefixes.
+      [ "$s" -gt 0 ] || { echo "EXACT_ENGINE_IDLE $n served 0 of $NREQ"; return 1; }
       i=$((i+1))
     else
       [ "$s" -ge $((share * 8 / 10)) ] || { echo "BASELINE_NOT_SPREAD $n served $s of $NREQ"; return 1; }
