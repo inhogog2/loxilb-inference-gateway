@@ -335,6 +335,9 @@ func (w *Writer) Close(ctx context.Context) error {
 	}
 }
 
+// Dir is the audit directory the writer owns.
+func (w *Writer) Dir() string { return w.cfg.Dir }
+
 // BootID identifies this process start in every record.
 func (w *Writer) BootID() string { return w.bootID }
 

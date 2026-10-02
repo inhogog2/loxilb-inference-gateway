@@ -43,6 +43,11 @@ const (
 	FaultSinkBeforeCursorWrite = "sink.cursor.before_write"
 )
 
+// FaultArmed reports whether point is the one this build has armed. It is
+// the selector for a component that runs beside the writer, such as a
+// sink; in a build without fault points it is always false.
+func FaultArmed(point string) bool { return buildFaultArmed(point) }
+
 // faults is the per-writer fault selector: the compiled-in selector plus a
 // test hook. The hook is a pointer load on the write path, which is the
 // cheapest check that still lets tests run without the build tag.

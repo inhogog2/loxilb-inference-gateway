@@ -381,6 +381,23 @@ func (s *Sink) Close() error {
 	return err
 }
 
+// Peer names the receiver of the current session: the subject of the
+// certificate it presented and when that certificate expires. ok is false
+// when there is no session.
+func (s *Sink) Peer() (subject string, notAfter time.Time, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tc, isTLS := s.conn.(*tls.Conn)
+	if !isTLS {
+		return "", time.Time{}, false
+	}
+	certs := tc.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return "", time.Time{}, false
+	}
+	return certs[0].Subject.String(), certs[0].NotAfter, true
+}
+
 // Stats reports the counters a status endpoint reads.
 func (s *Sink) Stats() Stats {
 	s.errMu.Lock()

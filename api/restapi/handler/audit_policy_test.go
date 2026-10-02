@@ -213,14 +213,7 @@ func TestAuditSinkChangeRecordsTheEndpointAndItsTrustAnchor(t *testing.T) {
 	f.status = http.StatusNoContent
 
 	ca := writeTestCA(t)
-	t.Cleanup(func() {
-		auditSink.mu.Lock()
-		if auditSink.sink != nil {
-			_ = auditSink.sink.Close()
-		}
-		auditSink.sink, auditSink.cfg = nil, syslog.Config{}
-		auditSink.mu.Unlock()
-	})
+	resetAuditSink(t)
 
 	f.inside = func(r *http.Request) {
 		RecordAuditPrincipal(r, "alice|admin")

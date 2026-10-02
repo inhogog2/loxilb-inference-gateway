@@ -168,7 +168,17 @@ func SetAuditWriter(w *audit.Writer) {
 func AuditWriter() *audit.Writer { return auditWriter.Load() }
 
 // CloseAuditWriter stops the installed writer, draining what is queued.
+// The sink's tailer is stopped first: it writes its own records through
+// the writer, and its cursor is saved while the trail it points into is
+// still open.
 func CloseAuditWriter(ctx context.Context) error {
+	sctx, cancel := context.WithTimeout(ctx, auditSinkCloseShare)
+	auditSink.mu.Lock()
+	if err := stopAuditSinkLocked(sctx); err != nil {
+		tk.LogIt(tk.LogError, "api: audit sink: the tailer did not stop: %v\n", err)
+	}
+	auditSink.mu.Unlock()
+	cancel()
 	w := auditWriter.Swap(nil)
 	audit.SetGlobal(nil)
 	if w == nil {
