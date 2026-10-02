@@ -34,8 +34,24 @@ import (
 )
 
 // rawRecords is the oracle: every record line in the directory, read the
-// plain way, sealed segments by name and the active one last.
+// plain way, sealed segments by name and the active one last. A sealed
+// segment is compressed behind the writer's back, so a name the listing
+// returned can be gone by the time it is opened; the directory is then
+// read again from the start.
 func rawRecords(t *testing.T, dir string) [][]byte {
+	t.Helper()
+	for attempt := 0; ; attempt++ {
+		out, err := rawRecordsOnce(t, dir)
+		if err == nil {
+			return out
+		}
+		if !errors.Is(err, os.ErrNotExist) || attempt == 20 {
+			t.Fatal(err)
+		}
+	}
+}
+
+func rawRecordsOnce(t *testing.T, dir string) ([][]byte, error) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -57,7 +73,7 @@ func rawRecords(t *testing.T, dir string) [][]byte {
 	for _, n := range names {
 		f, err := os.Open(filepath.Join(dir, n))
 		if err != nil {
-			t.Fatal(err)
+			return nil, err
 		}
 		var rd io.Reader = f
 		if strings.HasSuffix(n, gzipExt) {
@@ -78,7 +94,7 @@ func rawRecords(t *testing.T, dir string) [][]byte {
 		}
 		f.Close()
 	}
-	return out
+	return out, nil
 }
 
 // drain reads until the reader is idle and returns copies of what it got.

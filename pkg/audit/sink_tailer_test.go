@@ -702,6 +702,10 @@ func TestSinkTailerSegmentRemovedBeforeItWasSent(t *testing.T) {
 	writeN(t, w, 3, "two")
 	sealNow(t, w)
 	writeN(t, w, 2, "three")
+	// Compression renames a sealed segment; the directory is listed once
+	// it has finished, so that every name listed is still there to remove
+	// and none appears afterwards.
+	waitCompressed(t, cfg.Dir)
 	entries, _ := os.ReadDir(cfg.Dir)
 	for _, e := range entries {
 		if _, _, ok := parseSegmentName(e.Name()); ok {
