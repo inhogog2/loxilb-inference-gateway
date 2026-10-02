@@ -472,6 +472,26 @@ func (w *Writer) enqueueSystem(r *Record) {
 	}
 }
 
+// EmitSystem appends an audit_system record for a component that runs
+// beside the writer, such as a sink. With durable set it returns once the
+// record is on stable storage, which is what a record announcing an action
+// needs before the action is taken; otherwise the record is queued and a
+// full queue drops and counts it like any other.
+func (w *Writer) EmitSystem(ctx context.Context, r *Record, durable bool) error {
+	if !w.running.Load() {
+		return ErrUnavailable
+	}
+	if !durable {
+		w.enqueueSystem(r)
+		return nil
+	}
+	var werr error
+	if err := w.onLoop(ctx, func() { werr = w.writeSystemDurable(r) }); err != nil {
+		return err
+	}
+	return werr
+}
+
 // SealNow seals the active segment and opens the next one.
 func (w *Writer) SealNow(ctx context.Context) error {
 	if !w.running.Load() {
