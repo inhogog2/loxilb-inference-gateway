@@ -6,6 +6,7 @@
 #   T25     the delegated originator: recorded on every record of the
 #           request, trusted only for an account marked delegation_allowed,
 #           never promoted to actor.user, malformed values dropped and counted
+#           and the value loxicmd --originator sends is recorded as sent
 #   TM      the named management routes each leave an intent+result pair
 #   T22     the side-effecting OAuth GETs: healthy start (redirect + pair),
 #           unknown-state callback, refresh with tokens in the query string;
@@ -17,8 +18,9 @@
 #   T20     a crash between a durable intent and its result is reported at
 #           the next boot as exactly one sys.intent.orphaned, never guessed
 #   T3      once a probe has observed the wedge (a full filesystem still takes
-#           appends into the active segment's last page), the gate fails
-#           closed: 503 audit_unavailable through a generated route, a
+#           appends into the active segment's last page, so the probe is the
+#           shortest line of all and its refusal covers the rest), the gate
+#           fails closed: 503 audit_unavailable through a generated route, a
 #           raw route and a named route, with the authoritative state
 #           unchanged; the un-wedged repeat leaves a pair sharing one
 #           event_id
@@ -362,6 +364,53 @@ chk_ge  T25-4d "/audit/status originator_dropped" 1 "$(astatus | jq -r '.origina
 chk     T25-5  "the claim is never promoted to actor.user" 0 "$(count '.actor.user=="mcp:ops-agent"')"
 chk_gt  T25-6  "loxilb_audit_delegation_lookups_total rose" "${DELEG0:-0}" "$(metric_val loxilb_audit_delegation_lookups_total)"
 
+# arm 5: the CLI names itself. `loxicmd --originator` sends the OS account and
+# host it runs as, so the value expected here is read from the container the
+# CLI runs in, never written down. The flag belongs to the loxicmd release
+# the image pins; an image whose pin predates it fails one row and skips the
+# rest, which would otherwise all go red for that one cause.
+if $dexec llb1 loxicmd --help 2>&1 | grep -q -- '--originator'; then
+  ok T25-7-0 "the image's loxicmd carries --originator"
+  CLI_ORIG="cli:$(docker exec llb1 id -un)@$(docker exec llb1 hostname)"
+  ORIG_DROP1=$(metric_val loxilb_audit_originator_dropped_total)
+  # The tokens reach the CLI through owner-only files: on the command line
+  # they would sit in the container's process list.
+  docker exec llb1 sh -c 'umask 077; printf %s "$1" > /tmp/t25-agent.token; printf %s "$2" > /tmp/t25-watcher.token' _ "$ATOKEN" "$WTOKEN"
+  cli_lb() { # cli_lb <label> <port> <token file> [flags...] → creates a rule through the CLI
+    local label=$1 port=$2 tok=$3; shift 3
+    cli "$label" --token-file "$tok" "$@" create lb 10.10.10.254 --tcp="$port:8080" --endpoints=31.31.31.1:1
+  }
+  cli_pair() { newest_intent ".event_type==\"mgmt.config.mutate\" and .detail.path==\"/netlox/v1/config/loadbalancer\" and .detail.method==\"POST\""; }
+
+  cli_lb orig-agent 2045 /tmp/t25-agent.token --originator
+  chk     T25-7a "agent through the CLI with --originator: exit status" 0 "$CLI_RC"
+  chk     T25-7b "the rule was created (state oracle)" 1 "$(rule_count 2045)"
+  EID=$(cli_pair); wait_result "$EID"
+  R=$(records ".event_id==\"$EID\" and .phase==\"result\"")
+  chk     T25-7c "result actor.user is the authenticated account" agent "$(printf '%s' "$R" | jq -r '.actor.user')"
+  chk     T25-7d "result actor.delegated is the CLI's own account and host" "$CLI_ORIG" "$(printf '%s' "$R" | jq -r '.actor.delegated')"
+  chk     T25-7e "trusted, because agent may delegate" true "$(printf '%s' "$R" | jq -r '.actor.delegation_trusted')"
+
+  cli_lb orig-watcher 2046 /tmp/t25-watcher.token --originator
+  chk_ne  T25-7f "viewer through the CLI with --originator: refused, exit status" 0 "$CLI_RC"
+  EID=$(cli_pair); wait_result "$EID"
+  R=$(records ".event_id==\"$EID\" and .phase==\"result\"")
+  chk     T25-7g "the refusal names the principal" watcher "$(printf '%s' "$R" | jq -r '.actor.user')"
+  chk     T25-7h "the refusal carries the CLI's claim" "$CLI_ORIG" "$(printf '%s' "$R" | jq -r '.actor.delegated')"
+  chk     T25-7i "untrusted, because watcher may not delegate" false "$(printf '%s' "$R" | jq -r '.actor.delegation_trusted')"
+  chk     T25-7j "the rule was not created (state oracle)" 0 "$(rule_count 2046)"
+
+  cli_lb plain-agent 2047 /tmp/t25-agent.token
+  chk     T25-7k "agent through the CLI without the flag: exit status" 0 "$CLI_RC"
+  EID=$(cli_pair); wait_result "$EID"
+  chk     T25-7l "that pair is the CLI's (the rule exists)" 1 "$(rule_count 2047)"
+  chk     T25-7m "no delegated field on the pair" 0 "$(count ".event_id==\"$EID\" and (.actor.delegated != null)")"
+  chk     T25-7n "the CLI's value passed the gateway's validation: nothing more was dropped" "${ORIG_DROP1:-x}" "$(metric_val loxilb_audit_originator_dropped_total)"
+  docker exec llb1 rm -f /tmp/t25-agent.token /tmp/t25-watcher.token
+else
+  bad T25-7-0 "the image's loxicmd carries --originator" "the flag is absent from loxicmd --help; the image's LOXICMD_TAG predates it"
+fi
+
 # ── TM: the named management routes ─────────────────────────────────────────
 echo ""
 echo "TM: named routes leave an intent+result pair with their own event type"
@@ -537,6 +586,50 @@ api POST /config/ai/apikey "${AUTH[@]}" "${CT[@]}" -d '{"tenant_id":"audit-tenan
 KEY2=$(json '.key_id // empty'); RAW2=$(json '.raw_key // empty')
 [[ -n "$RAW2" ]] && RECEIVED_CANARIES+=("$RAW2")
 chk_nonempty T3-0 "a key to PATCH through the raw route" "$KEY2"
+# The wedge probe is a PATCH that names no field. The gate writes its intent
+# before the handler runs, and the handler then refuses it with 400, so one
+# that lands changes nothing. Naming no field also makes that intent the
+# shortest line anything below can write, and that is what makes the probe's
+# refusal mean "wedged": a refused append is cut back to the last complete
+# line, so the room left in the segment's last page is still there, and a
+# shorter line would still fit into it.
+wedge_probe() { api PATCH "/config/ai/apikey/$KEY2" "${AUTH[@]}" "${CT[@]}" -d '{}'; }
+wedge_probe
+[[ "$RESP_CODE" == 400 && "$RESP_BODY" == *"no patchable field"* ]] || { echo "  FATAL: the wedge probe on a writable trail answered $RESP_CODE: ${RESP_BODY:0:200}"; echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
+# line_lengths → "<kind> <bytes>" for every line of the trail that is of a
+# kind written, or refused, while wedged: the gated calls' intents, the
+# listing reads' results and the heartbeat. "probe" is the probe's own
+# intent; the PATCH that names a field is not listed, being the same line
+# with the field's name added.
+line_lengths() {
+  trail_raw "$@" | jq -R -r '. as $l | (fromjson? // empty) | select(type=="object" and .event_type != null)
+    | (.detail.path // "") as $p | ((.detail.changed_fields // []) | length) as $nf
+    | (if .event_type=="sys.heartbeat" then "heartbeat"
+       elif .event_type=="read.credential.list" and (.actor.user // "") != "" then "listing"
+       elif .phase != "intent" then null
+       elif .event_type=="mgmt.user.create" then "user-create"
+       elif .event_type=="mgmt.auth.oauth_start" then "oauth-start"
+       elif .event_type=="mgmt.auth.oauth_callback" then "oauth-callback"
+       elif .event_type=="mgmt.auth.oauth_token_refresh" then "oauth-refresh"
+       elif .event_type=="mgmt.config.mutate" and .detail.method=="POST" and $p=="/netlox/v1/config/loadbalancer" and $nf > 0 then "lb-create"
+       elif .event_type=="mgmt.config.mutate" and .detail.method=="PATCH" and $p=="/netlox/v1/config/ai/apikey/{key_id}" and $nf == 0 then "probe"
+       else null end) as $k
+    | select($k != null) | "\($k) \($l | utf8bytelength)"'
+}
+# No boot before this one stays up for a heartbeat interval, so the trail
+# holds no heartbeat to measure until this boot writes its first.
+echo "  waiting for this boot's first heartbeat, so that its length can be measured"
+for _ in $(seq 40); do
+  [[ "$(count ".boot_id==\"$B3\" and .event_type==\"sys.heartbeat\"")" -ge 1 ]] && break
+  sleep 1
+done
+LENS=$(line_lengths | awk '{ if (!($1 in m) || $2 < m[$1]) m[$1] = $2 } END { for (k in m) print k, m[k] }' | sort)
+PROBE_LEN=$(printf '%s\n' "$LENS" | awk '$1=="probe" { print $2 }')
+echo "  shortest line of each kind, bytes: $(printf '%s' "$LENS" | tr '\n' ',' | sed 's/,/, /g')"
+# A trail without the probe's own intent has nothing to compare against, so
+# every kind counts as shorter and the row fails rather than passing empty.
+chk     T3-0b "kinds of line measured, and how many of them are shorter than the probe's intent (${PROBE_LEN:-not found} bytes)" "7 kinds, 0 shorter" \
+  "$(printf '%s\n' "$LENS" | awk -v p="$PROBE_LEN" '$1!="probe" { n++; if (p == "" || $2 < p) s++ } END { printf "%d kinds, %d shorter", n, s }')"
 W0=$(metric_val loxilb_audit_write_failures_total)
 echo "  before the fill: write_failures_total=$W0"
 
@@ -544,23 +637,27 @@ echo "  before the fill: write_failures_total=$W0"
 # a byte-sized one closes it. That exhausts the free pages, but not the
 # active segment's last page: tmpfs allocates by page, so appends that fit
 # in its unused tail still succeed. The fill alone is therefore not the
-# wedge; the first refused append is.
+# wedge; the probe's first refused append is.
 docker exec llb1 sh -c "dd if=/dev/zero of=$WEDGE_DIR/fill bs=4096 >/dev/null 2>&1; dd if=/dev/zero of=$WEDGE_DIR/fill2 bs=1 >/dev/null 2>&1; df -k $WEDGE_DIR | tail -n1"
 
-# Drive audited writes into that tail until the gate refuses one. The probe
-# re-enables a key that is already enabled, so one that lands changes no
-# state and leaves T3-2c's oracle intact. How many landed is printed, not
-# scored: it depends on the segment's length when the fill ran.
+# Drive the probe into that tail until the gate refuses it. How many landed
+# is printed, not scored: it depends on the segment's length when the fill
+# ran.
 PROBES=0; PROBE_LANDED=0; WEDGED=0
 while (( PROBES < 32 )); do
   PROBES=$((PROBES+1))
-  api PATCH "/config/ai/apikey/$KEY2" "${AUTH[@]}" "${CT[@]}" -d '{"enabled":true}'
+  wedge_probe
   if [[ "$RESP_CODE" == 503 && "$RESP_BODY" == *audit_unavailable* ]]; then WEDGED=1; break; fi
-  [[ "$RESP_CODE" =~ ^2 ]] || { echo "  FATAL: wedge probe $PROBES answered $RESP_CODE: ${RESP_BODY:0:200}"; echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
+  [[ "$RESP_CODE" == 400 ]] || { echo "  FATAL: wedge probe $PROBES answered $RESP_CODE: ${RESP_BODY:0:200}"; echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
   PROBE_LANDED=$((PROBE_LANDED+1))
 done
 (( WEDGED )) || { echo "  FATAL: the gate never refused within $PROBES probes; the filesystem is not wedged"; echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
 echo "  wedged after $PROBES probe(s); $PROBE_LANDED landed in the last page's slack"
+# A probe that landed is followed by its result, appended after the answer;
+# give the writer a moment to take or refuse it, so that the count below is
+# of a trail that has stopped moving.
+sleep 1
+N0=$(count ".boot_id==\"$B3\"")
 
 echo ""
 echo "T3: the gate fails closed while the writer cannot append"
@@ -599,12 +696,11 @@ chk     T19-1c "the writer goroutine is still up (running)" true "$(astatus | jq
 chk     T19-1d "loxilb_audit_writer_up" 1 "$(metric_val loxilb_audit_writer_up)"
 chk_ge  T19-2  "the operational log carries the fallback line" 1 "$(gw_log_grep 'audit: write failed (' | wc -l | tr -d ' ')"
 L0=$(metric_val loxilb_audit_last_write_timestamp_seconds)
-N0=$(count ".boot_id==\"$B3\"")
 echo "  waiting 35 s across one heartbeat interval so staleness is measurable (last_write=$L0, records=$N0)"
 sleep 35
 chk     T19-3a "loxilb_audit_last_write_timestamp_seconds did not advance" "$L0" "$(metric_val loxilb_audit_last_write_timestamp_seconds)"
 chk_gt  T19-3b "the failing heartbeat added to write_failures_total" "$W1" "$(metric_val loxilb_audit_write_failures_total)"
-chk     T19-3c "no record of this boot landed while wedged" "$N0" "$(count ".boot_id==\"$B3\"")"
+chk     T19-3c "no record of this boot landed from the first refusal on" "$N0" "$(count ".boot_id==\"$B3\"")"
 
 echo ""
 echo "Un-wedge: free the filesystem, repeat the calls"
