@@ -11,7 +11,7 @@ an event type is covered.
 |---|---|---|
 | T-GW-1 | `/audit/status` reports the writer and never the trail's content | field checks; the first record of a boot is `sys.writer.start` |
 | T-GW-3 | the log-archive API refuses an audit segment by name | `GET /log-archives/audit.jsonl` is not 200 and leaks no record |
-| T25 | the delegated originator is recorded on every record of a request, trusted only for an account marked `delegation_allowed`, never promoted to `actor.user`; a malformed value is dropped and counted | an admin account, a delegating account, a viewer's 403, a malformed header; `/metrics` and `/audit/status` counters |
+| T25 | the delegated originator is recorded on every record of a request, trusted only for an account marked `delegation_allowed`, never promoted to `actor.user`; a malformed value is dropped and counted | an admin account, a delegating account, a viewer's 403, a malformed header; `/metrics` and `/audit/status` counters; then `loxicmd --originator` itself: the record names the OS account and host the CLI ran as, trusted for the delegating account, carried untrusted on the viewer's refusal, absent without the flag, and nothing dropped |
 | TM | the named routes each leave an intent+result pair of their own type with the detail the plan lists | persist, export, maintenance on/off, token upgrade, logout, user create/delete, API-key create, two listing reads |
 | T22 | the side-effecting OAuth GETs are gated | healthy: start answers 307 with a fingerprinted state, unknown-state callback 400, refresh with both tokens in the query string recorded without the query; wedged: all three 503 before any exchange |
 | T15 | canary secrets reach no segment (active, sealed, compressed) and no error body | nine canaries the harness sends (proved from its own request log) plus the raw API keys and the OAuth state the gateway minted |
@@ -207,8 +207,16 @@ The mutations they need, with the rows each one must redden and nothing else:
 | `llbigw-2-twin-2-sink-noendpoint-r1` | the sink record stops naming the receiver | `d.Endpoint` no longer set in the sink path's `AuditDetail` | `T-GW-5-7k`, `T-GW-5-7l`, `T-GW-5-8f`, `T-GW-5-8g`, `T-GW-5-9f`, and `T-GW-2-7d`, which selects its record the same way and breaks for the same reason |
 | `llbigw-2-twin-6-main-r1` | neither fix: the image of main's tree | none; the image built for T-GW-5 from main, run with this `validation.sh` | `T-GW-6-1` (two probes, boots 4 and 6, got no answer), `T-GW-6-3` (their two intents have no result), `T-GW-6-4` (two orphans in the trail), `T-GW-6-5` (the second names boot 4's probe; boot 6's is never scanned). `6-2`'s floor stays green |
 | `llbigw-2-twin-6-noguard-r1` | the create handler reads through a missing `serviceArguments` again | the nil check removed from `ConfigPostLoadbalancer`; the gate's fix kept | `T-GW-6-1` only among T-GW-6: the probes panic again and go unanswered, but their results are recorded with status 500, so `6-3`, `6-4` and `6-5` stay green -- the gate's panic path proving itself on a live gateway. `T3-1a`–`1d`, `2a`–`2c` and `4a` also went red for an unrelated reason: see *T3's wedge is not airtight* above |
+| `llbigw-2-twin-25-cli-ignored-r1` | the CLI accepts `--originator` and sends nothing | in loxicmd's root command the computed value is discarded instead of stored | `T25-7d`, `T25-7e`, `T25-7h`, `T25-7i`: every row that reads the recorded claim finds none |
+| `llbigw-2-twin-25-cli-always-r1` | the CLI names an originator whether asked or not | loxicmd's `setOriginatorHeader` sends a fixed `cli:someone@somewhere` unconditionally | `T25-7d`, `T25-7h` (the value is not the CLI's own account and host) and `T25-7m` (a claim on the pair made without the flag) |
 | `llbigw-2-twin-3-oldprobe-r1` | the wedge probe names a field again | in `validation.sh`, the probe's body is `{"enabled":true}` and its expected answer a 2xx; no rebuild, the gateway is the reference image | `T3-0b` only: seven kinds measured, five of them shorter than the probe's 638-byte intent |
 | `llbigw-2-twin-3-nofill-r1` | the filesystem is never filled | the two `dd` fills removed from `validation.sh`; same image | none: the scenario stops at `FATAL: the gate never refused within 32 probes; the filesystem is not wedged`, with the 85 assertions before it green |
+
+The two `T25-7` twins were run against a reference of **279 rows OK / 0
+FAILED** -- the 264 unchanged plus the fifteen `T25-7` rows. Each image is
+the reference image with `/usr/local/sbin/loxicmd` alone replaced, which is
+what a pin bump changes. Run against the image whose loxicmd predates the
+flag, the section fails `T25-7-0` alone and skips its other rows.
 
 The two wedge twins were run against a reference of **265 OK / 0 FAILED**
 -- the 264 unchanged plus `T3-0b` -- which wedged after three probes, two of

@@ -6,6 +6,7 @@
 #   T25     the delegated originator: recorded on every record of the
 #           request, trusted only for an account marked delegation_allowed,
 #           never promoted to actor.user, malformed values dropped and counted
+#           and the value loxicmd --originator sends is recorded as sent
 #   TM      the named management routes each leave an intent+result pair
 #   T22     the side-effecting OAuth GETs: healthy start (redirect + pair),
 #           unknown-state callback, refresh with tokens in the query string;
@@ -362,6 +363,53 @@ chk_gt  T25-4c "loxilb_audit_originator_dropped_total rose" "${ORIG_DROP0:-0}" "
 chk_ge  T25-4d "/audit/status originator_dropped" 1 "$(astatus | jq -r '.originator_dropped // 0')"
 chk     T25-5  "the claim is never promoted to actor.user" 0 "$(count '.actor.user=="mcp:ops-agent"')"
 chk_gt  T25-6  "loxilb_audit_delegation_lookups_total rose" "${DELEG0:-0}" "$(metric_val loxilb_audit_delegation_lookups_total)"
+
+# arm 5: the CLI names itself. `loxicmd --originator` sends the OS account and
+# host it runs as, so the value expected here is read from the container the
+# CLI runs in, never written down. The flag belongs to the loxicmd release
+# the image pins; an image whose pin predates it fails one row and skips the
+# rest, which would otherwise all go red for that one cause.
+if $dexec llb1 loxicmd --help 2>&1 | grep -q -- '--originator'; then
+  ok T25-7-0 "the image's loxicmd carries --originator"
+  CLI_ORIG="cli:$(docker exec llb1 id -un)@$(docker exec llb1 hostname)"
+  ORIG_DROP1=$(metric_val loxilb_audit_originator_dropped_total)
+  # The tokens reach the CLI through owner-only files: on the command line
+  # they would sit in the container's process list.
+  docker exec llb1 sh -c 'umask 077; printf %s "$1" > /tmp/t25-agent.token; printf %s "$2" > /tmp/t25-watcher.token' _ "$ATOKEN" "$WTOKEN"
+  cli_lb() { # cli_lb <label> <port> <token file> [flags...] → creates a rule through the CLI
+    local label=$1 port=$2 tok=$3; shift 3
+    cli "$label" --token-file "$tok" "$@" create lb 10.10.10.254 --tcp="$port:8080" --endpoints=31.31.31.1:1
+  }
+  cli_pair() { newest_intent ".event_type==\"mgmt.config.mutate\" and .detail.path==\"/netlox/v1/config/loadbalancer\" and .detail.method==\"POST\""; }
+
+  cli_lb orig-agent 2045 /tmp/t25-agent.token --originator
+  chk     T25-7a "agent through the CLI with --originator: exit status" 0 "$CLI_RC"
+  chk     T25-7b "the rule was created (state oracle)" 1 "$(rule_count 2045)"
+  EID=$(cli_pair); wait_result "$EID"
+  R=$(records ".event_id==\"$EID\" and .phase==\"result\"")
+  chk     T25-7c "result actor.user is the authenticated account" agent "$(printf '%s' "$R" | jq -r '.actor.user')"
+  chk     T25-7d "result actor.delegated is the CLI's own account and host" "$CLI_ORIG" "$(printf '%s' "$R" | jq -r '.actor.delegated')"
+  chk     T25-7e "trusted, because agent may delegate" true "$(printf '%s' "$R" | jq -r '.actor.delegation_trusted')"
+
+  cli_lb orig-watcher 2046 /tmp/t25-watcher.token --originator
+  chk_ne  T25-7f "viewer through the CLI with --originator: refused, exit status" 0 "$CLI_RC"
+  EID=$(cli_pair); wait_result "$EID"
+  R=$(records ".event_id==\"$EID\" and .phase==\"result\"")
+  chk     T25-7g "the refusal names the principal" watcher "$(printf '%s' "$R" | jq -r '.actor.user')"
+  chk     T25-7h "the refusal carries the CLI's claim" "$CLI_ORIG" "$(printf '%s' "$R" | jq -r '.actor.delegated')"
+  chk     T25-7i "untrusted, because watcher may not delegate" false "$(printf '%s' "$R" | jq -r '.actor.delegation_trusted')"
+  chk     T25-7j "the rule was not created (state oracle)" 0 "$(rule_count 2046)"
+
+  cli_lb plain-agent 2047 /tmp/t25-agent.token
+  chk     T25-7k "agent through the CLI without the flag: exit status" 0 "$CLI_RC"
+  EID=$(cli_pair); wait_result "$EID"
+  chk     T25-7l "that pair is the CLI's (the rule exists)" 1 "$(rule_count 2047)"
+  chk     T25-7m "no delegated field on the pair" 0 "$(count ".event_id==\"$EID\" and (.actor.delegated != null)")"
+  chk     T25-7n "the CLI's value passed the gateway's validation: nothing more was dropped" "${ORIG_DROP1:-x}" "$(metric_val loxilb_audit_originator_dropped_total)"
+  docker exec llb1 rm -f /tmp/t25-agent.token /tmp/t25-watcher.token
+else
+  bad T25-7-0 "the image's loxicmd carries --originator" "the flag is absent from loxicmd --help; the image's LOXICMD_TAG predates it"
+fi
 
 # ── TM: the named management routes ─────────────────────────────────────────
 echo ""
