@@ -46,6 +46,7 @@ func sampleDocument() *Document {
 			ModelAuthz:      "claims-required",
 			ForwardIdentity: true,
 		}},
+		HalfClose: &cmn.HalfCloseConfig{Allow: false, CapSeconds: 600},
 		LoadBalancer: []cmn.LbRuleMod{{
 			Serv: cmn.LbServiceArg{ServIP: "1.1.1.1", ServPort: 80, Proto: "tcp"},
 			Eps:  []cmn.LbEndPointArg{{EpIP: "10.0.0.1", EpPort: 8080}},

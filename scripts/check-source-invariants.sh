@@ -534,6 +534,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Every arming of a proxy connection's fd goes through sp_notify_arm.
+#
+# A client held open after a half-close has its read side at EOF: armed for
+# reads, its socket reports them level-triggered and the worker re-enters the
+# EOF handling on every poll. The helper is the one place that knows not to.
+# The data path checks this in its own CI (make check_notify_arm); this runs
+# the same check on the data path the gateway pins, so that a pin moved to a
+# commit that never passed that gate cannot carry a direct arming in.
+# ---------------------------------------------------------------------------
+if [ -f loxilb-ebpf/common/check_notify_arm.sh ]; then
+  if arm_out="$(sh loxilb-ebpf/common/check_notify_arm.sh 2>&1)"; then
+    pass "every proxy fd arming in the pinned data path goes through sp_notify_arm"
+  else
+    fail "a proxy fd is armed outside sp_notify_arm in the pinned data path:"
+    printf '%s\n' "$arm_out" | sed 's/^/          /'
+  fi
+else
+  fail "loxilb-ebpf/common/check_notify_arm.sh is missing: the pinned data path predates the arming helper"
+fi
+
+# ---------------------------------------------------------------------------
 # A cicd assert may not name a metric family that does not exist.
 #
 # An assert that greps for a family no build exports cannot match: it does not

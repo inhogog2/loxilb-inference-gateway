@@ -67,6 +67,7 @@ IPv6 in the path: bracket the literal — `…/externalipaddress/[2001:db8:aa::1
 | `mtls_frontend` | object | — | frontend (client → gateway) mTLS: client-cert mode, CA/CRL paths, CN/SAN pattern |
 | `mtls_backend` | object | — | backend (gateway → backend) mTLS: server-cert verification, CA bundle, client cert/key |
 | `backend_protocol` | string | — | backend ALPN capability: `http1` (default) · `http2` · `both` |
+| `half_close_mode` | string | — | fullproxy: a client that half-closes after its request. `hold` keeps it open until its answer is out (plaintext connections the kernel was never given to carry; with `sockMapMode` set, a client whose FIN comes before acceleration is not accelerated); `off` cuts it at its FIN; `inherit`/omitted runs on the process default, `off`. The bound and the allow/block switch are at [`/config/halfclose`](#half-close-holds). `hold+parked` is refused (`400`) until available; `hold` is refused on other modes, on TLS services (`security` 1 or 2) and on P/D services (`pd_disagg_mode`), judged on the rule as a replace leaves it. Replace and `null` semantics as `fc_mode`; a change of this field alone applies in place. |
 
 ### `serviceArguments` — AI gateway fields
 
@@ -213,6 +214,34 @@ Per-endpoint probe type/port (including `tls-hello`) are configured on the separ
 
 `operatingStatus` ∈ `ONLINE` / `OFFLINE` / `DEGRADED` / `ERROR` / `NO_MONITOR`. Status/stats values are
 in-memory (reset on restart).
+
+### Half-close holds
+
+A client that sends its request and then shuts down its write side (a half-close) is saying
+"that was my last request", not "forget the answer". On a fullproxy service whose
+`half_close_mode` is `hold`, such a client is kept open until its answer is out, where the
+gateway relays the answer itself: a plaintext connection whose traffic the kernel was never
+given to carry (a TLS connection, or one already accelerated, is cut at its FIN as before).
+A held client is closed once its answers are written, once the backend ends the answer's
+connection, when no answer byte has reached it for the bound below, or on a release.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/config/halfclose` | The settings in force: `{"allow": true, "capSeconds": 240}` until set |
+| `POST` | `/config/halfclose` | Set `allow` (new holds allowed or blocked, on every service) and/or `capSeconds` (the idle bound, `1`–`3600`); an omitted field keeps its value, any other field is refused (`400`); answers with the settings in force once applied; persisted |
+| `POST` | `/config/halfclose/release` | Close every held client at the next pass (within a second); stores nothing |
+
+Blocking stops new holds only; the clients already held finish as they started. To stop
+everything at once, block, then release. The bound is on idleness: it restarts with every
+write of the answer, so a long answer that keeps coming is never cut by it.
+
+Metrics: `loxilb_proxy_halfclose_held` (held now), `loxilb_proxy_halfclose_held_oldest_seconds`,
+`loxilb_proxy_halfclose_hold_total`, `loxilb_proxy_halfclose_hold_ended_total{reason}` (`answered`,
+`backend_first`, `expired`, `released`, `reset` — a client that reset while held, i.e. a cancel
+that was waited on — `other`), `loxilb_proxy_halfclose_hold_expired_total{answer_started,stream}`,
+`loxilb_proxy_halfclose_hold_refused_total{reason}`, `loxilb_proxy_halfclose_accel_skipped_total`
+(connections left unaccelerated so that they could be held), and the settings as
+`loxilb_proxy_halfclose_hold_allowed` / `loxilb_proxy_halfclose_hold_cap_seconds`.
 
 ---
 

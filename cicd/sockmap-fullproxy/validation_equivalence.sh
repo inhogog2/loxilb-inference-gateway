@@ -23,7 +23,7 @@
 #   3. four rules: off / request / response / both on one endpoint
 #   4. E-1,E-2  the echo sequence's records are identical to the off arm, client
 #               response headers and the request headers the backend saw included
-#   5. E-3..E-8, E-10..E-12  self-checking request and response shapes
+#   5. E-3..E-8, E-10..E-15, E-17  self-checking request and response shapes
 #   6. PEER_MISS stays zero and no sockmap failure is logged
 #
 # A case that fails on the OFF arm as well is a sockproxy defect, not an
@@ -44,15 +44,86 @@ declare -A PORT=([off]=2080 [request]=2081 [response]=2082 [both]=2083)
 # E-10 repeats, because the truncation race it guards against is intermittent.
 ABORT_REPS=${ABORT_REPS:-40}
 
-# Known defect, on the arms whose response is NOT accelerated (off, request). A
-# client that half-closes after a complete request is answered only where the
-# response direction is accelerated. Answering it everywhere needs a
-# signal that the response is complete, and there is none on the plain relay: the
-# response framer runs only under pd_framing_v2. Using a flag nothing clears held
-# every close on every FullProxy rule for 50 ms, which moved load-aware routing, so
-# the deferral is confined to accelerated responses — where the kernel may hold the
-# response anyway. A request-only rule relays its response through userspace just
-# like off. On both arms this is the proxy's long-standing behaviour.
+# Known defect, in two layers. A client that half-closes after a complete request
+# is saying "that was my last request", not "forget the response" — the request is
+# already parsed and forwarded, so it is owed an answer. The proxy does not always
+# give it one, and the two layers fail at different times, which is why E-11 and
+# E-13 are separate cases.
+#
+# Layer 1 (E-11, off and request): the pair is torn down the moment the client's
+# FIN arrives, so the answer is never delivered. Deferring instead needs a signal
+# that the response is complete, and the plain userspace relay has none: the
+# response framer runs only under pd_framing_v2. Gating on a flag nothing clears
+# held every close on every FullProxy rule for 50 ms, which moved load-aware
+# routing, so the deferral was confined to rules whose response direction is
+# accelerated — where the kernel may be holding response bytes anyway. A
+# request-only rule relays its response through userspace exactly like off.
+#
+# Layer 2 (E-13, every arm): where the teardown IS deferred, the bound is an
+# unconditional 50 ms — nothing releases it when the response completes. An
+# immediate backend hides this, because it answers inside the bound; a backend
+# slower than the bound is cut off, and the client's leg and the backend's leg go
+# down together, so the response can also arrive truncated. E-13 is registered on
+# all four arms and MUST stay registered until the bound moves to the per-rule
+# timeouts: fixing only layer 1 turns this suite green while a slow backend is
+# still cut off on every arm.
+#
+# E-14 is the acceptance test for any fix to either layer. E-13 holds the whole
+# answer back, so a proxy that gives up mid-wait always yields a clean EOF and
+# the case cannot tell "nothing was sent" from "what was sent got cut" — a fix
+# that delivers the opening bytes and drops the remainder passes it. E-14 starts
+# the answer at once under a promised Content-Length and finishes it late, which
+# is both the shape of real inference traffic and the shape that makes such a
+# fix fail. Its body is deliberately small: an unpatched kernel duplicates bytes
+# on an accelerated response at multi-megabyte sizes, which would make the
+# length check meaningless.
+#
+# E-15 is E-14 with the FIN arriving AFTER the opening bytes rather than before.
+# Every other half-* case shuts the write side down before a response byte
+# exists, so none of them produces that order, and it carries two things nothing
+# else does. It is the only case that shows layer 1 truncating a stream rather
+# than losing it whole — off and request deliver the opening bytes and drop the
+# remainder, where E-14 has them deliver nothing. And it is the worst order for
+# any fix that answers the FIN by dropping the connection's acceleration, since
+# the kernel may already hold response bytes taken for redirect that no
+# userspace queue can see. Keep it whichever way that decision goes: the first
+# reason stands on its own.
+for arm in $MODES; do
+  sockmap_xfail_register "E-13 $arm" \
+    "the deferred teardown has an unconditional 50 ms bound with no response-complete release, so a backend slower than that is cut off on every arm"
+  sockmap_xfail_register "E-14 $arm" \
+    "same bound, with the answer already started: the client keeps the opening bytes and loses the remainder"
+  sockmap_xfail_register "E-15 $arm" \
+    "the same loss with the FIN arriving after the opening bytes, which is also where layer 1 truncates rather than losing the answer whole"
+done
+# There is no case here for a half-close that lands while the answer is still
+# moving — the order in which the kernel may hold response bytes taken for
+# redirect that no userspace queue can see. E-15 cannot produce it: it waits for
+# the opening bytes and the backend then stays silent, so the queue is empty by
+# the time the FIN goes out.
+#
+# One was written (halfinflight, still in request_path_client.py, 256KB with the
+# remainder following the opening at once) and then withdrawn, because its
+# verdict depends on what ran before it. Driven back to back it fails on three
+# arms including one that passes inside the suite; run after the suite's earlier
+# cases it passes on two. Both images, with and without the response framer,
+# behave the same way, so this is the case and not the daemon. A check whose
+# answer moves with the load in front of it is worse than no check, and an
+# earlier 5-repetition measurement that did not reproduce is what put it here.
+#
+# The client mode is kept for probing by hand. What a decisive version has to
+# separate is bytes lost to the teardown from bytes merely slower than the
+# deferred-close bound, and 256KB in one write does not separate them by length.
+#
+# E-17 separates them by SHAPE instead. Same 256KB in flight at the FIN, but the
+# only assertion is that whatever arrived is the pattern's correct prefix -
+# contiguous bytes 0..N-1 for any N. A response the bound cuts short is a correct
+# prefix and passes: it was only late. A response with a hole, or a later chunk
+# delivered ahead of an earlier one, fails at the offset. That is the failure a
+# fix which drops the connection's acceleration on the FIN could introduce, since
+# the kernel may still hold response bytes taken for redirect at that moment and
+# userspace then relays what arrives after them. It passes on all four arms today
+# and is registered as nothing: a guard, not a defect case.
 for arm in off request; do
   sockmap_xfail_register "E-11 $arm" \
     "a half-closed client is answered only where the response is accelerated; the userspace relay has no response-complete signal to wait for"
@@ -146,7 +217,7 @@ done
 # Each of these asserts an absolute expectation rather than equality with off,
 # which is the stronger statement. off is run first so a pre-existing sockproxy
 # defect is distinguishable from an acceleration defect.
-sockmap_section 5 "E-3..E-8, E-10..E-12 — request and response shapes"
+sockmap_section 5 "E-3..E-8, E-10..E-15, E-17 — request and response shapes"
 for m in $MODES; do
   port=${PORT[$m]}
 
@@ -191,6 +262,32 @@ for m in $MODES; do
 
   out=$($hexec l3h1 python3 "$CLIENT" halfclose "$VIP" "$port" 2>&1)
   sockmap_result "E-11 $m: half-closed client is answered" \
+    "$([[ $out == OK* ]] && echo OK || echo FAILED)" "$out"
+
+  # Same shape as E-11 but with the answer held past the proxy's deferred-close
+  # bound, which is what tells "the response leg is kept open" apart from "the
+  # pair is torn down on a timer that the fast path happens to fit inside".
+  out=$($hexec l3h1 python3 "$CLIENT" halfslow "$VIP" "$port" 500 2>&1)
+  sockmap_result "E-13 $m: half-closed client, slow backend" \
+    "$([[ $out == OK* ]] && echo OK || echo FAILED)" "$out"
+
+  # E-14: the answer has already started when the bound expires. Distinguishes a
+  # fix that keeps the response leg open from one that only delivers the opening.
+  out=$($hexec l3h1 python3 "$CLIENT" halfsplit "$VIP" "$port" 500 2>&1)
+  sockmap_result "E-14 $m: half-closed client, answer cut mid-stream" \
+    "$([[ $out == OK* ]] && echo OK || echo FAILED)" "$out"
+
+  # E-15: the FIN lands on an answer already in flight. See the registration
+  # comment for why this is not a duplicate of E-14.
+  out=$($hexec l3h1 python3 "$CLIENT" halfmid "$VIP" "$port" 500 2>&1)
+  sockmap_result "E-15 $m: half-close after the answer started" \
+    "$([[ $out == OK* ]] && echo OK || echo FAILED)" "$out"
+
+  # E-17: the answer is in flight at the FIN; what arrives must be a correct
+  # prefix of the pattern, at any length. A guard for the redirect queue, not a
+  # defect case - see the note above the registrations.
+  out=$($hexec l3h1 python3 "$CLIENT" halfprefix "$VIP" "$port" 2>&1)
+  sockmap_result "E-17 $m: in-flight answer arrives as a correct prefix" \
     "$([[ $out == OK* ]] && echo OK || echo FAILED)" "$out"
 
   out=$($hexec l3h1 python3 "$CLIENT" halfpartial "$VIP" "$port" 2>&1)

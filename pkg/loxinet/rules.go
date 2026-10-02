@@ -606,6 +606,7 @@ type ruleEnt struct {
 	secMode                     cmn.LBSec
 	ppv2En                      bool
 	sockMapMode                 uint8 // Directional sockmap accel: 0=off,1=both,2=request,3=response
+	halfCloseMode               uint8 // half-close hold, enum sp_hold_mode: 0=unset,1=off,2=hold
 	egress                      bool
 	traceType                   string                  // Tracing catalog name for deep inspection
 	tracingCatalogID            uint16                  // Resolved catalog_id for tracing (0 = no tracing)
@@ -1202,6 +1203,7 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.ModelName = data.tuples.modelName         // Return model name in GET
 		ret.Serv.ProxyProtocolV2 = data.ppv2En
 		ret.Serv.SockMapMode = cmn.SockMapCodeToMode(data.sockMapMode)
+		ret.Serv.HalfCloseMode = cmn.HalfCloseModeFromRule(data.halfCloseMode)
 		ret.Serv.Egress = data.egress
 		ret.Serv.TraceType = data.traceType                 // Tracing catalog
 		ret.Serv.BackendProtocol = data.backendProtocol     // Backend protocol capability
@@ -4201,6 +4203,10 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if fcCfgErr != nil {
 		return RuleArgsErr, fcCfgErr
 	}
+	nextHalfClose, halfCloseErr := halfCloseResolve(eRule, &serv, lBActs.mode)
+	if halfCloseErr != nil {
+		return RuleArgsErr, halfCloseErr
+	}
 	// Checked against the resolved api_key_auth, which a replace may have
 	// preserved, and against the listener's L7 attachment as it stands. The
 	// attachment is read from the index rather than the policy registry because
@@ -4371,13 +4377,15 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		// re-create a full-proxy rule's data-plane entry, which would end the
 		// requests waiting in its queue and restart its counts. The data
 		// plane's in-place update applies it and wakes the waiters it lets
-		// through.
-		fcOnlyChg := false
+		// through. The half-close mode is applied the same way: re-creating
+		// the entry would cut the clients held under the old mode.
+		inPlaceOnlyChg := false
 		if !ruleChg && (eRule.fcMaxQueueDepth != nextFcMaxQueueDepth ||
 			eRule.fcMaxQueueWaitMs != nextFcMaxQueueWaitMs ||
-			eRule.fcCfg != nextFcCfg) {
+			eRule.fcCfg != nextFcCfg ||
+			eRule.halfCloseMode != nextHalfClose) {
 			ruleChg = true
-			fcOnlyChg = true
+			inPlaceOnlyChg = true
 		}
 
 		if !ruleChg {
@@ -4409,7 +4417,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			tk.LogIt(tk.LogInfo, "lb-rule %s-%v-%s reset all end-points (too many)\n", serv.ServIP, serv.ServPort, serv.Proto)
 			delEps = eRule.act.action.(*ruleLBActs).endPoints
 			retEps = lBActs.endPoints
-		} else if eRule.act.action.(*ruleLBActs).mode == cmn.LBModeFullProxy && !chwblTxn && !fcOnlyChg {
+		} else if eRule.act.action.(*ruleLBActs).mode == cmn.LBModeFullProxy && !chwblTxn && !inPlaceOnlyChg {
 			eRule.DP(DpRemove)
 		}
 
@@ -4498,6 +4506,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		eRule.fcMaxQueueDepth = nextFcMaxQueueDepth
 		eRule.fcMaxQueueWaitMs = nextFcMaxQueueWaitMs
 		eRule.fcCfg = nextFcCfg
+		eRule.halfCloseMode = nextHalfClose
 		eRule.cbEnable = serv.CbEnable
 		eRule.kvExactMode = serv.KvExactMode
 		eRule.kvBlockSize = serv.KvBlockSize
@@ -4821,6 +4830,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	r.fcMaxQueueDepth = serv.FcMaxQueueDepth
 	r.fcMaxQueueWaitMs = serv.FcMaxQueueWaitMs
 	r.fcCfg = nextFcCfg
+
+	// Store the half-close hold mode
+	r.halfCloseMode = nextHalfClose
 
 	// Store the per-endpoint circuit-breaker enable
 	r.cbEnable = serv.CbEnable
@@ -6656,6 +6668,7 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.FcTtftTargetMs = r.fcCfg.ttftTargetMs
 	nWork.FcTenantSharePct = uint8(r.fcCfg.tenantSharePct)
 	nWork.FcExposeHeaders = r.fcCfg.exposeHeaders
+	nWork.HalfCloseMode = r.halfCloseMode
 	nWork.CbEnable = r.cbEnable
 	nWork.KvExactMode = r.kvExactMode // KV-cache exact routing
 	nWork.KvBlockSize = r.kvBlockSize

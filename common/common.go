@@ -961,6 +961,13 @@ type LbServiceArg struct {
 	// One of "off" (default), "both", "request", "response".
 	// "request" offloads only client->backend, "response" only backend->client.
 	SockMapMode string `json:"sockMapMode,omitempty"`
+	// HalfCloseMode - what this FullProxy service does with a client that
+	// half-closes after its request: "hold" keeps it open until its answer
+	// is out, "off" cuts it at its FIN. Empty (or "inherit" on input) runs on
+	// the process default, which is off.
+	HalfCloseMode string `json:"half_close_mode,omitempty"`
+	// HalfCloseModePresent is the presence bit for replace semantics.
+	HalfCloseModePresent bool `json:"-"`
 	// Egress - Egress Rule
 	Egress bool `json:"egress"`
 	// Id - Stable opaque identifier for the LB rule (Octavia).
@@ -2349,6 +2356,23 @@ type NetHookInterface interface {
 	// certificate keys on disk, and the apply that follows a wipe must
 	// still be able to re-join them.
 	NetTracingReset() (int, error)
+	// NetHalfCloseGet returns the half-close hold settings as set, or nil
+	// while the defaults are in force (not configuration, not persisted).
+	NetHalfCloseGet() (*HalfCloseConfig, error)
+	// NetHalfCloseSet replaces the half-close hold settings (overwrite/Set
+	// semantics -- the snapshot restore path).
+	NetHalfCloseSet(*HalfCloseConfig) (int, error)
+	// NetHalfCloseReset returns them to the defaults (the snapshot wipe
+	// path).
+	NetHalfCloseReset() (int, error)
+	// NetHalfCloseUpdate sets the fields given and keeps the others, and
+	// returns the settings in force once applied - the merge, the hand-over
+	// and the answer in one step, so concurrent partial updates cannot undo
+	// each other (POST /config/halfclose).
+	NetHalfCloseUpdate(*HalfCloseUpdate) (HalfCloseConfig, error)
+	// NetHalfCloseRelease closes every held half-closed client at the data
+	// path's next pass. An action, not configuration: nothing is stored.
+	NetHalfCloseRelease() (int, error)
 	// NetCertGet returns the registered TLS certificates as desired-state
 	// metadata (stable id + content digest of the node-local managed
 	// material; PEM and keys never cross this surface).

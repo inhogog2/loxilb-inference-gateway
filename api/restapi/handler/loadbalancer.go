@@ -81,6 +81,9 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if err := pres.validateFcGateFields(params.Attr.ServiceArguments); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
+	if err := pres.validateHalfCloseMode(params.Attr.ServiceArguments); err != nil {
+		return errorResponseWithCode(http.StatusBadRequest, err.Error())
+	}
 
 	var lbRules cmn.LbRuleMod
 
@@ -139,6 +142,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if params.Attr.ServiceArguments.SockMapMode != nil {
 		lbRules.Serv.SockMapMode = *params.Attr.ServiceArguments.SockMapMode
 	}
+	pres.applyHalfCloseMode(&lbRules.Serv, params.Attr.ServiceArguments)
 	lbRules.Serv.Egress = params.Attr.ServiceArguments.Egress
 	lbRules.Serv.TraceType = params.Attr.ServiceArguments.TraceType // Tracing catalog (independent from GPU routing)
 
@@ -621,6 +625,7 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 			sockMapMode = lb.Serv.SockMapMode
 		}
 		tmpSvc.SockMapMode = &sockMapMode
+		tmpSvc.HalfCloseMode = lb.Serv.HalfCloseMode
 	}
 
 	// AI model name for pool selection

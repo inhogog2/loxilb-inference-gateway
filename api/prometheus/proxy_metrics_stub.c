@@ -115,6 +115,37 @@ typedef struct proxy_metrics_snapshot {
     uint64_t proxy_context_inflight;
     uint64_t proxy_accept_blocked;
     uint64_t proxy_accept_bound;
+
+    /* Half-close observation. TAIL-APPEND ONLY — twin-declared in
+     * loxilb-ebpf/common/sockproxy_metrics.h and the cgo preamble of
+     * sockproxy_metrics.go; keep ALL THREE in lockstep, same commit. */
+    uint64_t hc_fin_gap_bucket[4][3][15];
+    uint64_t hc_fin_gap_sum_us[4][3];
+    uint64_t hc_fin_gap_count[4][3];
+    uint64_t hc_fin_total[7][6];
+    uint64_t hc_accel_early_fin;
+    uint64_t hc_tls_fin[3][2];
+    uint64_t hc_client_reset;
+    uint64_t hc_user_agent[13];
+    uint64_t hc_first_gap_bucket[3][15];
+    uint64_t hc_first_gap_sum_us[3];
+    uint64_t hc_first_gap_count[3];
+    uint64_t hc_max_gap_bucket[3][15];
+    uint64_t hc_max_gap_sum_us[3];
+    uint64_t hc_max_gap_count[3];
+
+    /* Half-close holds. TAIL-APPEND ONLY — same three-way lockstep. */
+    uint64_t hold_held;
+    uint64_t hold_oldest_ms;
+    uint64_t hold_allowed;
+    uint64_t hold_cap_sec;
+    uint64_t hold_begun;
+    uint64_t hold_ended[7];
+    uint64_t hold_expired[2][3];
+    uint64_t hold_refused_residue;
+    uint64_t hold_reentry;
+    uint64_t hold_empty_out;
+    uint64_t hold_accel_skipped;
 } proxy_metrics_snapshot_t;
 
 __attribute__((weak))

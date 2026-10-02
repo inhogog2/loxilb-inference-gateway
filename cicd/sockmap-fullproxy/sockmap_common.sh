@@ -289,6 +289,14 @@ sockmap_create_lb_via_api() {
       ;;
   esac
 
+  # SOCKMAP_HALF_CLOSE_MODE (off|hold|inherit), when set, goes on every rule
+  # created here: a measurement can run the same arms with the half-close hold.
+  local hc_field=""
+  if [[ -n "${SOCKMAP_HALF_CLOSE_MODE:-}" ]]; then
+    hc_field=",
+    \"half_close_mode\": \"$SOCKMAP_HALF_CLOSE_MODE\""
+  fi
+
   local eps_json=""
   local first=1
   IFS=',' read -ra eps <<< "$eps_csv"
@@ -307,14 +315,14 @@ sockmap_create_lb_via_api() {
     "protocol": "tcp",
     "mode": 4,
     "name": "$name",
-    "sockMapMode": "$sockmap_mode"
+    "sockMapMode": "$sockmap_mode"$hc_field
   },
   "endpoints": [ $eps_json ]
 }
 EOF
 )
 
-  echo "[sockmap] create LB: $name vip=$vip:$vport sockMapMode=$sockmap_mode"
+  echo "[sockmap] create LB: $name vip=$vip:$vport sockMapMode=$sockmap_mode${SOCKMAP_HALF_CLOSE_MODE:+ half_close_mode=$SOCKMAP_HALF_CLOSE_MODE}"
   local resp
   resp=$(_sm_dexec "$llb" curl -sS -w '\nHTTP %{http_code}\n' \
            -X POST -H 'Content-Type: application/json' \

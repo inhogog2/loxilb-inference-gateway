@@ -43,6 +43,19 @@ func WithRawLoadbalancerBodyBuffer(ctx context.Context, raw *bytes.Buffer) conte
 	return context.WithValue(ctx, rawLoadbalancerBodyKey{}, raw)
 }
 
+// rawBodyCapture returns the body the middleware captured for this request,
+// and whether it captured one at all - an empty body and no capture are told
+// apart.
+func rawBodyCapture(ctx context.Context) ([]byte, bool) {
+	switch v := ctx.Value(rawLoadbalancerBodyKey{}).(type) {
+	case []byte:
+		return v, true
+	case *bytes.Buffer:
+		return v.Bytes(), true
+	}
+	return nil, false
+}
+
 func rawLoadbalancerBodyFromContext(ctx context.Context) []byte {
 	switch v := ctx.Value(rawLoadbalancerBodyKey{}).(type) {
 	case []byte:
@@ -276,6 +289,34 @@ func (p *loadbalancerRequestPresence) validateFcGateFields(
 		return fmt.Errorf("fc_tenant_max_share_pct must be within 0..%d", cmn.FcTenantMaxSharePctMax)
 	}
 	return nil
+}
+
+// validateHalfCloseMode checks half_close_mode on its own, as
+// validateFcGateFields does for the gate: null is refused and the value is
+// one of its words (the rule layer checks again for callers without it).
+func (p *loadbalancerRequestPresence) validateHalfCloseMode(
+	src *models.LoadbalanceEntryServiceArguments,
+) error {
+	if p.svcIsNull("half_close_mode") {
+		return fmt.Errorf("half_close_mode must not be null")
+	}
+	if src == nil {
+		return nil
+	}
+	_, err := cmn.HalfCloseModeToRule(src.HalfCloseMode)
+	return err
+}
+
+// applyHalfCloseMode copies half_close_mode with its presence bit, as
+// applyFcGate does for fc_mode.
+func (p *loadbalancerRequestPresence) applyHalfCloseMode(
+	dst *cmn.LbServiceArg,
+	src *models.LoadbalanceEntryServiceArguments,
+) {
+	if p.svcPresent("half_close_mode") || src.HalfCloseMode != "" {
+		dst.HalfCloseMode = src.HalfCloseMode
+		dst.HalfCloseModePresent = p.svcPresent("half_close_mode")
+	}
 }
 
 // applyFcGate copies the admission gate's rule fields with their presence

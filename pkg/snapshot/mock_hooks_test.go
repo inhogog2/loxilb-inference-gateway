@@ -62,6 +62,7 @@ type mockHooks struct {
 
 	corsCfg    *cmn.CORSConfig
 	tracingCfg *cmn.TracingConfig
+	halfClose  *cmn.HalfCloseConfig
 	certMetas  []cmn.CertMeta
 
 	// depVerifyFail/depVerifyWarn drive NetRecoveryDepVerify by dependency
@@ -449,6 +450,43 @@ func (m *mockHooks) NetTracingReset() (int, error) {
 		return -1, err
 	}
 	m.tracingCfg = nil
+	return 0, nil
+}
+
+// --- halfclose ---
+
+func (m *mockHooks) NetHalfCloseGet() (*cmn.HalfCloseConfig, error) {
+	m.log("NetHalfCloseGet")
+	if err := m.failIfConfigured("NetHalfCloseGet"); err != nil {
+		return nil, err
+	}
+	if m.halfClose == nil {
+		return nil, nil
+	}
+	cp := *m.halfClose
+	return &cp, nil
+}
+func (m *mockHooks) NetHalfCloseSet(cfg *cmn.HalfCloseConfig) (int, error) {
+	m.log("NetHalfCloseSet")
+	if err := m.failIfConfigured("NetHalfCloseSet"); err != nil {
+		return -1, err
+	}
+	if cfg == nil {
+		return -1, errors.New("halfclose: nil config (use reset for the defaults)")
+	}
+	if err := cfg.Validate(); err != nil {
+		return -1, err
+	}
+	cp := *cfg
+	m.halfClose = &cp
+	return 0, nil
+}
+func (m *mockHooks) NetHalfCloseReset() (int, error) {
+	m.log("NetHalfCloseReset")
+	if err := m.failIfConfigured("NetHalfCloseReset"); err != nil {
+		return -1, err
+	}
+	m.halfClose = nil
 	return 0, nil
 }
 
