@@ -17,7 +17,7 @@ an event type is covered.
 | T15 | canary secrets reach no segment (active, sealed, compressed) and no error body | nine canaries the harness sends (proved from its own request log) plus the raw API keys and the OAuth state the gateway minted |
 | T11 | actor conformance | with `--userservice` every successful result names a principal with `auth=session`; without it every record says `auth=none` and names nobody |
 | T20 | a crash between a durable intent and its result is reported at the next boot, never guessed | the store is paused, a user create blocks after its intent, the process is SIGKILLed; boot 2 writes exactly one `sys.intent.orphaned` naming that `event_id`, the counter reads 1, no result exists |
-| T3 | the gate fails closed with the authoritative state unchanged | the audit directory sits on a 1 MiB tmpfs that is filled to the last byte, then written into with an idempotent audited probe until the gate refuses one (fatal if it never does); a generated route, a raw route and a named route answer 503 `audit_unavailable` and the rule table, the key and the account list are unchanged; freed, the same calls leave a pair sharing one `event_id`, intent before result by `seq` |
+| T3 | the gate fails closed with the authoritative state unchanged | the audit directory sits on a 1 MiB tmpfs that is filled to the last byte, then written into with an audited probe that changes nothing until the gate refuses one (fatal if it never does); the probe's intent is the shortest line anything written while wedged can be, which a row checks; a generated route, a raw route and a named route answer 503 `audit_unavailable` and the rule table, the key and the account list are unchanged; freed, the same calls leave a pair sharing one `event_id`, intent before result by `seq` |
 | T-GW-2 | the audit policy, the remote sink and sealing on demand are management changes like any other | a policy replace and an unsatisfiable one; a sink refused for a missing, out-of-range or unreadable argument and one accepted; `POST /audit/rotate` seals the segment the status named and the next record lands in the new one |
 | T-GW-5 | `loxicmd` drives the three audit paths against a live gateway, and its refusals stay local | `get audit-status` on a running writer and on a boot whose audit directory is unusable; `get audit-sink` unconfigured and configured; a set, a replace that proves the endpoint replaces rather than patches, and `--disable`; five locally refused invocations that leave the audited `mgmt.audit.sink` count untouched, against one the gateway refuses that does not; `-o json` compared key for key with the gateway's own body |
 | T-GW-6 | no admitted management call is left without an answer or a result | every boot's settle probe (`POST /config/loadbalancer` with an empty body) gets an HTTP answer, including on the boots where it reaches the handler because management authentication is off; every probe intent in the trail has its result, with a floor on how many there are; and, once boot 6 has scanned boot 4, the only `sys.intent.orphaned` in the trail is the one T20 makes on purpose |
@@ -64,9 +64,10 @@ boot's segment is sealed at recovery and compressed, never removed.
   tmpfs of one MiB filled with `dd` (page-sized, then byte-sized to close
   the last page) takes every free page, and `rm` undoes it. The fill alone
   does not refuse the next append (see *T3's wedge is not airtight* below),
-  so the scenario then drives an idempotent audited probe (re-enabling an
-  enabled key) until the gate answers 503 `audit_unavailable`, and fails
-  outright if it never does; only then do T3's refusals run. That is also
+  so the scenario then drives an audited probe (a PATCH of a key that
+  names no field, which the gate records and the handler then refuses with
+  400) until the gate answers 503 `audit_unavailable`, and fails outright
+  if it never does; only then do T3's refusals run. That is also
   the "fill the filesystem" arm of T19. The
   permission-loss arm of T19 is not driven here: a `chmod` of the directory
   cannot reach an open descriptor either; the writer's reaction to EACCES
@@ -149,6 +150,27 @@ boot's segment is sealed at recovery and compressed, never removed.
   probes described under *The wedge is a full filesystem* run until the
   first refusal, and the line `wedged after N probe(s); M landed` reports
   how much slack there was.
+- **Which probe observes the wedge matters.** A refused append is cut back
+  to the last complete line, so the room in the last page is still there
+  after the refusal, and any shorter line still fits into it. A probe that
+  re-enabled an enabled key wrote a 638-byte intent in this scenario; the
+  OAuth start's is 618 bytes. With room for a line between those two
+  lengths the gate refused that probe and then admitted the OAuth start, on
+  a filesystem the scenario had just declared wedged (reproduced on a 1 MiB
+  tmpfs through the gate, with the segment padded to leave exactly that
+  much). The probe therefore names no field: its intent is 609 bytes,
+  shorter than the intent of every call made while wedged (OAuth start 618,
+  OAuth callback 630, user create 633, OAuth refresh 634, load balancer
+  create 657; the PATCH that disables the key is the probe with a field
+  named, so longer by construction), than a listing read's result (629) and
+  than the heartbeat (677), so its refusal covers them all. The lengths
+  move with the remote address and the account name, which is why `T3-0b`
+  measures the shortest line of each of those seven kinds in the trail
+  instead of trusting these numbers, and fails if any is shorter than the
+  probe's or if the probe's own line is missing. No boot before the wedged
+  one stays up for a heartbeat interval, so the scenario waits for that
+  boot's first heartbeat before it measures. `T19-3c` counts from the first
+  refusal, so a record that did land while wedged is a named failure.
 
 ## Red twins
 
@@ -185,6 +207,13 @@ The mutations they need, with the rows each one must redden and nothing else:
 | `llbigw-2-twin-2-sink-noendpoint-r1` | the sink record stops naming the receiver | `d.Endpoint` no longer set in the sink path's `AuditDetail` | `T-GW-5-7k`, `T-GW-5-7l`, `T-GW-5-8f`, `T-GW-5-8g`, `T-GW-5-9f`, and `T-GW-2-7d`, which selects its record the same way and breaks for the same reason |
 | `llbigw-2-twin-6-main-r1` | neither fix: the image of main's tree | none; the image built for T-GW-5 from main, run with this `validation.sh` | `T-GW-6-1` (two probes, boots 4 and 6, got no answer), `T-GW-6-3` (their two intents have no result), `T-GW-6-4` (two orphans in the trail), `T-GW-6-5` (the second names boot 4's probe; boot 6's is never scanned). `6-2`'s floor stays green |
 | `llbigw-2-twin-6-noguard-r1` | the create handler reads through a missing `serviceArguments` again | the nil check removed from `ConfigPostLoadbalancer`; the gate's fix kept | `T-GW-6-1` only among T-GW-6: the probes panic again and go unanswered, but their results are recorded with status 500, so `6-3`, `6-4` and `6-5` stay green -- the gate's panic path proving itself on a live gateway. `T3-1a`–`1d`, `2a`–`2c` and `4a` also went red for an unrelated reason: see *T3's wedge is not airtight* above |
+| `llbigw-2-twin-3-oldprobe-r1` | the wedge probe names a field again | in `validation.sh`, the probe's body is `{"enabled":true}` and its expected answer a 2xx; no rebuild, the gateway is the reference image | `T3-0b` only: seven kinds measured, five of them shorter than the probe's 638-byte intent |
+| `llbigw-2-twin-3-nofill-r1` | the filesystem is never filled | the two `dd` fills removed from `validation.sh`; same image | none: the scenario stops at `FATAL: the gate never refused within 32 probes; the filesystem is not wedged`, with the 85 assertions before it green |
+
+The two wedge twins were run against a reference of **265 OK / 0 FAILED**
+-- the 264 unchanged plus `T3-0b` -- which wedged after three probes, two of
+them landed. They mutate the scenario and not the gateway, because what
+they prove is the scenario's own claim that it observed a wedge.
 
 T-GW-6 was run against a reference of **264 OK / 0 FAILED** -- the
 259-assertion baseline unchanged plus its five rows -- where the probe
@@ -227,4 +256,5 @@ python3 gen-coverage-manifest.py --check
 exec`, the extraction does not, and the sink's trust anchor cannot be
 generated inside the image. One gateway at a time on a shared host; teardown
 removes `pg-audit`, which runs with `--rm`. The whole run takes about eight
-minutes, most of it the six boots and the 35 s staleness window.
+minutes, most of it the six boots, the wait for the wedged boot's first heartbeat
+and the 35 s staleness window.

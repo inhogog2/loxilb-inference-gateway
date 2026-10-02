@@ -17,8 +17,9 @@
 #   T20     a crash between a durable intent and its result is reported at
 #           the next boot as exactly one sys.intent.orphaned, never guessed
 #   T3      once a probe has observed the wedge (a full filesystem still takes
-#           appends into the active segment's last page), the gate fails
-#           closed: 503 audit_unavailable through a generated route, a
+#           appends into the active segment's last page, so the probe is the
+#           shortest line of all and its refusal covers the rest), the gate
+#           fails closed: 503 audit_unavailable through a generated route, a
 #           raw route and a named route, with the authoritative state
 #           unchanged; the un-wedged repeat leaves a pair sharing one
 #           event_id
@@ -537,6 +538,50 @@ api POST /config/ai/apikey "${AUTH[@]}" "${CT[@]}" -d '{"tenant_id":"audit-tenan
 KEY2=$(json '.key_id // empty'); RAW2=$(json '.raw_key // empty')
 [[ -n "$RAW2" ]] && RECEIVED_CANARIES+=("$RAW2")
 chk_nonempty T3-0 "a key to PATCH through the raw route" "$KEY2"
+# The wedge probe is a PATCH that names no field. The gate writes its intent
+# before the handler runs, and the handler then refuses it with 400, so one
+# that lands changes nothing. Naming no field also makes that intent the
+# shortest line anything below can write, and that is what makes the probe's
+# refusal mean "wedged": a refused append is cut back to the last complete
+# line, so the room left in the segment's last page is still there, and a
+# shorter line would still fit into it.
+wedge_probe() { api PATCH "/config/ai/apikey/$KEY2" "${AUTH[@]}" "${CT[@]}" -d '{}'; }
+wedge_probe
+[[ "$RESP_CODE" == 400 && "$RESP_BODY" == *"no patchable field"* ]] || { echo "  FATAL: the wedge probe on a writable trail answered $RESP_CODE: ${RESP_BODY:0:200}"; echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
+# line_lengths → "<kind> <bytes>" for every line of the trail that is of a
+# kind written, or refused, while wedged: the gated calls' intents, the
+# listing reads' results and the heartbeat. "probe" is the probe's own
+# intent; the PATCH that names a field is not listed, being the same line
+# with the field's name added.
+line_lengths() {
+  trail_raw "$@" | jq -R -r '. as $l | (fromjson? // empty) | select(type=="object" and .event_type != null)
+    | (.detail.path // "") as $p | ((.detail.changed_fields // []) | length) as $nf
+    | (if .event_type=="sys.heartbeat" then "heartbeat"
+       elif .event_type=="read.credential.list" and (.actor.user // "") != "" then "listing"
+       elif .phase != "intent" then null
+       elif .event_type=="mgmt.user.create" then "user-create"
+       elif .event_type=="mgmt.auth.oauth_start" then "oauth-start"
+       elif .event_type=="mgmt.auth.oauth_callback" then "oauth-callback"
+       elif .event_type=="mgmt.auth.oauth_token_refresh" then "oauth-refresh"
+       elif .event_type=="mgmt.config.mutate" and .detail.method=="POST" and $p=="/netlox/v1/config/loadbalancer" and $nf > 0 then "lb-create"
+       elif .event_type=="mgmt.config.mutate" and .detail.method=="PATCH" and $p=="/netlox/v1/config/ai/apikey/{key_id}" and $nf == 0 then "probe"
+       else null end) as $k
+    | select($k != null) | "\($k) \($l | utf8bytelength)"'
+}
+# No boot before this one stays up for a heartbeat interval, so the trail
+# holds no heartbeat to measure until this boot writes its first.
+echo "  waiting for this boot's first heartbeat, so that its length can be measured"
+for _ in $(seq 40); do
+  [[ "$(count ".boot_id==\"$B3\" and .event_type==\"sys.heartbeat\"")" -ge 1 ]] && break
+  sleep 1
+done
+LENS=$(line_lengths | awk '{ if (!($1 in m) || $2 < m[$1]) m[$1] = $2 } END { for (k in m) print k, m[k] }' | sort)
+PROBE_LEN=$(printf '%s\n' "$LENS" | awk '$1=="probe" { print $2 }')
+echo "  shortest line of each kind, bytes: $(printf '%s' "$LENS" | tr '\n' ',' | sed 's/,/, /g')"
+# A trail without the probe's own intent has nothing to compare against, so
+# every kind counts as shorter and the row fails rather than passing empty.
+chk     T3-0b "kinds of line measured, and how many of them are shorter than the probe's intent (${PROBE_LEN:-not found} bytes)" "7 kinds, 0 shorter" \
+  "$(printf '%s\n' "$LENS" | awk -v p="$PROBE_LEN" '$1!="probe" { n++; if (p == "" || $2 < p) s++ } END { printf "%d kinds, %d shorter", n, s }')"
 W0=$(metric_val loxilb_audit_write_failures_total)
 echo "  before the fill: write_failures_total=$W0"
 
@@ -544,23 +589,27 @@ echo "  before the fill: write_failures_total=$W0"
 # a byte-sized one closes it. That exhausts the free pages, but not the
 # active segment's last page: tmpfs allocates by page, so appends that fit
 # in its unused tail still succeed. The fill alone is therefore not the
-# wedge; the first refused append is.
+# wedge; the probe's first refused append is.
 docker exec llb1 sh -c "dd if=/dev/zero of=$WEDGE_DIR/fill bs=4096 >/dev/null 2>&1; dd if=/dev/zero of=$WEDGE_DIR/fill2 bs=1 >/dev/null 2>&1; df -k $WEDGE_DIR | tail -n1"
 
-# Drive audited writes into that tail until the gate refuses one. The probe
-# re-enables a key that is already enabled, so one that lands changes no
-# state and leaves T3-2c's oracle intact. How many landed is printed, not
-# scored: it depends on the segment's length when the fill ran.
+# Drive the probe into that tail until the gate refuses it. How many landed
+# is printed, not scored: it depends on the segment's length when the fill
+# ran.
 PROBES=0; PROBE_LANDED=0; WEDGED=0
 while (( PROBES < 32 )); do
   PROBES=$((PROBES+1))
-  api PATCH "/config/ai/apikey/$KEY2" "${AUTH[@]}" "${CT[@]}" -d '{"enabled":true}'
+  wedge_probe
   if [[ "$RESP_CODE" == 503 && "$RESP_BODY" == *audit_unavailable* ]]; then WEDGED=1; break; fi
-  [[ "$RESP_CODE" =~ ^2 ]] || { echo "  FATAL: wedge probe $PROBES answered $RESP_CODE: ${RESP_BODY:0:200}"; echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
+  [[ "$RESP_CODE" == 400 ]] || { echo "  FATAL: wedge probe $PROBES answered $RESP_CODE: ${RESP_BODY:0:200}"; echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
   PROBE_LANDED=$((PROBE_LANDED+1))
 done
 (( WEDGED )) || { echo "  FATAL: the gate never refused within $PROBES probes; the filesystem is not wedged"; echo "SCENARIO-audit-mgmt [FAILED]"; exit 1; }
 echo "  wedged after $PROBES probe(s); $PROBE_LANDED landed in the last page's slack"
+# A probe that landed is followed by its result, appended after the answer;
+# give the writer a moment to take or refuse it, so that the count below is
+# of a trail that has stopped moving.
+sleep 1
+N0=$(count ".boot_id==\"$B3\"")
 
 echo ""
 echo "T3: the gate fails closed while the writer cannot append"
@@ -599,12 +648,11 @@ chk     T19-1c "the writer goroutine is still up (running)" true "$(astatus | jq
 chk     T19-1d "loxilb_audit_writer_up" 1 "$(metric_val loxilb_audit_writer_up)"
 chk_ge  T19-2  "the operational log carries the fallback line" 1 "$(gw_log_grep 'audit: write failed (' | wc -l | tr -d ' ')"
 L0=$(metric_val loxilb_audit_last_write_timestamp_seconds)
-N0=$(count ".boot_id==\"$B3\"")
 echo "  waiting 35 s across one heartbeat interval so staleness is measurable (last_write=$L0, records=$N0)"
 sleep 35
 chk     T19-3a "loxilb_audit_last_write_timestamp_seconds did not advance" "$L0" "$(metric_val loxilb_audit_last_write_timestamp_seconds)"
 chk_gt  T19-3b "the failing heartbeat added to write_failures_total" "$W1" "$(metric_val loxilb_audit_write_failures_total)"
-chk     T19-3c "no record of this boot landed while wedged" "$N0" "$(count ".boot_id==\"$B3\"")"
+chk     T19-3c "no record of this boot landed from the first refusal on" "$N0" "$(count ".boot_id==\"$B3\"")"
 
 echo ""
 echo "Un-wedge: free the filesystem, repeat the calls"
