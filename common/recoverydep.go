@@ -46,6 +46,11 @@ const (
 	// directory. The cert domain carries per-cert {id, digest}; this
 	// entry summarizes the whole set for the manifest reader.
 	RecoveryDepCertStore = "cert-store"
+	// RecoveryDepAuditSinkFile is one node-local file an audit sink names
+	// by path: its CA bundle, its client certificate or its client key.
+	// The auditsink domain carries the path; the entry's id is that path,
+	// so a restore knows the file is there before it stops a live sink.
+	RecoveryDepAuditSinkFile = "audit-sink-file"
 )
 
 // KnownRecoveryDepTypes is the validation set for the vocabulary above.
@@ -55,6 +60,7 @@ var KnownRecoveryDepTypes = map[string]bool{
 	RecoveryDepEngineContracts: true,
 	RecoveryDepKvModelProfiles: true,
 	RecoveryDepCertStore:       true,
+	RecoveryDepAuditSinkFile:   true,
 }
 
 // RecoveryDependency is one entry of the snapshot document's

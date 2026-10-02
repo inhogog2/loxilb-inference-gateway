@@ -695,6 +695,11 @@ func autoPersistEligible(r *http.Request) bool {
 		return false
 	}
 	p := r.URL.Path
+	// The audit sinks are configuration the document carries, under their
+	// own tree. The audit policy and the rotation are not in the document.
+	if strings.HasSuffix(p, "/audit/sink") || strings.Contains(p, "/audit/sinks/") {
+		return true
+	}
 	if !strings.Contains(p, "/config/") {
 		return false
 	}

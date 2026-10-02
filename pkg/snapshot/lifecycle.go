@@ -130,18 +130,18 @@ var RouteLifecycles = []RouteLifecycle{
 	{Method: "put", Path: "/auth/users/{id}", Class: ClassExternalStore, Area: AreaAuthUsers, DesiredState: true},
 	{Method: "delete", Path: "/auth/users/{id}", Class: ClassExternalStore, Area: AreaAuthUsers, DesiredState: true},
 
-	// --- Audit trail. The sealing/retention policy and the remote sink
-	// are the parts that may change while the gateway runs, and they live
-	// only in memory: the audit root directory, the mandatory-audit mode
-	// and the instance identity are startup-only, so a restart brings the
-	// policy back to its startup values and leaves no sink configured.
-	// Runtime-only desired state, therefore, and named in
-	// excluded_domains: an operator who pointed the trail at a receiver
-	// must point it there again after a restart.
+	// --- Audit trail. The sealing/retention policy may change while the
+	// gateway runs and lives only in memory: the audit root directory, the
+	// mandatory-audit mode and the instance identity are startup-only, so
+	// a restart brings the policy back to its startup values. Runtime-only
+	// desired state, therefore, and named in excluded_domains.
 	{Method: "post", Path: "/audit/policy", Class: ClassRuntimeRebuilt, Area: AreaAudit, DesiredState: true},
-	{Method: "post", Path: "/audit/sink", Class: ClassRuntimeRebuilt, Area: AreaAudit, DesiredState: true},
-	{Method: "put", Path: "/audit/sinks/{name}", Class: ClassRuntimeRebuilt, Area: AreaAudit, DesiredState: true},
-	{Method: "delete", Path: "/audit/sinks/{name}", Class: ClassRuntimeRebuilt, Area: AreaAudit, DesiredState: true},
+	// The sinks are a snapshot domain since schema 1.8: a restart that
+	// replays the persisted document points the trail at its receivers
+	// again, and each sink continues from the place kept on the node.
+	{Method: "post", Path: "/audit/sink", Class: ClassSnapshot, Area: DomainAuditSink, DesiredState: true},
+	{Method: "put", Path: "/audit/sinks/{name}", Class: ClassSnapshot, Area: DomainAuditSink, DesiredState: true},
+	{Method: "delete", Path: "/audit/sinks/{name}", Class: ClassSnapshot, Area: DomainAuditSink, DesiredState: true},
 	// Sealing the active segment now is an action on the trail rather than
 	// desired state: a restart seals the open segment anyway, so there is
 	// nothing for a snapshot to replay.
@@ -388,6 +388,7 @@ var snapshotDomainSet = map[string]bool{
 	DomainCORS:           true,
 	DomainTracing:        true,
 	DomainCert:           true,
+	DomainAuditSink:      true,
 }
 
 // ExcludedDomainsFromLifecycle derives the excluded_domains honesty list

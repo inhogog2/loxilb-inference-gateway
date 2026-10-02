@@ -77,7 +77,8 @@ func Capture(hooks Hooks, gatewayVersion, hostname string, trigger Trigger, comp
 // ones -- the contract/profile registries are required exactly when the
 // captured document carries kvexactbinding entries that reference their
 // generations -- and derives the cert-store summary entry from the
-// captured cert domain. Entries are sorted by (type, id) so an unchanged
+// captured cert domain and one entry per file the captured audit sinks
+// name by path. Entries are sorted by (type, id) so an unchanged
 // gateway captures an identical manifest (same determinism contract as
 // NormalizeDomains).
 func buildRecoveryManifest(doc *Document, deps []cmn.RecoveryDependency) []cmn.RecoveryDependency {
@@ -97,12 +98,36 @@ func buildRecoveryManifest(doc *Document, deps []cmn.RecoveryDependency) []cmn.R
 			Required: true,
 		})
 	}
+	for _, path := range auditSinkFiles(doc.Domains.AuditSink) {
+		out = append(out, cmn.RecoveryDependency{
+			Type:     cmn.RecoveryDepAuditSinkFile,
+			ID:       path,
+			Required: true,
+		})
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Type != out[j].Type {
 			return out[i].Type < out[j].Type
 		}
 		return out[i].ID < out[j].ID
 	})
+	return out
+}
+
+// auditSinkFiles lists every file the captured sinks name by path, each
+// once: a sink that cannot read one of them cannot be configured, and a
+// restore has to know that before it stops the sinks that are live.
+func auditSinkFiles(sinks []cmn.AuditSinkConfig) []string {
+	seen := map[string]bool{}
+	var out []string
+	for i := range sinks {
+		for _, path := range []string{sinks[i].CABundlePath, sinks[i].ClientCertPath, sinks[i].ClientKeyPath} {
+			if path != "" && !seen[path] {
+				seen[path] = true
+				out = append(out, path)
+			}
+		}
+	}
 	return out
 }
 

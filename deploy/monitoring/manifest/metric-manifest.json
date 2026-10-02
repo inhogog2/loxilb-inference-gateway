@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-02T12:17:48+00:00",
-  "source_revision": "4e5712b4f3b9b89b1a618bc1d26d88c5cec4c9a1"
+  "generated_at": "2026-10-02T14:39:41+00:00",
+  "source_revision": "5a44fdd44f4a93bee3b7975550ab328d6ec9f13b"
  },
  "contract": {
   "total": 313,
@@ -6061,8 +6061,8 @@
      "symbol": "AutoPersistMiddleware",
      "kind": "func",
      "file": "api/restapi/handler/snapshot.go",
-     "def_line": 744,
-     "call_line": 753,
+     "def_line": 749,
+     "call_line": 758,
      "calls": "MarkConfigMutated",
      "entry_point": "http-handler",
      "note": "called on every 2xx eligible mutation, including when auto-persist is off -- there the gauge staying at 1 is the operational signal"

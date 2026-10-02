@@ -142,6 +142,16 @@ var Migrations = []Migration{
 		ToVersion:   "1.7",
 		Apply:       func(doc *Document) error { return nil },
 	},
+	// 1.7 -> 1.8: the auditsink domain was added. Its absent value is the
+	// empty list, which omitempty already writes as nothing, so there is
+	// nothing to normalize: re-stamp only. Deliberately NOT stamped into
+	// included_domains, as 1.6->1.7: a pre-1.8 document never captured the
+	// sinks, so restoring it must leave the live ones untouched.
+	{
+		FromVersion: "1.7",
+		ToVersion:   "1.8",
+		Apply:       func(doc *Document) error { return nil },
+	},
 }
 
 // ApplyMigrations runs every registered Migration whose FromVersion matches

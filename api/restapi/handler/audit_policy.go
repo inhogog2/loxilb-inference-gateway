@@ -18,6 +18,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -149,25 +150,51 @@ func AuditPostSink(params auditops.PostAuditSinkParams, principal interface{}) m
 	if params.Attr == nil {
 		return auditops.NewPostAuditSinkBadRequest()
 	}
-	a := params.Attr
+	// Without a writer there is no trail to follow; the sink is held as
+	// configured and sends nothing.
+	changed, cfg, err := setAuditComplianceSink(params.HTTPRequest.Context(), params.Attr, false)
+	switch {
+	case err == nil:
+	case errors.Is(err, errAuditSinkRefused):
+		tk.LogIt(tk.LogError, "api: audit sink %v\n", err)
+		return auditops.NewPostAuditSinkBadRequest()
+	default:
+		tk.LogIt(tk.LogError, "api: audit sink: %v\n", err)
+		return auditops.NewPostAuditSinkServiceUnavailable()
+	}
+	AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) {
+		d.ChangedFields = changed
+		// The endpoint and the trust anchor are named, never their
+		// contents: the record says where the trail is being sent and
+		// what vouches for the receiver.
+		d.Endpoint = cfg.Address
+		d.TLSCAID = cfg.CABundlePath
+	})
+	return auditops.NewPostAuditSinkNoContent()
+}
 
+// setAuditComplianceSink configures the compliance sink from a, or ends it
+// when a is not enabled, and says what the change altered. The sink is
+// replaced wholesale. needTrail refuses a sink there is no trail to feed,
+// where the default is to hold it as configured. ctx bounds the wait for
+// the replaced sink to end.
+func setAuditComplianceSink(ctx context.Context, a *models.AuditSink, needTrail bool) ([]string, syslog.Config, error) {
+	none := syslog.Config{}
 	auditSink.mu.Lock()
 	defer auditSink.mu.Unlock()
 	changed := auditSinkChangedFields(auditSink.cfg, a)
 
 	// The tailer finishes the submission it is in before it ends, so the
 	// wait is bounded by the sink's own timeouts and by the caller's.
-	stopCtx, cancel := context.WithTimeout(params.HTTPRequest.Context(), auditSinkStopTimeout)
+	stopCtx, cancel := context.WithTimeout(ctx, auditSinkStopTimeout)
 	defer cancel()
 
 	if !a.Enabled {
 		if err := stopAuditSinkLocked(stopCtx); err != nil {
-			tk.LogIt(tk.LogError, "api: audit sink: the tailer did not stop: %v\n", err)
-			return auditops.NewPostAuditSinkServiceUnavailable()
+			return nil, none, fmt.Errorf("%w: the tailer did not stop: %v", errAuditSinkUnavailable, err)
 		}
-		auditSink.sink, auditSink.cfg = nil, syslog.Config{}
-		AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) { d.ChangedFields = changed })
-		return auditops.NewPostAuditSinkNoContent()
+		auditSink.sink, auditSink.cfg = nil, none
+		return changed, none, nil
 	}
 
 	// The two numbers are checked here, on the value as it arrived, and not
@@ -175,14 +202,16 @@ func AuditPostSink(params auditops.PostAuditSinkParams, principal interface{}) m
 	// for an int, it yields a different number, so a check afterwards would
 	// be checking something the caller never sent.
 	if a.Facility < 0 || a.Facility > syslog.MaxFacility {
-		tk.LogIt(tk.LogError, "api: audit sink refused: facility %d outside 0..%d\n",
+		return nil, none, fmt.Errorf("%w: facility %d outside 0..%d", errAuditSinkRefused,
 			a.Facility, syslog.MaxFacility)
-		return auditops.NewPostAuditSinkBadRequest()
 	}
 	if a.MaxFrameBytes < 0 || a.MaxFrameBytes > syslog.MaxFrameBytesLimit {
-		tk.LogIt(tk.LogError, "api: audit sink refused: max_frame_bytes %d outside 0..%d\n",
+		return nil, none, fmt.Errorf("%w: max_frame_bytes %d outside 0..%d", errAuditSinkRefused,
 			a.MaxFrameBytes, syslog.MaxFrameBytesLimit)
-		return auditops.NewPostAuditSinkBadRequest()
+	}
+	w := AuditWriter()
+	if w == nil && needTrail {
+		return nil, none, errAuditTrailNotRunning
 	}
 
 	cfg := syslog.Config{
@@ -197,39 +226,26 @@ func AuditPostSink(params auditops.PostAuditSinkParams, principal interface{}) m
 	}
 	s, err := syslog.New(cfg)
 	if err != nil {
-		tk.LogIt(tk.LogError, "api: audit sink refused: %v\n", err)
-		return auditops.NewPostAuditSinkBadRequest()
+		return nil, none, fmt.Errorf("%w: %v", errAuditSinkRefused, err)
 	}
 	// The old tailer has ended, and saved its cursor, before the new one
 	// reads it. One that has not ended leaves the change refused: the
 	// configuration reported stays the one in force.
 	if err := stopAuditSinkLocked(stopCtx); err != nil {
-		tk.LogIt(tk.LogError, "api: audit sink: the tailer did not stop: %v\n", err)
-		return auditops.NewPostAuditSinkServiceUnavailable()
+		return nil, none, fmt.Errorf("%w: the tailer did not stop: %v", errAuditSinkUnavailable, err)
 	}
 	auditSink.sink, auditSink.cfg = s, cfg
-	// Without a writer there is no trail to follow; the sink is held as
-	// configured and sends nothing.
-	if w := AuditWriter(); w != nil {
+	if w != nil {
 		t, err := newAuditSinkTailer(w, auditComplianceSink, s, true, audit.SinkFilter{})
 		if err != nil {
-			tk.LogIt(tk.LogError, "api: audit sink: %v\n", err)
-			auditSink.sink, auditSink.cfg = nil, syslog.Config{}
-			return auditops.NewPostAuditSinkServiceUnavailable()
+			auditSink.sink, auditSink.cfg = nil, none
+			return nil, none, fmt.Errorf("%w: %v", errAuditSinkUnavailable, err)
 		}
 		t.Start()
 		auditSink.tailer = t
 		publishAuditSinksLocked()
 	}
-	AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) {
-		d.ChangedFields = changed
-		// The endpoint and the trust anchor are named, never their
-		// contents: the record says where the trail is being sent and
-		// what vouches for the receiver.
-		d.Endpoint = cfg.Address
-		d.TLSCAID = cfg.CABundlePath
-	})
-	return auditops.NewPostAuditSinkNoContent()
+	return changed, cfg, nil
 }
 
 // AuditPostRotate answers POST /audit/rotate: seal the active segment and

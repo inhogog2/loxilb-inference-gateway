@@ -181,19 +181,54 @@ func AuditGetNamedSink(params auditops.GetAuditSinksNameParams, principal interf
 	return auditops.NewGetAuditSinksNameOK().WithPayload(auditNamedSinkModel(params.Name, ns))
 }
 
-// AuditPutNamedSink answers PUT /audit/sinks/{name}. Everything that can
-// refuse the configuration is checked before the sink it replaces is
-// touched, so a refused change leaves that sink running as it was.
+// errAuditSinkRefused and errAuditSinkUnavailable say why a sink was not
+// configured: the configuration cannot be taken, or it could be and the
+// gateway cannot act on it now.
+var (
+	errAuditSinkRefused     = errors.New("refused")
+	errAuditSinkUnavailable = errors.New("unavailable")
+)
+
+// errAuditTrailNotRunning is the unavailable a sink meets when there is no
+// trail for it to follow.
+var errAuditTrailNotRunning = fmt.Errorf("%w: audit trail not running", errAuditSinkUnavailable)
+
+// AuditPutNamedSink answers PUT /audit/sinks/{name}.
 func AuditPutNamedSink(params auditops.PutAuditSinksNameParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: Audit sink %s API called. url : %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.URL)
-	name, a := params.Name, params.Attr
-	refuse := func(format string, v ...any) middleware.Responder {
-		tk.LogIt(tk.LogError, "api: audit sink %s refused: "+format+"\n", append([]any{name}, v...)...)
+	name := params.Name
+	if params.Attr == nil {
 		return auditops.NewPutAuditSinksNameBadRequest()
 	}
-	if a == nil {
+	changed, cfg, err := setAuditNamedSink(params.HTTPRequest.Context(), name, params.Attr)
+	switch {
+	case err == nil:
+	case errors.Is(err, errAuditSinkRefused):
+		tk.LogIt(tk.LogError, "api: audit sink %s %v\n", name, err)
 		return auditops.NewPutAuditSinksNameBadRequest()
+	default:
+		if !errors.Is(err, errAuditTrailNotRunning) {
+			tk.LogIt(tk.LogError, "api: audit sink %s: %v\n", name, err)
+		}
+		return auditops.NewPutAuditSinksNameServiceUnavailable()
+	}
+	AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) {
+		d.ChangedFields = changed
+		d.Endpoint = cfg.Address
+		d.TLSCAID = cfg.CABundlePath
+	})
+	return auditops.NewPutAuditSinksNameNoContent()
+}
+
+// setAuditNamedSink configures the secondary sink name from a, replacing
+// one of that name, and says what the change altered. Everything that can
+// refuse the configuration is checked before the sink it replaces is
+// touched, so a refused change leaves that sink running as it was. ctx
+// bounds the wait for the replaced sink to end.
+func setAuditNamedSink(ctx context.Context, name string, a *models.AuditNamedSink) ([]string, syslog.Config, error) {
+	refuse := func(format string, v ...any) ([]string, syslog.Config, error) {
+		return nil, syslog.Config{}, fmt.Errorf("%w: "+format, append([]any{errAuditSinkRefused}, v...)...)
 	}
 	// The name compliance belongs to the sink of /audit/sink: a secondary
 	// under it would share that sink's cursor.
@@ -202,7 +237,7 @@ func AuditPutNamedSink(params auditops.PutAuditSinksNameParams, principal interf
 	}
 	w := AuditWriter()
 	if w == nil {
-		return auditops.NewPutAuditSinksNameServiceUnavailable()
+		return nil, syslog.Config{}, errAuditTrailNotRunning
 	}
 	// The numbers are checked as they arrived, before any conversion.
 	if a.Facility < 0 || a.Facility > syslog.MaxFacility {
@@ -253,11 +288,10 @@ func AuditPutNamedSink(params auditops.PutAuditSinksNameParams, principal interf
 	old := auditSink.named[name]
 	changed := auditNamedSinkChangedFields(old, cfg, filter)
 	if old != nil {
-		stopCtx, cancel := context.WithTimeout(params.HTTPRequest.Context(), auditSinkStopTimeout)
+		stopCtx, cancel := context.WithTimeout(ctx, auditSinkStopTimeout)
 		defer cancel()
 		if err := old.stop(stopCtx); err != nil {
-			tk.LogIt(tk.LogError, "api: audit sink %s: the tailer did not stop: %v\n", name, err)
-			return auditops.NewPutAuditSinksNameServiceUnavailable()
+			return nil, syslog.Config{}, fmt.Errorf("%w: the tailer did not stop: %v", errAuditSinkUnavailable, err)
 		}
 	}
 	if auditSink.named == nil {
@@ -266,12 +300,7 @@ func AuditPutNamedSink(params auditops.PutAuditSinksNameParams, principal interf
 	t.Start()
 	auditSink.named[name] = &auditNamedSink{cfg: cfg, filter: filter, sink: s, tailer: t}
 	publishAuditSinksLocked()
-	AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) {
-		d.ChangedFields = changed
-		d.Endpoint = cfg.Address
-		d.TLSCAID = cfg.CABundlePath
-	})
-	return auditops.NewPutAuditSinksNameNoContent()
+	return changed, cfg, nil
 }
 
 // AuditDeleteNamedSink answers DELETE /audit/sinks/{name}. The sink ends;
@@ -285,26 +314,39 @@ func AuditDeleteNamedSink(params auditops.DeleteAuditSinksNameParams, principal 
 	tk.LogIt(tk.LogTrace, "api: Audit sink %s API called. url : %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.URL)
 	name := params.Name
+	address, found, err := removeAuditNamedSink(params.HTTPRequest.Context(), name)
+	if err != nil {
+		tk.LogIt(tk.LogError, "api: audit sink %s: %v\n", name, err)
+		return auditops.NewDeleteAuditSinksNameServiceUnavailable()
+	}
+	if !found {
+		return auditops.NewDeleteAuditSinksNameNotFound().WithPayload(&models.Error{
+			Code: http.StatusNotFound, Message: "no audit sink of that name"})
+	}
+	AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) {
+		d.ChangedFields = []string{"enabled"}
+		d.Endpoint = address
+	})
+	return auditops.NewDeleteAuditSinksNameNoContent()
+}
+
+// removeAuditNamedSink ends the secondary sink name and says where it was
+// sending. ctx bounds the wait for it to end.
+func removeAuditNamedSink(ctx context.Context, name string) (address string, found bool, err error) {
 	auditSink.mu.Lock()
 	defer auditSink.mu.Unlock()
 	ns := auditSink.named[name]
 	if ns == nil {
-		return auditops.NewDeleteAuditSinksNameNotFound().WithPayload(&models.Error{
-			Code: http.StatusNotFound, Message: "no audit sink of that name"})
+		return "", false, nil
 	}
-	stopCtx, cancel := context.WithTimeout(params.HTTPRequest.Context(), auditSinkStopTimeout)
+	stopCtx, cancel := context.WithTimeout(ctx, auditSinkStopTimeout)
 	defer cancel()
 	if err := ns.stop(stopCtx); err != nil {
-		tk.LogIt(tk.LogError, "api: audit sink %s: the tailer did not stop: %v\n", name, err)
-		return auditops.NewDeleteAuditSinksNameServiceUnavailable()
+		return "", true, fmt.Errorf("%w: the tailer did not stop: %v", errAuditSinkUnavailable, err)
 	}
 	delete(auditSink.named, name)
 	publishAuditSinksLocked()
-	AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) {
-		d.ChangedFields = []string{"enabled"}
-		d.Endpoint = ns.cfg.Address
-	})
-	return auditops.NewDeleteAuditSinksNameNoContent()
+	return ns.cfg.Address, true, nil
 }
 
 func auditSinkCursorModel(p audit.Position) *models.AuditSinkCursor {

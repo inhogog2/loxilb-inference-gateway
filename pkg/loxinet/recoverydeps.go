@@ -28,6 +28,7 @@ package loxinet
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 
@@ -155,6 +156,17 @@ func (na *NetAPIStruct) NetRecoveryDepVerify(dep cmn.RecoveryDependency) (string
 		// digest adds nothing that check does not already prove.
 		return "", nil
 
+	case cmn.RecoveryDepAuditSinkFile:
+		// The sink that names this file is refused at apply when it cannot
+		// be read. By then the restore has stopped the live sinks, and a
+		// rollback would need the same file, so it is looked for here.
+		f, err := os.Open(dep.ID)
+		if err != nil {
+			return "", fmt.Errorf("an audit sink names a file this node cannot read: %v", err)
+		}
+		f.Close()
+		return "", nil
+
 	default:
 		// VALIDATE already refused unknown REQUIRED types; reaching here
 		// means the engine and the vocabulary disagree -- fail closed.
@@ -200,6 +212,11 @@ func (na *NetAPIStruct) NetRecoveryDepReady(depType string) error {
 	case cmn.RecoveryDepCertStore:
 		// Node-local directory; per-cert digests are the apply-time
 		// authority and there is no liveness to probe.
+		return nil
+
+	case cmn.RecoveryDepAuditSinkFile:
+		// Node-local files; a sink that cannot use them says so in its
+		// own state.
 		return nil
 
 	default:

@@ -45,29 +45,32 @@ Every document describes its own coverage:
 
 ## Captured domains
 
-Seventeen domains, listed in apply order (dependencies first; teardown runs
+Twenty domains, listed in apply order (dependencies first; teardown runs
 in exact reverse). The `components` parameter and the `domains.*` JSON keys
 use these names verbatim.
 
 | # | Domain | Covers |
 |---|---|---|
 | 1 | `endpoint` | Endpoint hosts and probe configuration |
-| 2 | `loadbalancer` | LB rules and services, including AI/L7 service arguments |
-| 3 | `kvexactbinding` | Per-rule KV-exact composed-binding identity |
-| 4 | `l7policy` | Dedicated L7 policy resources, attached to rules by stable id |
-| 5 | `firewall` | Firewall rules |
-| 6 | `policy` | QoS policers / meters |
-| 7 | `mirror` | Traffic mirrors |
-| 8 | `session` | Subscriber sessions |
-| 9 | `sessionulcl` | Subscriber UL-CL classifiers |
-| 10 | `ipfilter` | IP allow/deny filter entries |
-| 11 | `securityrate` | Security rate-limit configuration (singleton) |
-| 12 | `bfd` | BFD sessions |
-| 13 | `bgp` | BGP global config, neighbors, defined sets, policy definitions and applies |
-| 14 | `ipsec` | IPsec config, tunnels, certificates and CA certificates |
-| 15 | `cors` | CORS origin allowlist and wildcard opt-in (singleton) |
-| 16 | `tracing` | OTLP trace-export product configuration (singleton) |
-| 17 | `cert` | Managed TLS certificates, as `{id, digest}` metadata |
+| 2 | `jwtauthprofile` | JWT auth profiles referenced by LB rules |
+| 3 | `halfclose` | Half-close hold settings (singleton) |
+| 4 | `loadbalancer` | LB rules and services, including AI/L7 service arguments |
+| 5 | `kvexactbinding` | Per-rule KV-exact composed-binding identity |
+| 6 | `l7policy` | Dedicated L7 policy resources, attached to rules by stable id |
+| 7 | `firewall` | Firewall rules |
+| 8 | `policy` | QoS policers / meters |
+| 9 | `mirror` | Traffic mirrors |
+| 10 | `session` | Subscriber sessions |
+| 11 | `sessionulcl` | Subscriber UL-CL classifiers |
+| 12 | `ipfilter` | IP allow/deny filter entries |
+| 13 | `securityrate` | Security rate-limit configuration (singleton) |
+| 14 | `bfd` | BFD sessions |
+| 15 | `bgp` | BGP global config, neighbors, defined sets, policy definitions and applies |
+| 16 | `ipsec` | IPsec config, tunnels, certificates and CA certificates |
+| 17 | `cors` | CORS origin allowlist and wildcard opt-in (singleton) |
+| 18 | `tracing` | OTLP trace-export product configuration (singleton) |
+| 19 | `cert` | Managed TLS certificates, as `{id, digest}` metadata |
+| 20 | `auditsink` | Audit sinks: receiver, certificate paths and, for a secondary sink, its selection |
 
 The document additionally carries `recovery_dependencies` — not a domain
 but a document-level manifest of the external stores the configuration
@@ -113,12 +116,11 @@ operator:
 - **Runtime toggles** — metrics exporter, log level, trace and L4-trace
   enablement and sampling, GPU mode, cluster/HA instance state (driven by
   the HA manager).
-- **Audit sealing/retention policy and remote sink** — the audit root
-  directory, the mandatory-audit mode and the instance identity are
-  startup-only; the policy and the sink are changeable while running and
-  held in memory, so a restart returns the policy to its startup values
-  and leaves no sink configured. An operator who pointed the trail at a
-  receiver must point it there again.
+- **Audit sealing/retention policy** — the audit root directory, the
+  mandatory-audit mode and the instance identity are startup-only; the
+  policy is changeable while running and held in memory, so a restart
+  returns it to its startup values. The audit sinks are captured (the
+  `auditsink` domain).
 
 ### Lifecycle operations
 
@@ -166,6 +168,9 @@ forward on read.
 | 1.3 | `l7policy`, `cors`, `tracing`, `cert` domains |
 | 1.4 | `recovery_dependencies` manifest |
 | 1.5 | `generation` lineage counter |
+| 1.6 | `jwtauthprofile` domain |
+| 1.7 | `halfclose` domain |
+| 1.8 | `auditsink` domain |
 
 The resulting compatibility matrix, enforced by the version-gate and
 golden-document test suites (a golden document of every prior schema must
@@ -187,6 +192,13 @@ build):
   `{id, digest}` metadata only. PEM and keys stay in the node-local managed
   directory; restore verifies the digest before re-registering and fails
   loudly on missing or divergent material.
+- **Audit sinks** (`auditsink` domain): the document carries the paths of
+  the CA bundle and of the client certificate and key, never their
+  contents. The files stay on the node; a restore that cannot read them
+  refuses the sink, as the request that configures it would, and the
+  restore rolls back. A sink's place in the trail and its export sequence
+  are kept under the audit directory and are not in the document, so a
+  restored sink continues both.
 - **IPsec secret material rides the document encrypted, never in
   plaintext**: pre-shared keys, certificate private keys and passphrases
   are stored as `enc:v1:` values — AES-256-GCM under a node-local secret
