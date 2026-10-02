@@ -17,6 +17,7 @@
 package audit
 
 import (
+	"strings"
 	"time"
 )
 
@@ -27,7 +28,9 @@ import (
 // Pruning is announced by an audit_system record before the delete and is
 // bounded to MaxPrunePerPass segments per pass, so lowering the policy
 // never deletes history at once; the ledger shrinks one segment per pass
-// with each deletion on record. A held segment is never pruned.
+// with each deletion on record. A held segment is never pruned. A segment
+// sealed since the last pass waits one pass for a connected sink that has
+// not been sent all of it, unless the disk reserve is breached.
 type Retention struct {
 	// MaxAge prunes a sealed segment older than this. Zero keeps by age
 	// forever.
@@ -65,6 +68,10 @@ func (w *Writer) prunePass() {
 		total += s.Bytes
 	}
 	w.sealedBytes.Store(total)
+	saw := w.passSaw
+	if len(segs) > 0 {
+		w.passSaw = sealedName(segs[len(segs)-1])
+	}
 
 	breached := false
 	if pol.ReserveBytes > 0 {
@@ -105,11 +112,21 @@ func (w *Writer) prunePass() {
 		if !breached && w.grandfatherHolds(uuid, now) {
 			continue
 		}
-		exported, pending, rng, ready := w.sinkStandings(segs, i, uuid)
+		exported, pending, connected, rng, ready := w.sinkStandings(segs, i, uuid)
 		if !ready {
 			// What the segment holds is being read off this goroutine;
 			// the pass ends here rather than prune a newer segment
 			// ahead of this one.
+			break
+		}
+		// The pass runs right behind the heartbeat record, which can seal
+		// a segment, and a sink that keeps up asks for more only so often.
+		// A segment sealed since the last pass is left for one pass when a
+		// connected sink has not been sent all of it; the next pass has
+		// seen it and judges the sink as it stands. A breached reserve
+		// does not wait.
+		if connected && !breached && sealedName(s) > saw {
+			w.logf("audit: prune of %s left for one pass: sealed since the last pass, not yet sent to %v", s.Name, pending)
 			break
 		}
 		// Retention wins over a sink that is behind: the segment goes,
@@ -144,6 +161,12 @@ func (w *Writer) prunePass() {
 		w.stats.pruned.Add(1)
 	}
 	w.sealedBytes.Store(total)
+}
+
+// sealedName is a sealed segment's name without the suffix compression
+// adds. Names carry the time of the seal, so they order the segments.
+func sealedName(s SegmentInfo) string {
+	return strings.TrimSuffix(s.Name, gzipExt)
 }
 
 // Hold marks a sealed segment as under legal hold: it is never pruned

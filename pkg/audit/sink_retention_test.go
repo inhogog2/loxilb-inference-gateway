@@ -204,6 +204,113 @@ func TestPruneOfAnExportedSegmentLosesNothing(t *testing.T) {
 	}
 }
 
+// A pass runs right behind the heartbeat record, and a sink asks for more
+// only so often: a segment sealed since the pass before is one a sink that
+// keeps up may not have been through yet. With such a sink connected the
+// segment is left for one pass, and nothing is called lost.
+func TestPruneLeavesAJustSealedSegmentToAConnectedSinkForOnePass(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		place func(st *sealedTrail, fresh string) Position
+	}{
+		{"inside it", func(st *sealedTrail, fresh string) Position {
+			return Position{SegmentUUID: fresh, Seq: st.ranges[fresh][0]}
+		}},
+		{"at the end of the one before", func(st *sealedTrail, fresh string) Position {
+			return Position{SegmentUUID: st.uuids[1], Seq: st.ranges[st.uuids[1]][1]}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			st := newSealedTrail(t)
+			// A pass that has nothing to prune still sees the two segments.
+			st.w.prunePassNow(t)
+			sealNow(t, st.w)
+			writeN(t, st.w, 1, "four")
+			waitCompressed(t, st.cfg.Dir)
+			st.index(t)
+			if len(st.uuids) != 3 {
+				t.Fatalf("%d sealed segments, want 3", len(st.uuids))
+			}
+			fresh := st.uuids[2]
+			rng := st.ranges[fresh]
+			st.sinks(SinkProgress{Name: "follower", Connected: true, Position: tt.place(st, fresh)})
+
+			st.w.SetRetention(Retention{MaxBytes: 1, MaxPrunePerPass: 3})
+			st.w.prunePassNow(t)
+			left, _ := st.w.seg.listSealed()
+			if len(left) != 1 || st.w.seg.uuidOf(left[0].Path) != fresh {
+				t.Fatalf("%d sealed segments after the pass, want only the one just sealed", len(left))
+			}
+			if got := st.w.Stats().LostToRetention; got != 0 {
+				t.Fatalf("%d records counted as lost to a sink that had one pass to read them", got)
+			}
+
+			// One pass, not more: retention still wins over a sink that
+			// did not use it.
+			st.w.prunePassNow(t)
+			if left, _ := st.w.seg.listSealed(); len(left) != 0 {
+				t.Fatalf("%d sealed segments after the second pass, want none", len(left))
+			}
+			if got := st.w.Stats().LostToRetention; got != rng[1]-rng[0]+1 {
+				t.Errorf("%d records counted as lost, want %d", got, rng[1]-rng[0]+1)
+			}
+			closeWriter(t, st.w)
+			lost := ofType(readDir(t, st.cfg.Dir), "sys.segment.lost_to_retention")
+			if len(lost) != 1 || lost[0].detail()["resource"] != "audit_segment:"+fresh {
+				t.Fatalf("%d loss records, want one of the segment that was left", len(lost))
+			}
+		})
+	}
+}
+
+// The pass is given to a sink that can use it and to a segment it has not
+// had a pass for, and never at the cost of a disk that is full.
+func TestPruneDoesNotWaitWhereAPassWouldNotHelp(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		set  func(t *testing.T, st *sealedTrail) Retention
+		sink SinkProgress
+	}{
+		{"a sink that is not connected", func(*testing.T, *sealedTrail) Retention {
+			return Retention{MaxBytes: 1}
+		}, SinkProgress{Name: "down"}},
+		{"a segment an earlier pass saw", func(t *testing.T, st *sealedTrail) Retention {
+			st.w.prunePassNow(t)
+			return Retention{MaxBytes: 1}
+		}, SinkProgress{Name: "slow", Connected: true}},
+		{"a breached reserve", func(*testing.T, *sealedTrail) Retention {
+			// A reserve no filesystem can satisfy.
+			return Retention{ReserveBytes: 1 << 62}
+		}, SinkProgress{Name: "follower", Connected: true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.name == "a breached reserve" && diskFree(t.TempDir()) < 0 {
+				t.Skip("free space is not known on this platform")
+			}
+			st := newSealedTrail(t)
+			oldest := st.uuids[0]
+			pol := tt.set(t, st)
+			sink := tt.sink
+			sink.Position = Position{SegmentUUID: oldest, Seq: st.ranges[oldest][0]}
+			st.sinks(sink)
+			st.w.SetRetention(pol)
+			st.w.prunePassNow(t)
+			left, _ := st.w.seg.listSealed()
+			if len(left) != 1 || st.w.seg.uuidOf(left[0].Path) != st.uuids[1] {
+				t.Fatalf("%d sealed segments after the pass, want the oldest gone", len(left))
+			}
+			closeWriter(t, st.w)
+			lost := ofType(readDir(t, st.cfg.Dir), "sys.segment.lost_to_retention")
+			if len(lost) != 1 {
+				t.Fatalf("%d loss records, want 1", len(lost))
+			}
+			if got, want := stringsOf(lost[0].detail()["sinks_pending"]), []string{sink.Name}; !reflect.DeepEqual(got, want) {
+				t.Errorf("sinks pending %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 // With no sink there is nothing to be behind: the prune record is the one
 // it always was.
 func TestPruneWithoutSinksSaysNothingAboutSinks(t *testing.T) {

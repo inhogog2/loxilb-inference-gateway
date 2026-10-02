@@ -382,7 +382,7 @@ func (t *SinkTailer) Stats() SinkTailerStats {
 func (t *SinkTailer) Progress() SinkProgress {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return SinkProgress{Name: t.cfg.Name, Position: t.reached}
+	return SinkProgress{Name: t.cfg.Name, Position: t.reached, Connected: t.state == SinkConnected}
 }
 
 func (t *SinkTailer) resource() string { return "audit_sink:" + t.cfg.Name }
