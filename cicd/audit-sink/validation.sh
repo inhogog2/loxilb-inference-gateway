@@ -14,6 +14,9 @@
 #        in the middle of it
 #   T6   sealing the segment while the sink is behind keeps the order
 #   T16  a segment pruned before a sink had it is put on record first
+#   PS   the sinks are part of the persisted configuration: a restart brings
+#        them back, a removal stays removed, a restore of a saved document
+#        replaces what is live, and each sink continues where it was
 #
 # The oracle is the receiver. The gateway's status says what the sender
 # believes — a write that returned — and is used here only to wait, and for
@@ -24,8 +27,9 @@
 # floor; every wait is bounded and its timeout is a red row, not a hang; a
 # fault arm proves the fault fired before it scores anything after it.
 #
-# Sink configuration is not kept across a restart, so every boot of the
-# gateway configures its sinks again (sinks_up).
+# The arms before PS configure the sinks again after every boot of the
+# gateway (sinks_up), which replaces each sink under its name whether or not
+# the boot brought it back. PS is where a boot is left to do that alone.
 
 cd "$(dirname "$0")"
 source ../common.sh
@@ -198,6 +202,21 @@ secondary_up() {
 sinks_up() {
   compliance_up || { echo "  (POST /audit/sink answered $RESP_CODE)"; return 1; }
   secondary_up  || { echo "  (PUT /audit/sinks/secondary answered $RESP_CODE)"; return 1; }
+}
+# The sinks are in the configuration document the gateway writes through to
+# disk a quiet period after a change, and replays when it starts.
+# snap → the configuration document as the gateway captures it now
+snap() { docker exec llb1 curl -s -m 10 "$API/config/snapshot"; }
+# persisted <jq path> → read from the document the gateway wrote to disk
+persisted() { sudo cat llb1_config/snapshot.json 2>/dev/null | jq -c "$1" 2>/dev/null; }
+# wait_persisted <jq path> <value> [seconds] → the write-through got there
+wait_persisted() {
+  local i
+  for i in $(seq 1 "${3:-30}"); do
+    [[ "$(persisted "$1")" == "$2" ]] && return 0
+    sleep 1
+  done
+  return 1
 }
 
 # ── traffic ─────────────────────────────────────────────────────────────────
@@ -602,6 +621,15 @@ fault_arm() {
   wait_caught secondary 60 || code=1
   api DELETE /audit/sinks/secondary
   chk "$id-a" "the secondary sink is removed, its state kept" 204 "$RESP_CODE"
+  # A boot replays the sinks of the document on disk, and the fault point
+  # is in every sink's cursor. So the boot that carries the fault starts
+  # with no sink: the compliance sink is ended as well, both removals are
+  # on disk before the gateway stops, and it is the request below that
+  # brings the secondary sink, and the fault, into play.
+  api POST /audit/sink "${CT[@]}" -d '{"enabled":false}'
+  chk "$id-o" "the compliance sink is ended for the faulty boot" 204 "$RESP_CODE"
+  wait_persisted '[.domains.auditsink[]?.name]' '[]' 30
+  chk "$id-p" "the document on disk has no sink" 0 $?
   drive 3
   sleep 1
   EPOCH=$(xseq_epoch); RMAX=$(xseq_max "$EPOCH"); N0=$(rcv_ctl secondary __probe)
@@ -709,6 +737,109 @@ chk_ge T16-3b "and reports that the segment it was in was removed under it" 1 "$
 chk    T16-3c "the receiver that came back saw no number twice" 0 "$(xseq_reuse)"
 chk_ge MT-3a "the scrape counts the records lost to retention" "$((LTO - LFROM + 1))" "$(metric_int loxilb_audit_records_lost_to_retention_total)"
 chk    MT-3b "and the removals under the secondary sink, as the sink reports them" "$(named secondary '.lag_drops // 0')" "$(metric_int loxilb_audit_sink_lag_drops_total 'sink="secondary"')"
+
+# ════════════════════════════════════════════════════════════════════════════
+echo ""
+echo "PS: the sinks are part of the persisted configuration"
+echo "════════════════════════════════════════════════════════════════════════"
+compliance_cfg() { docker exec llb1 curl -s -m 5 "$API/audit/sink" | jq -r '"\(.enabled) \(.address) \(.ca_bundle_path)"'; }
+secondary_cfg()  { named secondary '"\(.address) \(.enterprise_number) \(.filter.streams | tojson)"'; }
+SEC_CFG="$SIEM2:6514 $PEN [\"mgmt\"]"
+# restore <document> → RESP_CODE, RESP_BODY of a commit restore of the sinks
+restore() {
+  local out
+  out=$(printf '%s' "$1" | docker exec -i llb1 curl -s -m 60 -w '\n%{http_code}' -X POST \
+        "$API/config/restore?mode=commit&components=auditsink" "${CT[@]}" --data-binary @-)
+  RESP_CODE=${out##*$'\n'}
+  RESP_BODY=${out%$'\n'*}
+}
+
+sinks_up || code=1
+wait_caught compliance 60 || code=1
+wait_caught secondary 60 || code=1
+# No persist is asked for: the write-through follows a sink change.
+wait_persisted '[.domains.auditsink[]?.name]' '["compliance","secondary"]' 30
+chk    PS-1a "the document on disk names both sinks, with no persist asked for" 0 $?
+DOC=$(snap)
+chk    PS-1b "the captured document names them too, the compliance sink first" '["compliance","secondary"]' \
+  "$(printf '%s' "$DOC" | jq -c '[.domains.auditsink[]?.name]')"
+chk    PS-1c "the secondary sink with its receiver, its number and its selection" "$SEC_CFG" \
+  "$(printf '%s' "$DOC" | jq -r '.domains.auditsink[]? | select(.name=="secondary") | "\(.address) \(.enterprise_number) \(.filter.streams | tojson)"')"
+chk    PS-1d "the CA bundle is named by its path" "$SINK_CA $SINK_CA" \
+  "$(printf '%s' "$DOC" | jq -r '[.domains.auditsink[]?.ca_bundle_path] | join(" ")')"
+chk    PS-1e "and no certificate is in the document" 0 "$(printf '%s' "$DOC" | grep -c 'BEGIN ')"
+chk    PS-1f "the file the sinks name is declared as needed for a recovery" "[\"$SINK_CA\"]" \
+  "$(printf '%s' "$DOC" | jq -c '[.recovery_dependencies[]? | select(.type=="audit-sink-file" and .required) | .id]')"
+chk    PS-1g "nothing a sink has done is in the document" 0 \
+  "$(printf '%s' "$DOC" | jq -c '.domains.auditsink' | grep -c -e cursor -e xseq -e submitted -e state)"
+
+# A restart, and nothing configures the sinks afterwards.
+sleep 1
+EPOCH=$(xseq_epoch); RMAX=$(xseq_max "$EPOCH"); N0=$(rcv_ctl secondary __probe)
+BOOT_PREV=$BOOT; P0=$(astatus | jq -r '.seq_high')
+drive 3
+gw_stop  || fatal "the gateway could not be stopped"
+P_END=$(trail | jq -s "[.[] | select(.boot_id==\"$BOOT_PREV\") | .seq] | max")
+gw_start || fatal "the gateway did not come back"
+chk_ne PS-2a "a new boot" "$BOOT_PREV" "$BOOT"
+chk    PS-2b "the compliance sink is there without having been configured" "true $SIEM1:6514 $SINK_CA" "$(compliance_cfg)"
+chk    PS-2c "so is the secondary sink, as it was" "$SEC_CFG" "$(secondary_cfg)"
+drive 2
+wait_caught secondary 90; chk PS-2d "the secondary sink catches up" 0 $?
+sleep 1
+chk_ge PS-2e "the receiver held a sequence before the restart" 1 "$RMAX"
+chk_gt PS-2f "exports arrived after it" "$N0" "$(rcv_ctl secondary __probe)"
+SENT=$(exports | jq -s "[.[] | select(.sd.xseq_epoch==$EPOCH and .sd.xseq>$RMAX) | .sd.xseq] | sort")
+chk    PS-2g "its sequence goes on from the next number, in the same epoch, with none left out" true \
+  "$(printf '%s' "$SENT" | jq --argjson a "$RMAX" 'length > 0 and . == [range($a + 1; $a + 1 + length)]')"
+chk    PS-2h "no number arrived twice" 0 "$(xseq_reuse)"
+wait_arrived compliance "$BOOT_PREV" "$P_END" 120
+chk    PS-2i "the compliance receiver has the previous boot's last record" 0 $?
+missing_at compliance "$BOOT_PREV" "$P0" "$P_END"
+chk    PS-2j "and every record that boot wrote before it ended" 0 "$MISSING"
+chk_ge PS-2k "there were such records" 6 "$LOCAL_N"
+wait_caught compliance 60; chk PS-2l "the compliance sink goes on into the new boot's records" 0 $?
+chk_ge PS-2m "which arrive under the new boot" 1 "$(rcv_seqs compliance "$BOOT" | grep -c .)"
+
+# A sink that is removed stays removed.
+api DELETE /audit/sinks/secondary; chk PS-3a "the secondary sink is removed" 204 "$RESP_CODE"
+wait_persisted '[.domains.auditsink[]?.name]' '["compliance"]' 30
+chk    PS-3b "the document on disk follows the removal" 0 $?
+gw_stop  || fatal "the gateway could not be stopped"
+gw_start || fatal "the gateway did not come back"
+api GET /audit/sinks/secondary; chk PS-3c "after a restart the removed sink is not there" 404 "$RESP_CODE"
+chk    PS-3d "and the compliance sink is" "true $SIEM1:6514 $SINK_CA" "$(compliance_cfg)"
+
+# Restoring the document saved while both sinks ran brings the secondary
+# sink back, and it continues the sequence it left.
+EPOCH=$(xseq_epoch); RMAX=$(xseq_max "$EPOCH")
+restore "$DOC"
+chk    PS-4a "the saved document is restored" "200 ok" "$RESP_CODE $(json .result)"
+chk    PS-4b "the secondary sink is back as the document has it" "$SEC_CFG" "$(secondary_cfg)"
+chk    PS-4c "the compliance sink is the document's too" "true $SIEM1:6514 $SINK_CA" "$(compliance_cfg)"
+drive 2
+wait_caught secondary 90; chk PS-4d "the secondary sink catches up" 0 $?
+sleep 1
+SENT=$(exports | jq -s "[.[] | select(.sd.xseq_epoch==$EPOCH and .sd.xseq>$RMAX) | .sd.xseq] | sort")
+chk    PS-4e "its sequence goes on from the next number, in the same epoch, with none left out" true \
+  "$(printf '%s' "$SENT" | jq --argjson a "$RMAX" 'length > 0 and . == [range($a + 1; $a + 1 + length)]')"
+chk    PS-4f "the epoch is the one it had" "$EPOCH" "$(xseq_epoch)"
+chk    PS-4g "no number arrived twice" 0 "$(xseq_reuse)"
+
+# A document whose sinks name a file this node cannot read is refused
+# before any sink is stopped.
+wait_caught compliance 60 || code=1
+docker exec llb1 mv "$SINK_CA" "$SINK_CA.away"
+T_SEC=$(named secondary '.submitted')
+restore "$DOC"
+docker exec llb1 mv "$SINK_CA.away" "$SINK_CA"
+chk    PS-5a "the restore is refused" 400 "$RESP_CODE"
+chk_has PS-5b "and says which file" "$SINK_CA" "$RESP_BODY"
+chk    PS-5c "the sinks are still configured" "true $SIEM1:6514 $SINK_CA|$SEC_CFG" "$(compliance_cfg)|$(secondary_cfg)"
+drive 2
+wait_caught secondary 60; chk PS-5d "and still sending: the secondary sink was never stopped" 0 $?
+chk_gt PS-5e "its count of records sent went on from where it was" "$T_SEC" "$(named secondary '.submitted')"
+chk    PS-5f "no number arrived twice" 0 "$(xseq_reuse)"
 
 # ════════════════════════════════════════════════════════════════════════════
 echo ""
