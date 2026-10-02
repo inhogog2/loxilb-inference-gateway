@@ -54,6 +54,23 @@ func (s *stubHalfCloseHook) NetHalfCloseSet(cfg *cmn.HalfCloseConfig) (int, erro
 	return 0, nil
 }
 
+func (s *stubHalfCloseHook) NetHalfCloseUpdate(u *cmn.HalfCloseUpdate) (cmn.HalfCloseConfig, error) {
+	c := cmn.DefaultHalfCloseConfig()
+	if s.cfg != nil {
+		c = *s.cfg
+	}
+	if u.Allow != nil {
+		c.Allow = *u.Allow
+	}
+	if u.CapSeconds != nil {
+		c.CapSeconds = *u.CapSeconds
+	}
+	if _, err := s.NetHalfCloseSet(&c); err != nil {
+		return cmn.HalfCloseConfig{}, err
+	}
+	return c, nil
+}
+
 func (s *stubHalfCloseHook) NetHalfCloseRelease() (int, error) {
 	s.released++
 	return 0, nil
@@ -78,9 +95,7 @@ func halfClosePost(attr *models.HalfCloseConfig) interface{} {
 // halfClosePostRaw posts attr with raw as the body the middleware captured.
 func halfClosePostRaw(attr *models.HalfCloseConfig, raw string) interface{} {
 	req := httptest.NewRequest(http.MethodPost, "/netlox/v1/config/halfclose", nil)
-	if raw != "" {
-		req = req.WithContext(WithRawLoadbalancerBody(req.Context(), []byte(raw)))
-	}
+	req = req.WithContext(WithRawLoadbalancerBody(req.Context(), []byte(raw)))
 	return ConfigPostHalfClose(operations.PostConfigHalfcloseParams{HTTPRequest: req, Attr: attr}, nil)
 }
 
@@ -161,6 +176,27 @@ func TestHalfCloseSettingsRefused(t *testing.T) {
 				t.Fatalf("stored %+v", *stub.cfg)
 			}
 		})
+	}
+}
+
+// With no body captured a misspelt field could not be told from an omitted
+// one, so the POST fails rather than skipping that check.
+func TestHalfCloseSettingsWithoutCapture(t *testing.T) {
+	prev := ApiHooks
+	defer func() { ApiHooks = prev }()
+	stub := &stubHalfCloseHook{}
+	ApiHooks = stub
+
+	res := ConfigPostHalfClose(operations.PostConfigHalfcloseParams{
+		HTTPRequest: httptest.NewRequest(http.MethodPost, "/netlox/v1/config/halfclose", nil),
+		Attr:        &models.HalfCloseConfig{Allow: swag.Bool(false)},
+	}, nil)
+	er, ok := res.(*ErrorResponse)
+	if !ok || er.Payload.Code != http.StatusInternalServerError {
+		t.Fatalf("answered %T %+v, want 500", res, res)
+	}
+	if stub.cfg != nil {
+		t.Fatalf("stored %+v", *stub.cfg)
 	}
 }
 

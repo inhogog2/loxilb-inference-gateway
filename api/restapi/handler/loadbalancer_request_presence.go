@@ -43,6 +43,19 @@ func WithRawLoadbalancerBodyBuffer(ctx context.Context, raw *bytes.Buffer) conte
 	return context.WithValue(ctx, rawLoadbalancerBodyKey{}, raw)
 }
 
+// rawBodyCapture returns the body the middleware captured for this request,
+// and whether it captured one at all - an empty body and no capture are told
+// apart.
+func rawBodyCapture(ctx context.Context) ([]byte, bool) {
+	switch v := ctx.Value(rawLoadbalancerBodyKey{}).(type) {
+	case []byte:
+		return v, true
+	case *bytes.Buffer:
+		return v.Bytes(), true
+	}
+	return nil, false
+}
+
 func rawLoadbalancerBodyFromContext(ctx context.Context) []byte {
 	switch v := ctx.Value(rawLoadbalancerBodyKey{}).(type) {
 	case []byte:

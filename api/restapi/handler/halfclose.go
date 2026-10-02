@@ -95,7 +95,14 @@ func halfClosePayload(cfg cmn.HalfCloseConfig) *models.HalfCloseConfig {
 func ConfigPostHalfClose(params operations.PostConfigHalfcloseParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: half-close %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
 
-	unknown, err := halfCloseUnknownKeys(rawLoadbalancerBodyFromContext(params.HTTPRequest.Context()))
+	raw, captured := rawBodyCapture(params.HTTPRequest.Context())
+	if !captured {
+		// Without the raw body a misspelt field cannot be told from an
+		// omitted one: refuse rather than skip the check.
+		return errorResponseWithCode(http.StatusInternalServerError,
+			"half-close settings: the request body was not captured, so its fields cannot be checked")
+	}
+	unknown, err := halfCloseUnknownKeys(raw)
 	if err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, "malformed half-close settings body")
 	}
@@ -107,23 +114,15 @@ func ConfigPostHalfClose(params operations.PostConfigHalfcloseParams, principal 
 	if attr == nil || (attr.Allow == nil && attr.CapSeconds == nil) {
 		return errorResponseWithCode(http.StatusBadRequest, "give allow, capSeconds or both")
 	}
-	cfg, err := halfCloseInForce()
-	if err != nil {
-		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
-	}
-	if attr.Allow != nil {
-		cfg.Allow = *attr.Allow
-	}
+	u := cmn.HalfCloseUpdate{Allow: attr.Allow}
 	if attr.CapSeconds != nil {
 		if *attr.CapSeconds < 0 {
 			return errorResponseWithCode(http.StatusBadRequest, "capSeconds must not be negative")
 		}
-		cfg.CapSeconds = uint32(*attr.CapSeconds)
+		capSec := uint32(*attr.CapSeconds)
+		u.CapSeconds = &capSec
 	}
-	if _, err := ApiHooks.NetHalfCloseSet(&cfg); err != nil {
-		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
-	}
-	applied, err := halfCloseInForce()
+	applied, err := ApiHooks.NetHalfCloseUpdate(&u)
 	if err != nil {
 		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
 	}

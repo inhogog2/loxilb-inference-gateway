@@ -37,6 +37,11 @@ var halfClose struct {
 	cfg *cmn.HalfCloseConfig // nil: the defaults are in force
 }
 
+// halfCloseMergedHook, when set (tests only), runs inside NetHalfCloseUpdate
+// between reading the settings in force and storing the merge: the window a
+// concurrent update must not be able to enter.
+var halfCloseMergedHook func()
+
 // halfCloseApply hands the settings to the data path, when there is one.
 func halfCloseApply(c cmn.HalfCloseConfig) {
 	if mh.dpEbpf == nil {
@@ -56,22 +61,60 @@ func (na *NetAPIStruct) NetHalfCloseGet() (*cmn.HalfCloseConfig, error) {
 	return &c, nil
 }
 
+// halfCloseStoreLocked validates the settings, hands them to the data path
+// and stores them. halfClose.mtx held.
+func halfCloseStoreLocked(c cmn.HalfCloseConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	halfCloseApply(c)
+	halfClose.cfg = &c
+	tk.LogIt(tk.LogInfo, "half-close holds %s, bound %d s\n",
+		map[bool]string{true: "allowed", false: "blocked"}[c.Allow], c.CapSeconds)
+	return nil
+}
+
 // NetHalfCloseSet - replace the settings (overwrite semantics).
 func (na *NetAPIStruct) NetHalfCloseSet(cfg *cmn.HalfCloseConfig) (int, error) {
 	if cfg == nil {
 		return RuleArgsErr, cmn.NewValidationError("", "half-close settings missing")
 	}
-	if err := cfg.Validate(); err != nil {
+	halfClose.mtx.Lock()
+	defer halfClose.mtx.Unlock()
+	if err := halfCloseStoreLocked(*cfg); err != nil {
 		return RuleArgsErr, err
+	}
+	return 0, nil
+}
+
+// NetHalfCloseUpdate - set the fields given, keep the others, and return the
+// settings in force once applied. The settings in force are read, merged,
+// handed over and returned under one lock: two partial updates at once - an
+// operator blocking holds while another changes the bound - cannot undo each
+// other, and each answer is what that update left in force.
+func (na *NetAPIStruct) NetHalfCloseUpdate(u *cmn.HalfCloseUpdate) (cmn.HalfCloseConfig, error) {
+	if u == nil || (u.Allow == nil && u.CapSeconds == nil) {
+		return cmn.HalfCloseConfig{}, cmn.NewValidationError("", "give allow, capSeconds or both")
 	}
 	halfClose.mtx.Lock()
 	defer halfClose.mtx.Unlock()
-	c := *cfg
-	halfCloseApply(c)
-	halfClose.cfg = &c
-	tk.LogIt(tk.LogInfo, "half-close holds %s, bound %d s\n",
-		map[bool]string{true: "allowed", false: "blocked"}[c.Allow], c.CapSeconds)
-	return 0, nil
+	c := cmn.DefaultHalfCloseConfig()
+	if halfClose.cfg != nil {
+		c = *halfClose.cfg
+	}
+	if u.Allow != nil {
+		c.Allow = *u.Allow
+	}
+	if u.CapSeconds != nil {
+		c.CapSeconds = *u.CapSeconds
+	}
+	if halfCloseMergedHook != nil {
+		halfCloseMergedHook()
+	}
+	if err := halfCloseStoreLocked(c); err != nil {
+		return cmn.HalfCloseConfig{}, err
+	}
+	return c, nil
 }
 
 // NetHalfCloseReset - back to the defaults.

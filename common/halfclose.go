@@ -92,6 +92,13 @@ type HalfCloseConfig struct {
 	CapSeconds uint32 `json:"capSeconds"`
 }
 
+// HalfCloseUpdate - a partial change of the settings: a nil field keeps the
+// value in force.
+type HalfCloseUpdate struct {
+	Allow      *bool
+	CapSeconds *uint32
+}
+
 // DefaultHalfCloseConfig - the settings in force until they are set.
 func DefaultHalfCloseConfig() HalfCloseConfig {
 	return HalfCloseConfig{Allow: true, CapSeconds: HalfCloseCapDefaultSec}

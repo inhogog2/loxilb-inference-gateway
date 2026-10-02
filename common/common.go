@@ -2365,6 +2365,11 @@ type NetHookInterface interface {
 	// NetHalfCloseReset returns them to the defaults (the snapshot wipe
 	// path).
 	NetHalfCloseReset() (int, error)
+	// NetHalfCloseUpdate sets the fields given and keeps the others, and
+	// returns the settings in force once applied - the merge, the hand-over
+	// and the answer in one step, so concurrent partial updates cannot undo
+	// each other (POST /config/halfclose).
+	NetHalfCloseUpdate(*HalfCloseUpdate) (HalfCloseConfig, error)
 	// NetHalfCloseRelease closes every held half-closed client at the data
 	// path's next pass. An action, not configuration: nothing is stored.
 	NetHalfCloseRelease() (int, error)
