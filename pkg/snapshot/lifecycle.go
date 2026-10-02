@@ -140,6 +140,8 @@ var RouteLifecycles = []RouteLifecycle{
 	// must point it there again after a restart.
 	{Method: "post", Path: "/audit/policy", Class: ClassRuntimeRebuilt, Area: AreaAudit, DesiredState: true},
 	{Method: "post", Path: "/audit/sink", Class: ClassRuntimeRebuilt, Area: AreaAudit, DesiredState: true},
+	{Method: "put", Path: "/audit/sinks/{name}", Class: ClassRuntimeRebuilt, Area: AreaAudit, DesiredState: true},
+	{Method: "delete", Path: "/audit/sinks/{name}", Class: ClassRuntimeRebuilt, Area: AreaAudit, DesiredState: true},
 	// Sealing the active segment now is an action on the trail rather than
 	// desired state: a restart seals the open segment anyway, so there is
 	// nothing for a snapshot to replay.

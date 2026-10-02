@@ -16,6 +16,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -46,13 +47,17 @@ func AuditPolicyFloor() audit.PolicyFloor {
 	return audit.PolicyFloor{}
 }
 
-// auditSink holds the configured sink and the settings it was built from.
-// The sink is replaced wholesale on a change: a half-reconfigured
-// connection to a receiver is worse than a closed one.
+// auditSink holds the configured sink, the settings it was built from and
+// the tailer that feeds it from the trail. The sink is replaced wholesale
+// on a change: a half-reconfigured connection to a receiver is worse than
+// a closed one.
 var auditSink struct {
-	mu   sync.Mutex
-	cfg  syslog.Config
-	sink *syslog.Sink
+	mu     sync.Mutex
+	cfg    syslog.Config
+	sink   *syslog.Sink
+	tailer *audit.SinkTailer
+	// named are the secondary sinks of /audit/sinks/{name}.
+	named map[string]*auditNamedSink
 }
 
 // AuditSink returns the configured sink, or nil when none is configured.
@@ -150,9 +155,15 @@ func AuditPostSink(params auditops.PostAuditSinkParams, principal interface{}) m
 	defer auditSink.mu.Unlock()
 	changed := auditSinkChangedFields(auditSink.cfg, a)
 
+	// The tailer finishes the submission it is in before it ends, so the
+	// wait is bounded by the sink's own timeouts and by the caller's.
+	stopCtx, cancel := context.WithTimeout(params.HTTPRequest.Context(), auditSinkStopTimeout)
+	defer cancel()
+
 	if !a.Enabled {
-		if auditSink.sink != nil {
-			_ = auditSink.sink.Close()
+		if err := stopAuditSinkLocked(stopCtx); err != nil {
+			tk.LogIt(tk.LogError, "api: audit sink: the tailer did not stop: %v\n", err)
+			return auditops.NewPostAuditSinkServiceUnavailable()
 		}
 		auditSink.sink, auditSink.cfg = nil, syslog.Config{}
 		AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) { d.ChangedFields = changed })
@@ -189,10 +200,27 @@ func AuditPostSink(params auditops.PostAuditSinkParams, principal interface{}) m
 		tk.LogIt(tk.LogError, "api: audit sink refused: %v\n", err)
 		return auditops.NewPostAuditSinkBadRequest()
 	}
-	if auditSink.sink != nil {
-		_ = auditSink.sink.Close()
+	// The old tailer has ended, and saved its cursor, before the new one
+	// reads it. One that has not ended leaves the change refused: the
+	// configuration reported stays the one in force.
+	if err := stopAuditSinkLocked(stopCtx); err != nil {
+		tk.LogIt(tk.LogError, "api: audit sink: the tailer did not stop: %v\n", err)
+		return auditops.NewPostAuditSinkServiceUnavailable()
 	}
 	auditSink.sink, auditSink.cfg = s, cfg
+	// Without a writer there is no trail to follow; the sink is held as
+	// configured and sends nothing.
+	if w := AuditWriter(); w != nil {
+		t, err := newAuditSinkTailer(w, auditComplianceSink, s, true, audit.SinkFilter{})
+		if err != nil {
+			tk.LogIt(tk.LogError, "api: audit sink: %v\n", err)
+			auditSink.sink, auditSink.cfg = nil, syslog.Config{}
+			return auditops.NewPostAuditSinkServiceUnavailable()
+		}
+		t.Start()
+		auditSink.tailer = t
+		publishAuditSinksLocked()
+	}
 	AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) {
 		d.ChangedFields = changed
 		// The endpoint and the trust anchor are named, never their

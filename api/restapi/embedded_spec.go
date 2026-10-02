@@ -290,6 +290,110 @@ func init() {
       },
       "type": "object"
     },
+    "AuditNamedSink": {
+      "description": "A secondary sink's configuration and state. Certificate material is named by path and never served.",
+      "properties": {
+        "address": {
+          "description": "The receiver's host and port.",
+          "type": "string"
+        },
+        "ca_bundle_path": {
+          "description": "PEM bundle the receiver's certificate is verified against. Required; there is no unverified mode.",
+          "type": "string"
+        },
+        "client_cert_path": {
+          "description": "Client certificate for mutual TLS. Both this and the key must be set, or neither.",
+          "type": "string"
+        },
+        "client_key_path": {
+          "description": "Client key for mutual TLS.",
+          "type": "string"
+        },
+        "cursor": {
+          "$ref": "#/definitions/AuditSinkCursor"
+        },
+        "enterprise_number": {
+          "description": "The IANA private enterprise number that qualifies the export sequence element. Required; none is built in.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "facility": {
+          "description": "Syslog facility. Defaults to 13, log audit.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "filter": {
+          "$ref": "#/definitions/AuditSinkFilter"
+        },
+        "filtered": {
+          "description": "Read-only. Records the filter kept from this sink.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "lag_drops": {
+          "description": "Read-only. Times a segment was removed by retention before this sink had read it out.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "last_error": {
+          "description": "Read-only. The most recent error, empty when the last attempt succeeded.",
+          "type": "string"
+        },
+        "max_frame_bytes": {
+          "description": "Largest message this receiver accepts. Zero means no limit.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "name": {
+          "description": "Read-only. The sink's name, from the path.",
+          "type": "string"
+        },
+        "poison": {
+          "description": "Read-only. Records skipped because the sink cannot carry them.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "resent": {
+          "description": "Read-only. Submissions that repeated an earlier one after a session failed.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "server_name": {
+          "description": "Name expected in the receiver's certificate. Defaults to the host part of the address.",
+          "type": "string"
+        },
+        "state": {
+          "description": "Read-only. starting, connected, disconnected, stalled or stopped.",
+          "type": "string"
+        },
+        "submitted": {
+          "description": "Read-only. Records written to the socket since this sink was configured, records sent again included. Not a delivery count.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "truncated": {
+          "description": "Read-only. Records that did not fit the receiver's cap and were sent shortened.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "write_errors": {
+          "description": "Read-only. Submissions that failed, each of which stops the cursor from advancing.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "xseq_epoch": {
+          "description": "Read-only. The epoch of the export sequence. It changes whenever the count starts again.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "xseq_high": {
+          "description": "Read-only. The highest export sequence number the sink has used.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "AuditPolicy": {
       "description": "The runtime-changeable audit policy. A zero means \"no limit\" for every field except max_prune_per_pass, where it means the built-in default.",
       "properties": {
@@ -477,6 +581,84 @@ func init() {
       },
       "type": "object"
     },
+    "AuditSinkCursor": {
+      "description": "A place in the trail, the last record a sink is past.",
+      "properties": {
+        "segment_uuid": {
+          "description": "The segment the record is in.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "The record's sequence number.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "AuditSinkFilter": {
+      "description": "What a secondary sink selects from the trail. Each field that is set narrows the selection, and a field judges only the records that have what it looks at.",
+      "properties": {
+        "data_sample": {
+          "description": "Keep one data record in this many. Zero and one keep all. Only the data stream can be sampled.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "outcome": {
+          "description": "Keep records whose outcome is ok, or failed. Empty keeps both.",
+          "type": "string"
+        },
+        "services": {
+          "description": "Keep data records of these services. Records of other streams are not judged by it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "streams": {
+          "description": "Keep records of these streams (mgmt, data, audit_system). Empty keeps all.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AuditSinkStatus": {
+      "description": "One sink's progress through the trail.",
+      "properties": {
+        "compliance": {
+          "description": "The sink that receives every record.",
+          "type": "boolean"
+        },
+        "cursor": {
+          "$ref": "#/definitions/AuditSinkCursor"
+        },
+        "in_active_segment": {
+          "description": "The sink has reached the segment being written. When false it is still reading sealed segments and lag_records does not apply.",
+          "type": "boolean"
+        },
+        "lag_drops": {
+          "description": "Times a segment was removed by retention before this sink had read it out.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "lag_records": {
+          "description": "Records written to the active segment that the sink is not yet past. Zero while the sink is still in a sealed segment.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "description": "starting, connected, disconnected, stalled or stopped.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "AuditStatus": {
       "description": "State of the management audit trail. Every counter is since the writer started in this process; identifiers name segments and events, never their content.",
       "properties": {
@@ -496,6 +678,10 @@ func init() {
         "boot_id": {
           "description": "Identity of this writer process, stamped on every record it wrote.",
           "type": "string"
+        },
+        "compliance_sink": {
+          "description": "A compliance sink is configured. When false no record leaves the gateway in full and the trail is local only.",
+          "type": "boolean"
         },
         "compress_failed": {
           "format": "int64",
@@ -633,6 +819,13 @@ func init() {
           "description": "Highest sequence number written in this boot.",
           "format": "int64",
           "type": "integer"
+        },
+        "sinks": {
+          "description": "Every configured sink that follows the trail, the compliance sink first, then by name.",
+          "items": {
+            "$ref": "#/definitions/AuditSinkStatus"
+          },
+          "type": "array"
         },
         "sync_failures": {
           "format": "int64",
@@ -8214,6 +8407,131 @@ func init() {
           }
         },
         "summary": "Configure the audit sink",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/audit/sinks/{name}": {
+      "delete": {
+        "description": "Stops the sink. Its place in the trail and its export sequence are kept, so a sink configured under the same name afterwards continues both and no export sequence number is used twice. The change is audited like any other management mutation.",
+        "operationId": "DeleteAuditSinksName",
+        "parameters": [
+          {
+            "description": "The sink's name.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/responses/ManagementUnauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "404": {
+            "description": "No sink of that name",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "$ref": "#/responses/ManagementStoreUnavailable"
+          }
+        },
+        "summary": "Remove a secondary audit sink",
+        "tags": [
+          "audit"
+        ]
+      },
+      "get": {
+        "description": "Returns one secondary sink: where it sends, what it selects from the trail, and how far it has got. Certificate material is named by path and never served.",
+        "operationId": "GetAuditSinksName",
+        "parameters": [
+          {
+            "description": "The sink's name, 1 to 64 of a-z, 0-9, '-' and '_'.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit sink",
+            "schema": {
+              "$ref": "#/definitions/AuditNamedSink"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/ManagementUnauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "404": {
+            "description": "No sink of that name",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "$ref": "#/responses/ManagementStoreUnavailable"
+          }
+        },
+        "summary": "A secondary audit sink's configuration and state",
+        "tags": [
+          "audit"
+        ]
+      },
+      "put": {
+        "description": "Configures a secondary sink that follows the trail beside the compliance sink of /audit/sink. A secondary sink may select records by stream, service and outcome and may sample the data stream; it numbers what it sends, and that export sequence travels beside each record under the configured private enterprise number, so a configuration without one is refused. The receiver's certificate is always verified. Replacing a sink keeps its place in the trail and its export sequence. The name compliance is reserved. The change is audited like any other management mutation.",
+        "operationId": "PutAuditSinksName",
+        "parameters": [
+          {
+            "description": "The sink's name, 1 to 64 of a-z, 0-9, '-' and '_'.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "The sink configuration to apply",
+            "in": "body",
+            "name": "attr",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AuditNamedSink"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/responses/ManagementBadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/ManagementUnauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "503": {
+            "$ref": "#/responses/ManagementStoreUnavailable"
+          }
+        },
+        "summary": "Create or replace a secondary audit sink",
         "tags": [
           "audit"
         ]
@@ -20962,6 +21280,161 @@ func init() {
           },
           "403": {
             "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/audit/sinks/{name}": {
+      "get": {
+        "description": "Returns one secondary sink: where it sends, what it selects from the trail, and how far it has got. Certificate material is named by path and never served.",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "audit"
+        ],
+        "summary": "A secondary audit sink's configuration and state",
+        "operationId": "GetAuditSinksName",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "The sink's name, 1 to 64 of a-z, 0-9, '-' and '_'.",
+            "name": "name",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit sink",
+            "schema": {
+              "$ref": "#/definitions/AuditNamedSink"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid management credential",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "description": "No sink of that name",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "put": {
+        "description": "Configures a secondary sink that follows the trail beside the compliance sink of /audit/sink. A secondary sink may select records by stream, service and outcome and may sample the data stream; it numbers what it sends, and that export sequence travels beside each record under the configured private enterprise number, so a configuration without one is refused. The receiver's certificate is always verified. Replacing a sink keeps its place in the trail and its export sequence. The name compliance is reserved. The change is audited like any other management mutation.",
+        "tags": [
+          "audit"
+        ],
+        "summary": "Create or replace a secondary audit sink",
+        "operationId": "PutAuditSinksName",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "The sink's name, 1 to 64 of a-z, 0-9, '-' and '_'.",
+            "name": "name",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "The sink configuration to apply",
+            "name": "attr",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AuditNamedSink"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "The request is malformed or the values are not acceptable; nothing was changed",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid management credential",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "delete": {
+        "description": "Stops the sink. Its place in the trail and its export sequence are kept, so a sink configured under the same name afterwards continues both and no export sequence number is used twice. The change is audited like any other management mutation.",
+        "tags": [
+          "audit"
+        ],
+        "summary": "Remove a secondary audit sink",
+        "operationId": "DeleteAuditSinksName",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "The sink's name.",
+            "name": "name",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid management credential",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "description": "No sink of that name",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -34151,6 +34624,110 @@ func init() {
         }
       }
     },
+    "AuditNamedSink": {
+      "description": "A secondary sink's configuration and state. Certificate material is named by path and never served.",
+      "type": "object",
+      "properties": {
+        "address": {
+          "description": "The receiver's host and port.",
+          "type": "string"
+        },
+        "ca_bundle_path": {
+          "description": "PEM bundle the receiver's certificate is verified against. Required; there is no unverified mode.",
+          "type": "string"
+        },
+        "client_cert_path": {
+          "description": "Client certificate for mutual TLS. Both this and the key must be set, or neither.",
+          "type": "string"
+        },
+        "client_key_path": {
+          "description": "Client key for mutual TLS.",
+          "type": "string"
+        },
+        "cursor": {
+          "$ref": "#/definitions/AuditSinkCursor"
+        },
+        "enterprise_number": {
+          "description": "The IANA private enterprise number that qualifies the export sequence element. Required; none is built in.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "facility": {
+          "description": "Syslog facility. Defaults to 13, log audit.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "filter": {
+          "$ref": "#/definitions/AuditSinkFilter"
+        },
+        "filtered": {
+          "description": "Read-only. Records the filter kept from this sink.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "lag_drops": {
+          "description": "Read-only. Times a segment was removed by retention before this sink had read it out.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "last_error": {
+          "description": "Read-only. The most recent error, empty when the last attempt succeeded.",
+          "type": "string"
+        },
+        "max_frame_bytes": {
+          "description": "Largest message this receiver accepts. Zero means no limit.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "name": {
+          "description": "Read-only. The sink's name, from the path.",
+          "type": "string"
+        },
+        "poison": {
+          "description": "Read-only. Records skipped because the sink cannot carry them.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "resent": {
+          "description": "Read-only. Submissions that repeated an earlier one after a session failed.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "server_name": {
+          "description": "Name expected in the receiver's certificate. Defaults to the host part of the address.",
+          "type": "string"
+        },
+        "state": {
+          "description": "Read-only. starting, connected, disconnected, stalled or stopped.",
+          "type": "string"
+        },
+        "submitted": {
+          "description": "Read-only. Records written to the socket since this sink was configured, records sent again included. Not a delivery count.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "truncated": {
+          "description": "Read-only. Records that did not fit the receiver's cap and were sent shortened.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "write_errors": {
+          "description": "Read-only. Submissions that failed, each of which stops the cursor from advancing.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "xseq_epoch": {
+          "description": "Read-only. The epoch of the export sequence. It changes whenever the count starts again.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "xseq_high": {
+          "description": "Read-only. The highest export sequence number the sink has used.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
     "AuditPolicy": {
       "description": "The runtime-changeable audit policy. A zero means \"no limit\" for every field except max_prune_per_pass, where it means the built-in default.",
       "type": "object",
@@ -34338,6 +34915,84 @@ func init() {
         }
       }
     },
+    "AuditSinkCursor": {
+      "description": "A place in the trail, the last record a sink is past.",
+      "type": "object",
+      "properties": {
+        "segment_uuid": {
+          "description": "The segment the record is in.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "The record's sequence number.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "AuditSinkFilter": {
+      "description": "What a secondary sink selects from the trail. Each field that is set narrows the selection, and a field judges only the records that have what it looks at.",
+      "type": "object",
+      "properties": {
+        "data_sample": {
+          "description": "Keep one data record in this many. Zero and one keep all. Only the data stream can be sampled.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "outcome": {
+          "description": "Keep records whose outcome is ok, or failed. Empty keeps both.",
+          "type": "string"
+        },
+        "services": {
+          "description": "Keep data records of these services. Records of other streams are not judged by it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "streams": {
+          "description": "Keep records of these streams (mgmt, data, audit_system). Empty keeps all.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "AuditSinkStatus": {
+      "description": "One sink's progress through the trail.",
+      "type": "object",
+      "properties": {
+        "compliance": {
+          "description": "The sink that receives every record.",
+          "type": "boolean"
+        },
+        "cursor": {
+          "$ref": "#/definitions/AuditSinkCursor"
+        },
+        "in_active_segment": {
+          "description": "The sink has reached the segment being written. When false it is still reading sealed segments and lag_records does not apply.",
+          "type": "boolean"
+        },
+        "lag_drops": {
+          "description": "Times a segment was removed by retention before this sink had read it out.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "lag_records": {
+          "description": "Records written to the active segment that the sink is not yet past. Zero while the sink is still in a sealed segment.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "description": "starting, connected, disconnected, stalled or stopped.",
+          "type": "string"
+        }
+      }
+    },
     "AuditStatus": {
       "description": "State of the management audit trail. Every counter is since the writer started in this process; identifiers name segments and events, never their content.",
       "type": "object",
@@ -34358,6 +35013,10 @@ func init() {
         "boot_id": {
           "description": "Identity of this writer process, stamped on every record it wrote.",
           "type": "string"
+        },
+        "compliance_sink": {
+          "description": "A compliance sink is configured. When false no record leaves the gateway in full and the trail is local only.",
+          "type": "boolean"
         },
         "compress_failed": {
           "type": "integer",
@@ -34495,6 +35154,13 @@ func init() {
           "description": "Highest sequence number written in this boot.",
           "type": "integer",
           "format": "int64"
+        },
+        "sinks": {
+          "description": "Every configured sink that follows the trail, the compliance sink first, then by name.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AuditSinkStatus"
+          }
         },
         "sync_failures": {
           "type": "integer",

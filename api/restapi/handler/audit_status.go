@@ -108,6 +108,7 @@ func auditStatusModel(w *audit.Writer, now time.Time) *models.AuditStatus {
 		ReserveBytes:  st.Retention.ReserveBytes,
 	}
 	out.ProjectedRetentionDays = st.ProjectedRetentionDays(now)
+	out.ComplianceSink, out.Sinks = auditSinkStatuses(st.SegmentUUID, st.SeqHigh)
 	for _, p := range st.Producers {
 		ps := &models.AuditProducerStatus{
 			ID:                p.ID,

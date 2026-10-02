@@ -87,3 +87,18 @@ func TestBuildFaultArmedWithoutBudgetStaysArmed(t *testing.T) {
 		}
 	}
 }
+
+// A component beside the writer asks through FaultArmed, and gets the same
+// answer the writer's own points get: the selected point and no other.
+func TestFaultArmedIsTheBuildSelector(t *testing.T) {
+	oldFault, oldBudget := armedFault, armedBudget
+	defer func() { armedFault, armedBudget = oldFault, oldBudget }()
+
+	armedFault, armedBudget = FaultSinkBeforeCursorWrite, -1
+	if !FaultArmed(FaultSinkBeforeCursorWrite) {
+		t.Error("the selected sink point is not armed")
+	}
+	if FaultArmed(FaultSinkCursorAfterRename) {
+		t.Error("an unselected sink point is armed")
+	}
+}

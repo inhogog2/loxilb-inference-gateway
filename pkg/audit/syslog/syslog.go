@@ -103,6 +103,12 @@ type Config struct {
 	// that does not fit is truncated at a field boundary and marked, never
 	// cut mid-JSON.
 	MaxFrameBytes int
+	// EnterpriseNumber is the IANA private enterprise number that
+	// qualifies this sink's STRUCTURED-DATA identifiers. RFC 5424 reserves
+	// unqualified SD-IDs for IANA, so an element of our own needs one. Zero
+	// means none is configured: plain submissions are unaffected, and a
+	// submission that needs an element is refused. No number is built in.
+	EnterpriseNumber uint32
 	// DialTimeout and WriteTimeout bound the two blocking operations.
 	DialTimeout  time.Duration
 	WriteTimeout time.Duration
@@ -148,6 +154,20 @@ type Stats struct {
 	Connected   bool
 	LastError   string
 }
+
+// ErrNoEnterpriseNumber is returned by SubmitExport on a sink that has no
+// private enterprise number to qualify the element with.
+var ErrNoEnterpriseNumber = errors.New("syslog: an export sequence needs a private enterprise number")
+
+// ErrNotAttempted marks a failed submission of which no octet was written:
+// the receiver could not be reached. A caller that numbers its submissions
+// may use the same number again after it, and after no other failure.
+var ErrNotAttempted = errors.New("syslog: nothing was written")
+
+// ErrRejected marks a record this sink can never submit, whatever the
+// receiver does: it is not an object, or its identity fields alone exceed
+// the frame cap. Retrying it cannot succeed.
+var ErrRejected = errors.New("syslog: the record cannot be framed")
 
 // ErrNotConfigured is returned by New when no receiver is configured.
 var ErrNotConfigured = errors.New("syslog: no receiver address")
@@ -244,10 +264,41 @@ func buildTLS(cfg Config) (*tls.Config, error) {
 // per RFC 5425 and writes it. An error means the caller must not treat the
 // record as submitted; the connection is dropped so the next call redials.
 func (s *Sink) Submit(line []byte) error {
-	frame, truncated, err := s.frame(line)
-	if err != nil {
-		return err
+	return s.submit(line, nil)
+}
+
+// SubmitExport is Submit with the sink's export sequence carried beside the
+// record, in STRUCTURED-DATA as [audit-export@<PEN> xseq="…" xseq_epoch="…"].
+// xseq counts what was sent to this sink and epoch changes whenever that
+// count starts again: a sink that receives a filtered subset of the trail
+// sees holes in seq by construction, and this pair is what is contiguous
+// for it. The record itself is the same bytes either way, so its identity
+// and any hash over it are the same at every receiver.
+func (s *Sink) SubmitExport(line []byte, xseq, epoch uint64) error {
+	if s.cfg.EnterpriseNumber == 0 {
+		return ErrNoEnterpriseNumber
 	}
+	sd := make([]byte, 0, 72)
+	sd = append(sd, "[audit-export@"...)
+	sd = strconv.AppendUint(sd, uint64(s.cfg.EnterpriseNumber), 10)
+	sd = append(sd, ` xseq="`...)
+	sd = strconv.AppendUint(sd, xseq, 10)
+	sd = append(sd, `" xseq_epoch="`...)
+	sd = strconv.AppendUint(sd, epoch, 10)
+	sd = append(sd, '"', ']')
+	return s.submit(line, sd)
+}
+
+// frameBuilt sees every frame before it is written. The tests read the
+// frame a submission built there without needing a receiver.
+var frameBuilt = func([]byte) {}
+
+func (s *Sink) submit(line, sd []byte) error {
+	frame, truncated, err := s.frameSD(line, sd)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrRejected, err)
+	}
+	frameBuilt(frame)
 	if truncated {
 		s.truncated.Add(1)
 	}
@@ -255,7 +306,7 @@ func (s *Sink) Submit(line []byte) error {
 	defer s.mu.Unlock()
 	conn, err := s.connLocked()
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrNotAttempted, err)
 	}
 	// The deadline comes from the real clock, never from cfg.Now: that one
 	// stamps a record when the record carries no timestamp of its own, and
@@ -330,6 +381,23 @@ func (s *Sink) Close() error {
 	return err
 }
 
+// Peer names the receiver of the current session: the subject of the
+// certificate it presented and when that certificate expires. ok is false
+// when there is no session.
+func (s *Sink) Peer() (subject string, notAfter time.Time, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tc, isTLS := s.conn.(*tls.Conn)
+	if !isTLS {
+		return "", time.Time{}, false
+	}
+	certs := tc.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return "", time.Time{}, false
+	}
+	return certs[0].Subject.String(), certs[0].NotAfter, true
+}
+
 // Stats reports the counters a status endpoint reads.
 func (s *Sink) Stats() Stats {
 	s.errMu.Lock()
@@ -360,6 +428,13 @@ type header struct {
 // SYSLOG-MSG. Newline-delimited framing is what a permissive receiver
 // tolerates and a strict one fragments on, so it is not used.
 func (s *Sink) frame(line []byte) ([]byte, bool, error) {
+	return s.frameSD(line, nil)
+}
+
+// frameSD is frame with a STRUCTURED-DATA element; nil keeps NILVALUE. The
+// element counts toward the frame cap like every other octet of the
+// message.
+func (s *Sink) frameSD(line, sd []byte) ([]byte, bool, error) {
 	var h header
 	if err := json.Unmarshal(line, &h); err != nil {
 		return nil, false, fmt.Errorf("syslog: record is not an object: %w", err)
@@ -367,7 +442,7 @@ func (s *Sink) frame(line []byte) ([]byte, bool, error) {
 	msg := line
 	truncated := false
 	if s.cfg.MaxFrameBytes > 0 {
-		if over := s.overBy(h, msg); over > 0 {
+		if over := s.overBy(h, sd, msg); over > 0 {
 			shorter, err := truncateRecord(line)
 			if err != nil {
 				return nil, false, err
@@ -375,7 +450,7 @@ func (s *Sink) frame(line []byte) ([]byte, bool, error) {
 			msg, truncated = shorter, true
 		}
 	}
-	syslogMsg := s.syslogMessage(h, msg)
+	syslogMsg := s.syslogMessage(h, sd, msg)
 	// A truncated record must still fit. If dropping the detail was not
 	// enough, fall back to the identity fields alone, which is the least a
 	// receiver needs to see that a record exists and to ask for it by
@@ -385,7 +460,7 @@ func (s *Sink) frame(line []byte) ([]byte, bool, error) {
 		if err != nil {
 			return nil, false, err
 		}
-		syslogMsg = s.syslogMessage(h, minimal)
+		syslogMsg = s.syslogMessage(h, sd, minimal)
 		truncated = true
 		if len(syslogMsg) > s.cfg.MaxFrameBytes {
 			return nil, false, fmt.Errorf(
@@ -421,22 +496,22 @@ func capPlus(n, extra int) int {
 }
 
 // overBy reports how many octets the assembled message exceeds the cap by.
-func (s *Sink) overBy(h header, msg []byte) int {
-	return len(s.syslogMessage(h, msg)) - s.cfg.MaxFrameBytes
+func (s *Sink) overBy(h header, sd, msg []byte) int {
+	return len(s.syslogMessage(h, sd, msg)) - s.cfg.MaxFrameBytes
 }
 
-// syslogMessage assembles the RFC 5424 SYSLOG-MSG. STRUCTURED-DATA stays
-// NILVALUE: the receiver parses the JSON, and splitting envelope fields
-// across SD-IDs would duplicate the schema. The elements that do belong in
-// STRUCTURED-DATA (replay and export sequence) need a registered private
-// enterprise number and are not emitted here.
-func (s *Sink) syslogMessage(h header, msg []byte) []byte {
+// syslogMessage assembles the RFC 5424 SYSLOG-MSG. STRUCTURED-DATA is
+// NILVALUE unless the caller supplies an element: the receiver parses the
+// JSON, and splitting envelope fields across SD-IDs would duplicate the
+// schema. What does belong there is what is true of one submission and not
+// of the record, such as a sink's export sequence.
+func (s *Sink) syslogMessage(h header, sd, msg []byte) []byte {
 	pri := s.cfg.Facility*8 + severityFor(h.EventType)
 	hostname := valueOr(h.InstanceID)
 	msgID := valueOr(h.Stream)
 	ts := timestampOr(h.TS, s.cfg.Now)
 
-	out := make([]byte, 0, capPlus(len(msg), msgHeaderHint))
+	out := make([]byte, 0, capPlus(capPlus(len(msg), len(sd)), msgHeaderHint))
 	out = append(out, '<')
 	out = strconv.AppendInt(out, int64(pri), 10)
 	out = append(out, '>', '1', ' ')
@@ -450,7 +525,11 @@ func (s *Sink) syslogMessage(h header, msg []byte) []byte {
 	out = append(out, ' ')
 	out = append(out, msgID...)
 	out = append(out, ' ')
-	out = append(out, nilValue...) // STRUCTURED-DATA
+	if len(sd) == 0 {
+		out = append(out, nilValue...) // STRUCTURED-DATA
+	} else {
+		out = append(out, sd...)
+	}
 	out = append(out, ' ')
 	out = append(out, msg...)
 	return out

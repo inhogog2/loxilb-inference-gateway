@@ -7640,6 +7640,107 @@ paths:
         '503':
           $ref: '#/responses/ManagementStoreUnavailable'
 
+  '/audit/sinks/{name}':
+    get:
+      summary: A secondary audit sink's configuration and state
+      description: >-
+        Returns one secondary sink: where it sends, what it selects from the
+        trail, and how far it has got. Certificate material is named by path
+        and never served.
+      operationId: GetAuditSinksName
+      tags:
+        - audit
+      produces:
+        - application/json
+      parameters:
+        - in: path
+          name: name
+          type: string
+          required: true
+          description: The sink's name, 1 to 64 of a-z, 0-9, '-' and '_'.
+      responses:
+        '200':
+          description: Audit sink
+          schema:
+            $ref: '#/definitions/AuditNamedSink'
+        '401':
+          $ref: '#/responses/ManagementUnauthorized'
+        '403':
+          $ref: '#/responses/ManagementForbidden'
+        '404':
+          description: No sink of that name
+          schema:
+            $ref: '#/definitions/Error'
+        '503':
+          $ref: '#/responses/ManagementStoreUnavailable'
+    put:
+      summary: Create or replace a secondary audit sink
+      description: >-
+        Configures a secondary sink that follows the trail beside the
+        compliance sink of /audit/sink. A secondary sink may select records
+        by stream, service and outcome and may sample the data stream; it
+        numbers what it sends, and that export sequence travels beside each
+        record under the configured private enterprise number, so a
+        configuration without one is refused. The receiver's certificate is
+        always verified. Replacing a sink keeps its place in the trail and
+        its export sequence. The name compliance is reserved. The change is
+        audited like any other management mutation.
+      operationId: PutAuditSinksName
+      tags:
+        - audit
+      parameters:
+        - in: path
+          name: name
+          type: string
+          required: true
+          description: The sink's name, 1 to 64 of a-z, 0-9, '-' and '_'.
+        - in: body
+          name: attr
+          description: The sink configuration to apply
+          required: true
+          schema:
+            $ref: '#/definitions/AuditNamedSink'
+      responses:
+        '204':
+          description: OK
+        '400':
+          $ref: '#/responses/ManagementBadRequest'
+        '401':
+          $ref: '#/responses/ManagementUnauthorized'
+        '403':
+          $ref: '#/responses/ManagementForbidden'
+        '503':
+          $ref: '#/responses/ManagementStoreUnavailable'
+    delete:
+      summary: Remove a secondary audit sink
+      description: >-
+        Stops the sink. Its place in the trail and its export sequence are
+        kept, so a sink configured under the same name afterwards continues
+        both and no export sequence number is used twice. The change is
+        audited like any other management mutation.
+      operationId: DeleteAuditSinksName
+      tags:
+        - audit
+      parameters:
+        - in: path
+          name: name
+          type: string
+          required: true
+          description: The sink's name.
+      responses:
+        '204':
+          description: OK
+        '401':
+          $ref: '#/responses/ManagementUnauthorized'
+        '403':
+          $ref: '#/responses/ManagementForbidden'
+        '404':
+          description: No sink of that name
+          schema:
+            $ref: '#/definitions/Error'
+        '503':
+          $ref: '#/responses/ManagementStoreUnavailable'
+
   '/audit/rotate':
     post:
       summary: Seal the active segment now
@@ -13943,6 +14044,148 @@ definitions:
       last_error:
         type: string
         description: Read-only. The most recent transport error, empty when the last attempt succeeded.
+  AuditSinkFilter:
+    type: object
+    description: >-
+      What a secondary sink selects from the trail. Each field that is set
+      narrows the selection, and a field judges only the records that have
+      what it looks at.
+    properties:
+      streams:
+        type: array
+        items:
+          type: string
+        description: Keep records of these streams (mgmt, data, audit_system). Empty keeps all.
+      services:
+        type: array
+        items:
+          type: string
+        description: Keep data records of these services. Records of other streams are not judged by it.
+      outcome:
+        type: string
+        description: Keep records whose outcome is ok, or failed. Empty keeps both.
+      data_sample:
+        type: integer
+        format: int64
+        description: Keep one data record in this many. Zero and one keep all. Only the data stream can be sampled.
+  AuditSinkCursor:
+    type: object
+    description: A place in the trail, the last record a sink is past.
+    properties:
+      segment_uuid:
+        type: string
+        description: The segment the record is in.
+      seq:
+        type: integer
+        format: int64
+        description: The record's sequence number.
+  AuditNamedSink:
+    type: object
+    description: >-
+      A secondary sink's configuration and state. Certificate material is
+      named by path and never served.
+    properties:
+      name:
+        type: string
+        description: Read-only. The sink's name, from the path.
+      address:
+        type: string
+        description: The receiver's host and port.
+      ca_bundle_path:
+        type: string
+        description: PEM bundle the receiver's certificate is verified against. Required; there is no unverified mode.
+      server_name:
+        type: string
+        description: Name expected in the receiver's certificate. Defaults to the host part of the address.
+      client_cert_path:
+        type: string
+        description: Client certificate for mutual TLS. Both this and the key must be set, or neither.
+      client_key_path:
+        type: string
+        description: Client key for mutual TLS.
+      max_frame_bytes:
+        type: integer
+        format: int64
+        description: Largest message this receiver accepts. Zero means no limit.
+      facility:
+        type: integer
+        format: int64
+        description: Syslog facility. Defaults to 13, log audit.
+      enterprise_number:
+        type: integer
+        format: int64
+        description: The IANA private enterprise number that qualifies the export sequence element. Required; none is built in.
+      filter:
+        $ref: '#/definitions/AuditSinkFilter'
+      state:
+        type: string
+        description: Read-only. starting, connected, disconnected, stalled or stopped.
+      cursor:
+        $ref: '#/definitions/AuditSinkCursor'
+      xseq_high:
+        type: integer
+        format: int64
+        description: Read-only. The highest export sequence number the sink has used.
+      xseq_epoch:
+        type: integer
+        format: int64
+        description: Read-only. The epoch of the export sequence. It changes whenever the count starts again.
+      submitted:
+        type: integer
+        format: int64
+        description: Read-only. Records written to the socket since this sink was configured, records sent again included. Not a delivery count.
+      filtered:
+        type: integer
+        format: int64
+        description: Read-only. Records the filter kept from this sink.
+      resent:
+        type: integer
+        format: int64
+        description: Read-only. Submissions that repeated an earlier one after a session failed.
+      poison:
+        type: integer
+        format: int64
+        description: Read-only. Records skipped because the sink cannot carry them.
+      truncated:
+        type: integer
+        format: int64
+        description: Read-only. Records that did not fit the receiver's cap and were sent shortened.
+      write_errors:
+        type: integer
+        format: int64
+        description: Read-only. Submissions that failed, each of which stops the cursor from advancing.
+      lag_drops:
+        type: integer
+        format: int64
+        description: Read-only. Times a segment was removed by retention before this sink had read it out.
+      last_error:
+        type: string
+        description: Read-only. The most recent error, empty when the last attempt succeeded.
+  AuditSinkStatus:
+    type: object
+    description: One sink's progress through the trail.
+    properties:
+      name:
+        type: string
+      compliance:
+        type: boolean
+        description: The sink that receives every record.
+      state:
+        type: string
+        description: starting, connected, disconnected, stalled or stopped.
+      cursor:
+        $ref: '#/definitions/AuditSinkCursor'
+      in_active_segment:
+        type: boolean
+        description: The sink has reached the segment being written. When false it is still reading sealed segments and lag_records does not apply.
+      lag_records:
+        type: integer
+        format: int64
+        description: Records written to the active segment that the sink is not yet past. Zero while the sink is still in a sealed segment.
+      lag_drops:
+        type: integer
+        format: int64
+        description: Times a segment was removed by retention before this sink had read it out.
   AuditRotateResult:
     type: object
     description: The segments either side of an operator-requested rotation.
@@ -14087,6 +14330,14 @@ definitions:
         items:
           $ref: '#/definitions/AuditProducerStatus'
         description: Per-producer accounting, sorted by producer id.
+      compliance_sink:
+        type: boolean
+        description: A compliance sink is configured. When false no record leaves the gateway in full and the trail is local only.
+      sinks:
+        type: array
+        items:
+          $ref: '#/definitions/AuditSinkStatus'
+        description: Every configured sink that follows the trail, the compliance sink first, then by name.
   AuditDropCount:
     type: object
     properties:

@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-02T07:53:11+00:00",
-  "source_revision": "462ad6d203394ff34cd5d81c72e15f4caf106d57"
+  "generated_at": "2026-10-02T10:45:07+00:00",
+  "source_revision": "6e1efd15ad30f190b9e6e2a8ecd9d9c2f29bb1d0"
  },
  "contract": {
   "total": 305,
@@ -5121,7 +5121,7 @@
      "kind": "func",
      "file": "api/restapi/configure_loxilb_rest_api.go",
      "def_line": 72,
-     "call_line": 481,
+     "call_line": 484,
      "calls": "InitAutoPersist"
     },
     {
