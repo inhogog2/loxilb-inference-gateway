@@ -67,6 +67,13 @@ func TestStatsDescribesTheActiveSegment(t *testing.T) {
 		_ = w.Close(ctx)
 	})
 	waitFor(t, "writer running", w.Running)
+	// Running is set before the start records are written. What is asked
+	// of the writer's loop is answered after them.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := w.onLoop(ctx, func() {}); err != nil {
+		t.Fatal(err)
+	}
 
 	// A fresh writer has already written its own start records, so the
 	// segment is described from the first moment and everything below is
