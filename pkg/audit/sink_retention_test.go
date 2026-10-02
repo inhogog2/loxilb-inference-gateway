@@ -466,6 +466,43 @@ func TestPruneTakesASegmentWhoseHeaderCannotBeRead(t *testing.T) {
 	}
 }
 
+// What lies behind a sink is counted in the files' bytes: the rest of the
+// segment it stands in, where its place in the file is known, and all of
+// every later segment. A sink that has been through everything is behind by
+// nothing, wherever its last record was.
+func TestTrailBytesBehind(t *testing.T) {
+	st := newSealedTrail(t)
+	segs, err := st.w.seg.listSealed()
+	if err != nil || len(segs) != 2 {
+		t.Fatalf("%d sealed segments (%v), want 2", len(segs), err)
+	}
+	fi, err := os.Stat(filepath.Join(st.cfg.Dir, ActiveSegmentName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, oldest, second := fi.Size(), segs[0].Bytes, segs[1].Bytes
+	activeUUID := st.w.seg.currentUUID()
+	for _, tt := range []struct {
+		name  string
+		place SinkPlace
+		want  int64
+	}{
+		{"in the active segment at a known offset", SinkPlace{Position: Position{SegmentUUID: activeUUID, Seq: 1}, Offset: 100}, active - 100},
+		{"in the active segment, offset not known", SinkPlace{Position: Position{SegmentUUID: activeUUID, Seq: 1}, Offset: -1}, active},
+		{"an offset past the end is not believed", SinkPlace{Position: Position{SegmentUUID: activeUUID, Seq: 1}, Offset: active + 1}, active},
+		{"in the newest sealed segment", SinkPlace{Position: Position{SegmentUUID: st.uuids[1], Seq: 1}, Offset: -1}, second + active},
+		{"an offset means nothing in a compressed segment", SinkPlace{Position: Position{SegmentUUID: st.uuids[1], Seq: 1}, Offset: 10}, second + active},
+		{"in the oldest segment", SinkPlace{Position: Position{SegmentUUID: st.uuids[0], Seq: 1}, Offset: -1}, oldest + second + active},
+		{"nowhere yet", SinkPlace{Offset: -1}, oldest + second + active},
+		{"in a segment that is gone", SinkPlace{Position: Position{SegmentUUID: "0190a000-0000-7000-8000-000000000000", Seq: 4}, Offset: 7}, oldest + second + active},
+		{"through everything", SinkPlace{Position: Position{SegmentUUID: st.uuids[0], Seq: 1}, Offset: -1, Idle: true}, 0},
+	} {
+		if got := st.w.TrailBytesBehind(tt.place); got != tt.want {
+			t.Errorf("%s: %d bytes behind, want %d", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestReadSegmentRange(t *testing.T) {
 	const header = `{"kind":"segment_header","segment_uuid":"u","first_seq":5}` + "\n"
 	const recs = `{"seq":5,"stream":"mgmt"}` + "\n" + `{"seq":6,"stream":"mgmt"}` + "\n" + `{"seq":9,"stream":"mgmt"}` + "\n"

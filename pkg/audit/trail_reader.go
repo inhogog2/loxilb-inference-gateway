@@ -163,6 +163,16 @@ func (r *TrailReader) Holds(uuid string) (bool, error) {
 	return false, nil
 }
 
+// offset is how far into the open segment's file the reader has returned
+// records, or -1 when that is not a place in a file: nothing is open, or the
+// segment is a compressed one and is read as a stream.
+func (r *TrailReader) offset() int64 {
+	if r.cur == nil || r.cur.zr != nil {
+		return -1
+	}
+	return r.cur.off
+}
+
 // Close releases the open segment. The reader can be used again: the next
 // call to Next continues after the last record returned.
 func (r *TrailReader) Close() {

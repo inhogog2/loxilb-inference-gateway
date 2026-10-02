@@ -52,6 +52,52 @@ func (w *Writer) SetSinkProgress(fn func() []SinkProgress) {
 	w.sinkProgress.Store(&fn)
 }
 
+// TrailBytesBehind is how many bytes of the trail's files lie behind a sink
+// that stands at p: the rest of the segment it is in and every later one.
+// It is an upper bound where the place inside the segment is not known, and
+// the whole trail for a sink whose segment is no longer there.
+func (w *Writer) TrailBytesBehind(p SinkPlace) int64 {
+	if p.Idle {
+		return 0
+	}
+	rest := func(size int64) int64 {
+		if p.Offset < 0 || p.Offset > size {
+			return size
+		}
+		return size - p.Offset
+	}
+	_, _, active := w.seg.current()
+	if p.Position.SegmentUUID != "" && p.Position.SegmentUUID == w.seg.currentUUID() {
+		return rest(active)
+	}
+	segs, err := w.seg.listSealed()
+	if err != nil {
+		return active
+	}
+	total, found := active, false
+	seen := ""
+	for i := len(segs) - 1; i >= 0 && !found; i-- {
+		s := segs[i]
+		// While a segment is being compressed it is listed in both forms.
+		name := strings.TrimSuffix(s.Name, gzipExt)
+		if name == seen {
+			continue
+		}
+		seen = name
+		if p.Position.SegmentUUID != "" && w.seg.uuidOf(s.Path) == p.Position.SegmentUUID {
+			found = true
+			if s.Compressed {
+				total += s.Bytes
+			} else {
+				total += rest(s.Bytes)
+			}
+			continue
+		}
+		total += s.Bytes
+	}
+	return total
+}
+
 // segRange is the sequence numbers a sealed segment holds.
 type segRange struct {
 	first, last uint64
