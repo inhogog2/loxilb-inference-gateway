@@ -167,9 +167,7 @@ func (s *cursorStore) reservationPath() string { return filepath.Join(s.dir, s.n
 // fails one of the two and is treated as unreadable, never half-believed.
 func encodeCursor(c SinkCursor) []byte {
 	body, _ := json.Marshal(c)
-	out := make([]byte, 0, len(body)+12)
-	out = append(out, body...)
-	out = append(out, '\n')
+	out := append(body[:len(body):len(body)], '\n')
 	out = strconv.AppendUint(out, uint64(crc32.ChecksumIEEE(body)), 16)
 	return append(out, '\n')
 }
