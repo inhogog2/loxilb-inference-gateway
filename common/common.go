@@ -2387,6 +2387,17 @@ type NetHookInterface interface {
 	// on-disk material is deliberately KEPT -- it is node secret material,
 	// and the apply that follows a wipe must be able to re-register it.
 	NetCertDel(id string) (int, error)
+	// NetAuditSinkGet returns every configured audit sink as desired
+	// state, the compliance sink first and the secondary ones by name.
+	// Certificate material is named by path and never crosses this surface.
+	NetAuditSinkGet() ([]AuditSinkConfig, error)
+	// NetAuditSinkAdd configures one audit sink, replacing a sink of the
+	// same name (the snapshot restore path). The sink continues from the
+	// place and the export sequence kept under its name on this node.
+	NetAuditSinkAdd(*AuditSinkConfig) (int, error)
+	// NetAuditSinkDel stops one audit sink (the snapshot wipe path). Its
+	// place in the trail and its export sequence stay on disk.
+	NetAuditSinkDel(name string) (int, error)
 	// NetRecoveryDepsGet returns the identity of every external store the
 	// running gateway is wired to (recoverydep.go vocabulary): compiled
 	// engine-contract registry constants, the published kv-model-profile

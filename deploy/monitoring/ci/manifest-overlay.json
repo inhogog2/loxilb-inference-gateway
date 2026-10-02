@@ -1208,7 +1208,7 @@
     "status": "writer-mapped",
     "writer_sources": [
      { "symbol": "MarkConfigMutated", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 99, "writes": "configDirty", "note": "cleared again by completePersistSeq at :127, and only when no mutation landed while the persist was running -- so the gauge over-reports for one debounce period rather than under-reporting" },
-     { "symbol": "AutoPersistMiddleware", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 744, "call_line": 753, "calls": "MarkConfigMutated", "entry_point": "http-handler", "note": "called on every 2xx eligible mutation, including when auto-persist is off -- there the gauge staying at 1 is the operational signal" }
+     { "symbol": "AutoPersistMiddleware", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 749, "call_line": 758, "calls": "MarkConfigMutated", "entry_point": "http-handler", "note": "called on every 2xx eligible mutation, including when auto-persist is off -- there the gauge staying at 1 is the operational signal" }
     ],
     "evidence": "pkg/snapshot/config_dirty_test.go: four tests (mutate-then-persist clears, mutation-during-persist stays dirty, out-of-order completions, concurrent mutations) assert the exact gauge value on both sides -- but they call MarkConfigMutated and completePersistSeq directly, which section B.7 tier V1 does not accept as acceptance evidence: nothing drives AutoPersistMiddleware. Scenario M15 owns the runtime proof."
    },

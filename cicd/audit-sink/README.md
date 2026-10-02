@@ -40,6 +40,7 @@ control port only the harness reaches. It is the standard library only.
 | T6 | sealing the segment while the sink is behind keeps the order | the receiver is throttled, the segment is sealed twice: nothing is missing across three segments and the records arrive in `seq` order |
 | T16 | a segment pruned before a sink had it is put on record first | the secondary's receiver is taken away and the trail is given a quota of one small segment: `sys.segment.lost_to_retention` names the range and the sink that was behind, ahead of the `sys.segment.prune` that names the sink that had it; the receiver that prune names does hold every record of the range; no loss is recorded against the sink that kept up; the sink that was behind reports the removal and catches up |
 | MT | the scrape says where each sink is | one series per sink: `loxilb_audit_sink_connected` follows the receiver being there and away, for that sink alone; with the receiver away the failed submissions are counted, bytes of the trail are behind the sink and the oldest record it could not send has an age, and both lags return to zero once it has caught up; the exported count covers what the receiver holds; `loxilb_audit_records_lost_to_retention_total` covers the range T16 lost and `loxilb_audit_sink_lag_drops_total` agrees with the sink's own report |
+| PS | the sinks are part of the persisted configuration | the document on disk names both sinks with no persist asked for, with the CA bundle as a path and nothing a sink has done; after a restart that nothing follows with a sink request both sinks are there, the secondary sink's sequence goes on from the next number in the same epoch and the compliance receiver holds every record the previous boot wrote; a removed sink stays removed across a restart; restoring the document saved earlier brings it back on its sequence; a restore naming a file the node cannot read is refused before any sink is stopped |
 
 ## Topology
 
@@ -67,12 +68,17 @@ filter has to keep from the secondary sink are the writer's own
 `audit_system` records, and the row that says none arrived is paired with
 one that says the unfiltered sink received them.
 
-## Sink configuration is not kept across a restart
+## Sink configuration across a restart
 
-Every boot of the gateway configures its sinks again (`sinks_up`). A sink's
-place in the trail and its export sequence are kept on disk under
-`<audit dir>/sink/`, so a sink configured again under its name continues
-both; that is what the restart arms measure.
+The sinks are part of the persisted configuration document (the `auditsink`
+snapshot domain), so a gateway that replays it at start has them again. The
+arms that restart the gateway still configure the sinks afterwards
+(`sinks_up`): that replaces each sink under its name, which is what an
+operator's own tooling does, and it keeps the arms independent of whether
+the document was written before the gateway ended. A sink's place in the
+trail and its export sequence are kept on disk under `<audit dir>/sink/`,
+so a sink configured again under its name, by the replay or by a request,
+continues both; that is what the restart arms measure.
 
 ## The crash arms need a fault-enabled image
 
@@ -132,6 +138,7 @@ scenario found.
 | `llbigw-2-twin-2-sink-nowindow-r1` | a failed session saves the cursor where it stood, not at the start of the window it will send again | `T5-2d`: one record of the previous boot, written into the dead session, never arrives |
 | `llbigw-2-twin-2-sink-noresendend-r1` | a resend does not ask whether the segment it is waiting to reach is still there | `T16-3a`, `T16-3b`: the sink that was behind never catches up and reports no removal |
 | `llbigw-2-twin-2-sink-nosealed-r1` | a sink standing in a segment sealed during the prune pass is taken for one that lost its place | `T16-2j`: a loss recorded against the compliance sink, whose receiver holds the range |
+| `llbigw-2-twin-2-sink-nodomain-r1` | the audit sinks are not a domain of the configuration document: the registry does not list them | 24 rows of `PS`: the document names no sink, a restart leaves none, the restore of the saved document is refused, and with no sink back nothing arrives. The rows of `PS` that hold without the domain stay green |
 
 ## Layout
 

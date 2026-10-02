@@ -297,6 +297,8 @@ func domainItemJSONs(name string, d *Domains) ([]string, error) {
 		return itemJSONs([]cmn.TracingConfig{*d.Tracing})
 	case DomainCert:
 		return itemJSONs(d.Cert)
+	case DomainAuditSink:
+		return itemJSONs(d.AuditSink)
 	case DomainBFD:
 		return itemJSONs(d.BFD)
 	case DomainBGP:

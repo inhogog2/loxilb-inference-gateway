@@ -94,7 +94,16 @@ import (
 // included_domains never lists it, so restoring them leaves the live
 // settings untouched. Builds that predate it refuse 1.7 documents via the
 // minor-version gate.
-const SchemaVersion = "1.7"
+//
+// 1.8: added the auditsink domain: the audit sinks, the compliance sink
+// and the secondary ones, as the receiver, the paths of the certificate
+// material and what a secondary sink selects. The material stays on the
+// node, and so do a sink's place in the trail and its export sequence,
+// under the audit directory. Additive: older documents carry none, and
+// their included_domains never lists it, so restoring them leaves the
+// live sinks untouched. Builds that predate it refuse 1.8 documents via
+// the minor-version gate.
+const SchemaVersion = "1.8"
 
 // DocKind identifies the document type, matching §4's "kind" field.
 const DocKind = "loxilb-snapshot"
@@ -136,6 +145,7 @@ const (
 	DomainCORS           = "cors"
 	DomainTracing        = "tracing"
 	DomainCert           = "cert"
+	DomainAuditSink      = "auditsink"
 )
 
 // DefaultExcludedDomains lists the configuration areas deliberately never
@@ -248,6 +258,15 @@ type Domains struct {
 	// re-registering it, and fails loudly when it is missing or
 	// divergent. Added in schema 1.3.
 	Cert []cmn.CertMeta `json:"cert,omitempty"`
+	// AuditSink carries the audit sinks: where the trail is sent and, for
+	// a secondary sink, what is selected from it. The CA bundle and the
+	// client keypair are named by path and live ONLY on the node: a
+	// restore that cannot read them fails loudly, as a request configuring
+	// that sink would. A sink's place in the trail and its export sequence
+	// are kept under the audit directory, not here, so a restored sink
+	// continues both. Applied last: the sinks come back once the rest of
+	// the configuration is in place. Added in schema 1.8.
+	AuditSink []cmn.AuditSinkConfig `json:"auditsink,omitempty"`
 }
 
 // Document is the canonical, versioned snapshot document (§4). It is the

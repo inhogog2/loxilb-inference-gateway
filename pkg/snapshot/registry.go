@@ -167,6 +167,14 @@ type Hooks interface {
 	NetCertAdd(*cmn.CertMeta) (int, error)
 	NetCertDel(id string) (int, error)
 
+	// auditsink (schema 1.8) -- the audit sinks. Add configures one,
+	// replacing a sink of the same name (certificate material that cannot
+	// be read fails loudly); Del stops one while KEEPING its place in the
+	// trail and its export sequence on disk.
+	NetAuditSinkGet() ([]cmn.AuditSinkConfig, error)
+	NetAuditSinkAdd(*cmn.AuditSinkConfig) (int, error)
+	NetAuditSinkDel(name string) (int, error)
+
 	// recovery_dependencies (schema 1.4) -- document-level manifest, not a
 	// domain: no wipe/apply. Get feeds capture (see buildRecoveryManifest,
 	// capture.go); Verify gates restore (stageVerifyDeps, restore.go):
@@ -236,6 +244,7 @@ var Registry = []DomainEntry{
 	{Name: DomainCORS, Get: getCORS, Apply: applyCORS, Delete: deleteCORS},
 	{Name: DomainTracing, Get: getTracing, Apply: applyTracing, Delete: deleteTracing},
 	{Name: DomainCert, Get: getCert, Apply: applyCert, Delete: deleteCert},
+	{Name: DomainAuditSink, Get: getAuditSink, Apply: applyAuditSink, Delete: deleteAuditSink},
 }
 
 // ApplyOrder returns the registry in apply order (table order, dependencies
@@ -1766,4 +1775,52 @@ func deleteHalfClose(hooks Hooks) (int, error) {
 		return 0, fmt.Errorf("delete halfclose: %w", err)
 	}
 	return 1, nil
+}
+
+// ---------------------------------------------------------------------
+// auditsink -- list, replace semantics per name (schema 1.8)
+//
+// The audit sinks: the compliance sink under its reserved name and the
+// secondary ones. Add replaces a sink of the same name, so there is no
+// "exists" to tolerate. Where a sink stands in the trail is not captured
+// and not wiped: a sink stopped by the wipe and configured again by the
+// apply continues from the place kept on the node.
+// ---------------------------------------------------------------------
+
+func getAuditSink(hooks Hooks, doc *Document) error {
+	sinks, err := hooks.NetAuditSinkGet()
+	if err != nil {
+		return fmt.Errorf("get auditsink: %w", err)
+	}
+	doc.Domains.AuditSink = sinks
+	return nil
+}
+
+func applyAuditSink(hooks Hooks, doc *Document, _ bool) (int, int, error) {
+	n := 0
+	for i := range doc.Domains.AuditSink {
+		s := &doc.Domains.AuditSink[i]
+		if _, err := hooks.NetAuditSinkAdd(s); err != nil {
+			return n, 0, fmt.Errorf("apply auditsink %q: %w", s.Name, err)
+		}
+		n++
+	}
+	return n, 0, nil
+}
+
+func deleteAuditSink(hooks Hooks) (int, error) {
+	sinks, err := hooks.NetAuditSinkGet()
+	if err != nil {
+		return 0, fmt.Errorf("delete auditsink: get: %w", err)
+	}
+	n := 0
+	var errs []error
+	for i := range sinks {
+		if _, err := hooks.NetAuditSinkDel(sinks[i].Name); err != nil {
+			errs = append(errs, fmt.Errorf("delete auditsink %q: %w", sinks[i].Name, err))
+			continue
+		}
+		n++
+	}
+	return n, errors.Join(errs...)
 }

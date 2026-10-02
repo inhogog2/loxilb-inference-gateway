@@ -22,7 +22,10 @@
 package loxinet
 
 import (
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	cmn "github.com/loxilb-io/loxilb/common"
@@ -248,5 +251,30 @@ func TestNetRecoveryDepVerifyUnknownAndCertStore(t *testing.T) {
 	if warn, err := na.NetRecoveryDepVerify(cmn.RecoveryDependency{
 		Type: cmn.RecoveryDepCertStore, Digest: "sha256:1111", Required: true}); err != nil || warn != "" {
 		t.Fatalf("cert-store manifest entry must defer to the domain apply: warn=%q err=%v", warn, err)
+	}
+}
+
+// A file an audit sink names is looked for on this node: one that can be
+// read verifies, one that cannot fails the restore before it starts, and
+// the error names the path.
+func TestNetRecoveryDepVerifyAuditSinkFile(t *testing.T) {
+	na := &NetAPIStruct{}
+	dir := t.TempDir()
+	ca := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(ca, []byte("anchor"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if warn, err := na.NetRecoveryDepVerify(cmn.RecoveryDependency{
+		Type: cmn.RecoveryDepAuditSinkFile, ID: ca, Required: true}); err != nil || warn != "" {
+		t.Fatalf("a readable file: warn=%q err=%v", warn, err)
+	}
+	missing := filepath.Join(dir, "gone.pem")
+	_, err := na.NetRecoveryDepVerify(cmn.RecoveryDependency{
+		Type: cmn.RecoveryDepAuditSinkFile, ID: missing, Required: true})
+	if err == nil || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("a missing file: got %v, want an error naming %s", err, missing)
+	}
+	if err := na.NetRecoveryDepReady(cmn.RecoveryDepAuditSinkFile); err != nil {
+		t.Fatalf("readiness has nothing to probe for a node-local file: %v", err)
 	}
 }

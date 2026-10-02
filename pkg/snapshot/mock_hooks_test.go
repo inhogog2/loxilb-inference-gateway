@@ -64,6 +64,7 @@ type mockHooks struct {
 	tracingCfg *cmn.TracingConfig
 	halfClose  *cmn.HalfCloseConfig
 	certMetas  []cmn.CertMeta
+	auditSinks []cmn.AuditSinkConfig
 
 	// depVerifyFail/depVerifyWarn drive NetRecoveryDepVerify by dependency
 	// type: an entry in depVerifyFail fails that type's verification (the
@@ -487,6 +488,46 @@ func (m *mockHooks) NetHalfCloseReset() (int, error) {
 		return -1, err
 	}
 	m.halfClose = nil
+	return 0, nil
+}
+
+// --- auditsink ---
+//
+// The mock mirrors the handler's replace semantics: adding a sink of a
+// name that exists replaces it, so there is never an "exists" answer.
+
+func (m *mockHooks) NetAuditSinkGet() ([]cmn.AuditSinkConfig, error) {
+	m.log("NetAuditSinkGet")
+	return resizeOverride(m, "NetAuditSinkGet", func() []cmn.AuditSinkConfig {
+		return append([]cmn.AuditSinkConfig(nil), m.auditSinks...)
+	}), nil
+}
+func (m *mockHooks) NetAuditSinkAdd(c *cmn.AuditSinkConfig) (int, error) {
+	m.log("NetAuditSinkAdd:%s", c.Name)
+	if err := m.failIfConfigured("NetAuditSinkAdd"); err != nil {
+		return -1, err
+	}
+	for i := range m.auditSinks {
+		if m.auditSinks[i].Name == c.Name {
+			m.auditSinks[i] = *c
+			return 0, nil
+		}
+	}
+	m.auditSinks = append(m.auditSinks, *c)
+	return 0, nil
+}
+func (m *mockHooks) NetAuditSinkDel(name string) (int, error) {
+	m.log("NetAuditSinkDel:%s", name)
+	if err := m.failIfConfigured("NetAuditSinkDel"); err != nil {
+		return -1, err
+	}
+	out := m.auditSinks[:0]
+	for _, c := range m.auditSinks {
+		if c.Name != name {
+			out = append(out, c)
+		}
+	}
+	m.auditSinks = out
 	return 0, nil
 }
 

@@ -47,6 +47,19 @@ func sampleDocument() *Document {
 			ForwardIdentity: true,
 		}},
 		HalfClose: &cmn.HalfCloseConfig{Allow: false, CapSeconds: 600},
+		AuditSink: []cmn.AuditSinkConfig{
+			{
+				Name: cmn.AuditSinkCompliance, Address: "siem.example.net:6514",
+				CABundlePath: "/etc/loxilb/audit/ca.pem", ServerName: "siem.example.net",
+				ClientCertPath: "/etc/loxilb/audit/client.pem", ClientKeyPath: "/etc/loxilb/audit/client.key",
+				MaxFrameBytes: 16384, Facility: 13,
+			},
+			{
+				Name: "soc", Address: "soc.example.net:6514",
+				CABundlePath: "/etc/loxilb/audit/ca.pem", EnterpriseNumber: 32473,
+				Filter: &cmn.AuditSinkFilter{Streams: []string{"mgmt"}, Outcome: "failed", DataSample: 10},
+			},
+		},
 		LoadBalancer: []cmn.LbRuleMod{{
 			Serv: cmn.LbServiceArg{ServIP: "1.1.1.1", ServPort: 80, Proto: "tcp"},
 			Eps:  []cmn.LbEndPointArg{{EpIP: "10.0.0.1", EpPort: 8080}},
@@ -116,9 +129,13 @@ func sampleDocument() *Document {
 	}
 	// The recovery_dependencies manifest exactly as buildRecoveryManifest
 	// would emit it for this document (bindings present -> registries
-	// required; cert entry derived from the cert domain; sorted by type).
+	// required; cert entry derived from the cert domain; one entry per
+	// file the audit sinks name; sorted by type, then id).
 	doc.RecoveryDependencies = []cmn.RecoveryDependency{
 		{Type: cmn.RecoveryDepAPIKeyDB, ID: "aigw_dp_keys", Required: true},
+		{Type: cmn.RecoveryDepAuditSinkFile, ID: "/etc/loxilb/audit/ca.pem", Required: true},
+		{Type: cmn.RecoveryDepAuditSinkFile, ID: "/etc/loxilb/audit/client.key", Required: true},
+		{Type: cmn.RecoveryDepAuditSinkFile, ID: "/etc/loxilb/audit/client.pem", Required: true},
 		{Type: cmn.RecoveryDepAuthDB, ID: "aigw_mgmt", Required: true},
 		{Type: cmn.RecoveryDepCertStore, Digest: certSetDigest(doc.Domains.Cert), Required: true},
 		{Type: cmn.RecoveryDepEngineContracts, ID: "engine-contracts.loxilb.io/v1alpha1",
