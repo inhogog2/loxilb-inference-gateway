@@ -176,6 +176,18 @@ run_scenario audit-mgmt -- './config.sh' './validation.sh'
 # Needs jq on the host; config.sh pulls postgres:18.6 for the key store.
 run_scenario audit-data -- './config.sh' './validation.sh'
 
+# audit-sink: the trail leaving the gateway, container-only (no GPU), scored
+# at a strict RFC 5425 receiver that stands in for the SIEM: a session only
+# to a receiver the configured CA vouches for, nothing lost over a receiver
+# outage with or without a gateway restart in it, order kept across a seal,
+# a filtered sink's export sequence never used twice, and a segment pruned
+# before a sink had it put on record first. The crash arms need the
+# audit_faults tag in the image, built as for audit-data; validation.sh
+# fails rather than skips without it. Allow about 15 minutes: it restarts
+# the gateway a dozen times and waits on the 30-second prune pass. Needs jq,
+# openssl and python3 on the host.
+run_scenario audit-sink -- './config.sh' './validation.sh'
+
 # AI QoS on the mock topology (no GPU): rule-attached ingress policing,
 # full-proxy payload shaping, and egress-direction policing. The per-engine
 # QoS acceptance (token quotas end-to-end against real inference engines)

@@ -44,10 +44,12 @@ MANIFEST = os.path.join(HERE, "audit-coverage-manifest.json")
 
 # More than one scenario feeds this matrix, so a requirement names the one
 # that proves it rather than inheriting a single global. audit-mgmt covers the
-# management plane; audit-data covers the inference path's own trail.
+# management plane; audit-data covers the inference path's own trail;
+# audit-sink covers what leaves the gateway for a receiver.
 SCENARIOS = {
     "audit-mgmt": os.path.join(REPO, "cicd", "audit-mgmt", "validation.sh"),
     "audit-data": os.path.join(REPO, "cicd", "audit-data", "validation.sh"),
+    "audit-sink": os.path.join(REPO, "cicd", "audit-sink", "validation.sh"),
 }
 DEFAULT_SCENARIO = "audit-mgmt"
 CLAIMED_STAGE = "1b"
@@ -84,6 +86,19 @@ RED_TWINS = {
     "2-sinkrange": "llbigw-2-twin-2-sinkrange-r1",
     "2-polfields": "llbigw-2-twin-2-polfields-r1",
     "2-rotate": "llbigw-2-twin-2-rotate-r1",
+    # Stage 2, run against cicd/audit-sink; described in that scenario's
+    # README.
+    # sink-nopersist: a sink's saved state is never read back at start.
+    # sink-nolost: retention removes a segment a sink was not sent without
+    #   recording the loss.
+    # sink-nowindow: a failed session saves the cursor where it stood, not
+    #   at the start of the window it will send again.
+    # sink-nosealed: a sink standing in a segment sealed during the prune
+    #   pass is taken for one that lost its place.
+    "2-sink-nopersist": "llbigw-2-twin-2-sink-nopersist-r1",
+    "2-sink-nolost": "llbigw-2-twin-2-sink-nolost-r1",
+    "2-sink-nowindow": "llbigw-2-twin-2-sink-nowindow-r1",
+    "2-sink-nosealed": "llbigw-2-twin-2-sink-nosealed-r1",
 }
 
 
@@ -427,16 +442,82 @@ MATRIX = [
     entry("sys.segment.seal_failed", "A", [later("3", ["key_id", "errno_class"], "HMAC footer could not be written")]),
     entry("sys.segment.prune", "A", [
         req("1a", ["age_days", "bytes", "hold"], "announced durably before the delete", unit=["TestRetentionPrunesOneAnnouncedSegmentPerPass"]),
-        later("2", ["exported_to"], "unexported segments are refused"),
+        req("2", ["exported_to"],
+            "retention is not held back by a sink: the segment is removed whether or not every sink "
+            "was sent it, and the record names the sinks that were",
+            assertions=["T16-2e", "T16-2f", "T16-2g", "T16-2i"],
+            scenario="audit-sink",
+            unit=["TestPruneOfAnExportedSegmentLosesNothing", "TestPruneWithoutSinksSaysNothingAboutSinks"]),
     ]),
-    entry("sys.segment.lost_to_retention", "A", [later("2", ["seq_from", "seq_to", "sinks_pending"], "prune of an unexported segment")]),
+    entry("sys.segment.lost_to_retention", "A", [
+        req("2", ["seq_from", "seq_to", "sinks_pending"],
+            "written durably before the prune of a segment some sink was not sent: the range a "
+            "receiver will find missing and the sinks it is missing from",
+            assertions=["T16-2a", "T16-2b", "T16-2c", "T16-2d", "T16-2f", "T16-2h"],
+            scenario="audit-sink",
+            twin="2-sink-nolost",
+            unit=["TestPruneRecordsWhatASinkWasNeverSent", "TestPruneWaitsForTheRangeOfASegmentItDidNotSeal",
+                  "TestPruneDoesNotReadASegmentNoSinkIsBehind"]),
+        req("2", ["sinks_pending"],
+            "a sink that was sent the segment is not named: the pass's own records can seal the "
+            "active segment under it, and a sink standing in a segment sealed since the pass listed "
+            "the directory is ahead, not lost",
+            assertions=["T16-2j"],
+            scenario="audit-sink",
+            twin="2-sink-nosealed",
+            unit=["TestPruneDoesNotCallASinkBehindForASegmentSealedDuringThePass"]),
+    ]),
     entry("sys.hold.applied", "A", [later("3", ["hold_id"], "legal hold")]),
     entry("sys.hold.released", "A", [later("3", ["hold_id"], "legal hold")]),
-    entry("sys.sink.connect", "A", [later("2", ["peer_subject", "cert_not_after", "cursor"], "sink session established")]),
-    entry("sys.sink.disconnect", "A", [later("2", ["reason", "cursor", "reconnect_window_records"], "sink session lost")]),
-    entry("sys.sink.poison", "A", [later("2", ["poison_seq", "reason"], "record skipped after rejection")]),
-    entry("sys.sink.cursor_reset", "A", [later("2", ["old_cursor", "new_cursor", "method"], "cursor rebuilt")]),
-    entry("sys.sink.cursor_recovery_failed", "A", [later("2", ["errno_class"], "cursor cannot be rebuilt")]),
+    entry("sys.sink.connect", "A", [
+        req("2", ["peer_subject", "cert_not_after", "cursor"],
+            "one record per session, naming the certificate the receiver presented; a receiver "
+            "whose certificate does not verify never gets a session",
+            assertions=["TR-5a", "TR-5b", "TR-5c", "TR-6c", "TR-6d", "T5-1g"],
+            scenario="audit-sink",
+            unit=["TestSinkTailerComplianceSinkReceivesEveryRecordUnchanged",
+                  "TestSinkTailerOutageIsACursorThatDoesNotMove"]),
+    ]),
+    entry("sys.sink.disconnect", "A", [
+        req("2", ["reason", "cursor", "reconnect_window_records"],
+            "one record per lost session, with how far back the sink will send again; the records "
+            "written during the outage all arrive after it",
+            assertions=["TR-6g", "T5-1a", "T5-1b", "T5-1c", "T5-1e", "T5-1f", "T5-1g"],
+            scenario="audit-sink",
+            unit=["TestSinkTailerOutageIsACursorThatDoesNotMove",
+                  "TestSinkTailerFailedWriteBurnsItsNumberAndResendsTheWindow"]),
+        req("2", ["cursor"],
+            "the window outlives the process: a gateway restarted during the outage still sends "
+            "the previous boot's records the dead session swallowed",
+            assertions=["T5-2c", "T5-2d"],
+            scenario="audit-sink",
+            twin="2-sink-nowindow",
+            unit=["TestSinkTailerWindowSurvivesARestartDuringTheOutage"]),
+    ]),
+    entry("sys.sink.poison", "A", [
+        req("2", ["poison_seq", "reason"],
+            "a record the receiver rejects is skipped and named; a sink record is never the "
+            "subject of one",
+            unit=["TestSinkTailerPoisonRecordIsSkippedAndNamed",
+                  "TestSinkTailerRejectingEverythingDoesNotFeedOnItself"],
+            note="no bed row: the scenario's receiver accepts every well-formed frame"),
+    ]),
+    entry("sys.sink.cursor_reset", "A", [
+        req("2", ["old_cursor", "new_cursor", "method"],
+            "a cursor that cannot be read is rebuilt from the reservation, in the same epoch and "
+            "above every number already sent, and the record is durable before the sink acts on it",
+            assertions=["T23-3b", "T23-3c", "T23-3d", "T23-3e", "T23-3f", "T23-3h", "T23-3i", "T23-3j"],
+            scenario="audit-sink",
+            twin="2-sink-nopersist",
+            unit=["TestSinkTailerReportsACursorResetBeforeActingOnIt"]),
+    ]),
+    entry("sys.sink.cursor_recovery_failed", "A", [
+        req("2", ["errno_class", "cursor"],
+            "a segment that is listed and cannot be read out stalls the sink at its place: one "
+            "record per stall, nothing behind the segment is sent until it is gone",
+            unit=["TestSinkTailerReportsASegmentItCannotRead"],
+            note="no bed row"),
+    ]),
     entry("sys.replay.completed", "A", [later("2", ["replay_event_id", "sink", "seq_from", "seq_to"], "replay finished")]),
     entry("sys.key.rotated", "A", [later("3", ["old_key_id", "new_key_id"], "signing key rotated")]),
     entry("sys.ha.role_change", "A", [later("2", ["instance_id", "role_from", "role_to"], "HA transition")]),

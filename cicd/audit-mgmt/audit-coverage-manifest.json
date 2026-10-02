@@ -3,7 +3,7 @@
   "generated_by": "cicd/audit-mgmt/gen-coverage-manifest.py",
   "stage_claimed": "1b",
   "event_types": 65,
-  "matrix_digest": "66a0187f296af20c8740f79763ef492879905e22525e7f0963969f153be5b3e3",
+  "matrix_digest": "1ec08f85ba12f0c9e8d5de64c85304b6a028dbe418e83ddb04f6fddfca82b27f",
   "requirements_by_stage": {
     "1b": {
       "covered and tested": 4
@@ -12,8 +12,9 @@
       "uncovered": 9
     },
     "2": {
-      "covered and tested": 4,
-      "uncovered": 19
+      "covered and tested": 8,
+      "uncovered": 12,
+      "covered but untested": 5
     },
     "1a": {
       "covered and tested": 5,
@@ -1377,12 +1378,39 @@
             "seq_to",
             "sinks_pending"
           ],
-          "behaviour": "prune of an unexported segment",
-          "scenario": null,
-          "assertion_ids": [],
-          "unit_tests": [],
-          "red_twin_run_id": null,
-          "state": "uncovered"
+          "behaviour": "written durably before the prune of a segment some sink was not sent: the range a receiver will find missing and the sinks it is missing from",
+          "scenario": "audit-sink",
+          "assertion_ids": [
+            "T16-2a",
+            "T16-2b",
+            "T16-2c",
+            "T16-2d",
+            "T16-2f",
+            "T16-2h"
+          ],
+          "unit_tests": [
+            "TestPruneRecordsWhatASinkWasNeverSent",
+            "TestPruneWaitsForTheRangeOfASegmentItDidNotSeal",
+            "TestPruneDoesNotReadASegmentNoSinkIsBehind"
+          ],
+          "red_twin_run_id": "llbigw-2-twin-2-sink-nolost-r1",
+          "state": "covered and tested"
+        },
+        {
+          "stage": "2",
+          "fields": [
+            "sinks_pending"
+          ],
+          "behaviour": "a sink that was sent the segment is not named: the pass's own records can seal the active segment under it, and a sink standing in a segment sealed since the pass listed the directory is ahead, not lost",
+          "scenario": "audit-sink",
+          "assertion_ids": [
+            "T16-2j"
+          ],
+          "unit_tests": [
+            "TestPruneDoesNotCallASinkBehindForASegmentSealedDuringThePass"
+          ],
+          "red_twin_run_id": "llbigw-2-twin-2-sink-nosealed-r1",
+          "state": "covered and tested"
         }
       ],
       "state": "uncovered"
@@ -1436,12 +1464,20 @@
           "fields": [
             "exported_to"
           ],
-          "behaviour": "unexported segments are refused",
-          "scenario": null,
-          "assertion_ids": [],
-          "unit_tests": [],
+          "behaviour": "retention is not held back by a sink: the segment is removed whether or not every sink was sent it, and the record names the sinks that were",
+          "scenario": "audit-sink",
+          "assertion_ids": [
+            "T16-2e",
+            "T16-2f",
+            "T16-2g",
+            "T16-2i"
+          ],
+          "unit_tests": [
+            "TestPruneOfAnExportedSegmentLosesNothing",
+            "TestPruneWithoutSinksSaysNothingAboutSinks"
+          ],
           "red_twin_run_id": null,
-          "state": "uncovered"
+          "state": "covered but untested"
         }
       ],
       "state": "uncovered"
@@ -1573,12 +1609,22 @@
             "cert_not_after",
             "cursor"
           ],
-          "behaviour": "sink session established",
-          "scenario": null,
-          "assertion_ids": [],
-          "unit_tests": [],
+          "behaviour": "one record per session, naming the certificate the receiver presented; a receiver whose certificate does not verify never gets a session",
+          "scenario": "audit-sink",
+          "assertion_ids": [
+            "TR-5a",
+            "TR-5b",
+            "TR-5c",
+            "TR-6c",
+            "TR-6d",
+            "T5-1g"
+          ],
+          "unit_tests": [
+            "TestSinkTailerComplianceSinkReceivesEveryRecordUnchanged",
+            "TestSinkTailerOutageIsACursorThatDoesNotMove"
+          ],
           "red_twin_run_id": null,
-          "state": "uncovered"
+          "state": "covered but untested"
         }
       ],
       "state": "uncovered"
@@ -1591,14 +1637,18 @@
         {
           "stage": "2",
           "fields": [
-            "errno_class"
+            "errno_class",
+            "cursor"
           ],
-          "behaviour": "cursor cannot be rebuilt",
-          "scenario": null,
+          "behaviour": "a segment that is listed and cannot be read out stalls the sink at its place: one record per stall, nothing behind the segment is sent until it is gone",
+          "scenario": "unit",
           "assertion_ids": [],
-          "unit_tests": [],
+          "unit_tests": [
+            "TestSinkTailerReportsASegmentItCannotRead"
+          ],
           "red_twin_run_id": null,
-          "state": "uncovered"
+          "note": "no bed row",
+          "state": "covered but untested"
         }
       ],
       "state": "uncovered"
@@ -1615,12 +1665,23 @@
             "new_cursor",
             "method"
           ],
-          "behaviour": "cursor rebuilt",
-          "scenario": null,
-          "assertion_ids": [],
-          "unit_tests": [],
-          "red_twin_run_id": null,
-          "state": "uncovered"
+          "behaviour": "a cursor that cannot be read is rebuilt from the reservation, in the same epoch and above every number already sent, and the record is durable before the sink acts on it",
+          "scenario": "audit-sink",
+          "assertion_ids": [
+            "T23-3b",
+            "T23-3c",
+            "T23-3d",
+            "T23-3e",
+            "T23-3f",
+            "T23-3h",
+            "T23-3i",
+            "T23-3j"
+          ],
+          "unit_tests": [
+            "TestSinkTailerReportsACursorResetBeforeActingOnIt"
+          ],
+          "red_twin_run_id": "llbigw-2-twin-2-sink-nopersist-r1",
+          "state": "covered and tested"
         }
       ],
       "state": "uncovered"
@@ -1637,12 +1698,40 @@
             "cursor",
             "reconnect_window_records"
           ],
-          "behaviour": "sink session lost",
-          "scenario": null,
-          "assertion_ids": [],
-          "unit_tests": [],
+          "behaviour": "one record per lost session, with how far back the sink will send again; the records written during the outage all arrive after it",
+          "scenario": "audit-sink",
+          "assertion_ids": [
+            "TR-6g",
+            "T5-1a",
+            "T5-1b",
+            "T5-1c",
+            "T5-1e",
+            "T5-1f",
+            "T5-1g"
+          ],
+          "unit_tests": [
+            "TestSinkTailerOutageIsACursorThatDoesNotMove",
+            "TestSinkTailerFailedWriteBurnsItsNumberAndResendsTheWindow"
+          ],
           "red_twin_run_id": null,
-          "state": "uncovered"
+          "state": "covered but untested"
+        },
+        {
+          "stage": "2",
+          "fields": [
+            "cursor"
+          ],
+          "behaviour": "the window outlives the process: a gateway restarted during the outage still sends the previous boot's records the dead session swallowed",
+          "scenario": "audit-sink",
+          "assertion_ids": [
+            "T5-2c",
+            "T5-2d"
+          ],
+          "unit_tests": [
+            "TestSinkTailerWindowSurvivesARestartDuringTheOutage"
+          ],
+          "red_twin_run_id": "llbigw-2-twin-2-sink-nowindow-r1",
+          "state": "covered and tested"
         }
       ],
       "state": "uncovered"
@@ -1658,12 +1747,16 @@
             "poison_seq",
             "reason"
           ],
-          "behaviour": "record skipped after rejection",
-          "scenario": null,
+          "behaviour": "a record the receiver rejects is skipped and named; a sink record is never the subject of one",
+          "scenario": "unit",
           "assertion_ids": [],
-          "unit_tests": [],
+          "unit_tests": [
+            "TestSinkTailerPoisonRecordIsSkippedAndNamed",
+            "TestSinkTailerRejectingEverythingDoesNotFeedOnItself"
+          ],
           "red_twin_run_id": null,
-          "state": "uncovered"
+          "note": "no bed row: the scenario's receiver accepts every well-formed frame",
+          "state": "covered but untested"
         }
       ],
       "state": "uncovered"
