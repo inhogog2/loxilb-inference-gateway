@@ -16,6 +16,8 @@
 package handler
 
 import (
+	"time"
+
 	"github.com/loxilb-io/loxilb/pkg/audit"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -99,6 +101,44 @@ var (
 		"loxilb_audit_delegation_lookups_total",
 		"Account lookups made to decide whether a named originator is trusted; a request without the header makes none.",
 		nil, nil)
+	auditLostToRetentionDesc = prometheus.NewDesc(
+		"loxilb_audit_records_lost_to_retention_total",
+		"Records in segments the retention policy deleted before every configured sink had been sent them; each such segment is named in the trail with its range before the deletion.",
+		nil, nil)
+)
+
+// The per-sink families exist for a sink while it is configured. A sink
+// configured again starts its counters again.
+var (
+	auditSinkLabels        = []string{"sink"}
+	auditSinkConnectedDesc = prometheus.NewDesc(
+		"loxilb_audit_sink_connected",
+		"1 while the sink's receiver took the last record it was offered; 0 before the first record of a session, while the receiver is away and while the sink is stalled.",
+		auditSinkLabels, nil)
+	auditSinkExportedDesc = prometheus.NewDesc(
+		"loxilb_audit_sink_records_exported_total",
+		"Records the sink's receiver accepted, records sent again after a lost session included.",
+		auditSinkLabels, nil)
+	auditSinkExportFailuresDesc = prometheus.NewDesc(
+		"loxilb_audit_sink_export_failures_total",
+		"Submissions to the sink's receiver that failed; the record stays in hand and is sent again.",
+		auditSinkLabels, nil)
+	auditSinkPoisonDesc = prometheus.NewDesc(
+		"loxilb_audit_sink_poison_total",
+		"Records passed over because the sink cannot carry them; each is named in the trail.",
+		auditSinkLabels, nil)
+	auditSinkLagDropsDesc = prometheus.NewDesc(
+		"loxilb_audit_sink_lag_drops_total",
+		"Times the segment the sink stood in was deleted by retention before it had been read out.",
+		auditSinkLabels, nil)
+	auditSinkLagBytesDesc = prometheus.NewDesc(
+		"loxilb_audit_sink_cursor_lag_bytes",
+		"Bytes of the trail's files behind the sink: the rest of the segment it stands in and every later one. 0 once the sink has been through every record; an upper bound while its place inside a compressed segment, or before the first record of a run, is not known.",
+		auditSinkLabels, nil)
+	auditSinkLagSecondsDesc = prometheus.NewDesc(
+		"loxilb_audit_sink_cursor_lag_seconds",
+		"Age of the oldest record the sink has read and not been able to send; 0 when it holds none.",
+		auditSinkLabels, nil)
 )
 
 // auditCollector emits the audit families from the writer's snapshot on
@@ -116,6 +156,9 @@ func (auditCollector) Describe(ch chan<- *prometheus.Desc) {
 		auditLastWriteDesc, auditLastHeartbeatDesc, auditUnattributedDesc,
 		auditOrphanedIntentsDesc, auditSealFailuresDesc, auditSegmentsPrunedDesc,
 		auditReserveBreachedDesc, auditOriginatorDroppedDesc, auditDelegationLookupsDesc,
+		auditLostToRetentionDesc,
+		auditSinkConnectedDesc, auditSinkExportedDesc, auditSinkExportFailuresDesc,
+		auditSinkPoisonDesc, auditSinkLagDropsDesc, auditSinkLagBytesDesc, auditSinkLagSecondsDesc,
 	} {
 		ch <- d
 	}
@@ -168,6 +211,35 @@ func (auditCollector) Collect(ch chan<- prometheus.Metric) {
 		breached = 1
 	}
 	ch <- prometheus.MustNewConstMetric(auditReserveBreachedDesc, prometheus.GaugeValue, breached)
+	ch <- prometheus.MustNewConstMetric(auditLostToRetentionDesc, prometheus.CounterValue, float64(st.LostToRetention))
+
+	// The tailers are read without the sink lock: a scrape must not wait
+	// for a handler that is waiting for a tailer to stop.
+	p := auditSinkTailers.Load()
+	if p == nil {
+		return
+	}
+	now := time.Now()
+	for _, t := range *p {
+		ts, place := t.Stats(), t.Place()
+		connected := 0.0
+		if ts.State == audit.SinkConnected {
+			connected = 1
+		}
+		seconds := 0.0
+		if !place.Idle && !place.Oldest.IsZero() {
+			if d := now.Sub(place.Oldest).Seconds(); d > 0 {
+				seconds = d
+			}
+		}
+		ch <- prometheus.MustNewConstMetric(auditSinkConnectedDesc, prometheus.GaugeValue, connected, ts.Name)
+		ch <- prometheus.MustNewConstMetric(auditSinkExportedDesc, prometheus.CounterValue, float64(ts.Submitted), ts.Name)
+		ch <- prometheus.MustNewConstMetric(auditSinkExportFailuresDesc, prometheus.CounterValue, float64(ts.SubmitErrors), ts.Name)
+		ch <- prometheus.MustNewConstMetric(auditSinkPoisonDesc, prometheus.CounterValue, float64(ts.Poison), ts.Name)
+		ch <- prometheus.MustNewConstMetric(auditSinkLagDropsDesc, prometheus.CounterValue, float64(ts.LagDrops), ts.Name)
+		ch <- prometheus.MustNewConstMetric(auditSinkLagBytesDesc, prometheus.GaugeValue, float64(w.TrailBytesBehind(place)), ts.Name)
+		ch <- prometheus.MustNewConstMetric(auditSinkLagSecondsDesc, prometheus.GaugeValue, seconds, ts.Name)
+	}
 }
 
 func init() {

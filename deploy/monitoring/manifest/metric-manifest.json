@@ -1,18 +1,18 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-02T10:45:07+00:00",
-  "source_revision": "6e1efd15ad30f190b9e6e2a8ecd9d9c2f29bb1d0"
+  "generated_at": "2026-10-02T12:17:48+00:00",
+  "source_revision": "4e5712b4f3b9b89b1a618bc1d26d88c5cec4c9a1"
  },
  "contract": {
-  "total": 305,
+  "total": 313,
   "owners": {
-   "loxilb": 282,
+   "loxilb": 290,
    "loxilb-ai-controller": 19,
    "loxilb-kv-agent": 4
   },
   "classes": {
-   "default": 249,
+   "default": 257,
    "dpu-doca": 24,
    "aictrl-bridge": 8,
    "kv-agent-health": 1,
@@ -21,11 +21,11 @@
   }
  },
  "coverage": {
-  "default_families": 249,
+  "default_families": 257,
   "default_referenced": 169,
   "default_waived": 21,
-  "default_unreferenced": 59,
-  "writer_classified": 249,
+  "default_unreferenced": 67,
+  "writer_classified": 257,
   "writer_unclassified": 0,
   "writer_unverified": 64
  },
@@ -4342,7 +4342,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:98",
+   "source": "api/restapi/handler/audit_metrics.go:100",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4353,7 +4353,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditDelegationLookupsDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4361,8 +4361,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4383,7 +4383,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:70",
+   "source": "api/restapi/handler/audit_metrics.go:72",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4394,7 +4394,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditLastHeartbeatDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4402,8 +4402,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4424,7 +4424,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:66",
+   "source": "api/restapi/handler/audit_metrics.go:68",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4435,7 +4435,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditLastWriteDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4443,8 +4443,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4465,7 +4465,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:54",
+   "source": "api/restapi/handler/audit_metrics.go:56",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4476,7 +4476,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditMgmtTimeoutsDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4484,8 +4484,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4506,7 +4506,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:94",
+   "source": "api/restapi/handler/audit_metrics.go:96",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4517,7 +4517,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditOriginatorDroppedDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4525,8 +4525,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4547,7 +4547,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:78",
+   "source": "api/restapi/handler/audit_metrics.go:80",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4558,7 +4558,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditOrphanedIntentsDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4566,8 +4566,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4591,7 +4591,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:38",
+   "source": "api/restapi/handler/audit_metrics.go:40",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4602,7 +4602,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditRecordsDroppedDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4610,14 +4610,55 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
     }
    ],
    "verification_evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
+  },
+  {
+   "name": "loxilb_audit_records_lost_to_retention_total",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "counter",
+   "definition_mechanism": "desc",
+   "labels": [],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/restapi/handler/audit_metrics.go:104",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "auditCollector",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 169,
+     "writes": "auditLostToRetentionDesc",
+     "note": "read from the audit writer's Stats snapshot at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 245,
+     "call_line": 246,
+     "calls": "auditCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks reads the family at zero on a fresh trail; pkg/audit TestPruneRecordsWhatASinkWasNeverSent drives the counter behind it."
   },
   {
    "name": "loxilb_audit_records_unattributed_total",
@@ -4632,7 +4673,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:74",
+   "source": "api/restapi/handler/audit_metrics.go:76",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4643,7 +4684,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditUnattributedDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4651,8 +4692,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4675,7 +4716,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:34",
+   "source": "api/restapi/handler/audit_metrics.go:36",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4686,7 +4727,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditRecordsWrittenDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4694,8 +4735,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4716,7 +4757,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:90",
+   "source": "api/restapi/handler/audit_metrics.go:92",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4727,7 +4768,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditReserveBreachedDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4735,8 +4776,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4757,7 +4798,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:42",
+   "source": "api/restapi/handler/audit_metrics.go:44",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4768,7 +4809,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditResultWriteFailuresDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4776,8 +4817,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4798,7 +4839,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:82",
+   "source": "api/restapi/handler/audit_metrics.go:84",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4809,7 +4850,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditSealFailuresDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4817,8 +4858,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4839,7 +4880,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:86",
+   "source": "api/restapi/handler/audit_metrics.go:88",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4850,7 +4891,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditSegmentsPrunedDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4858,14 +4899,315 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
     }
    ],
    "verification_evidence": "api/restapi/handler TestAuditMetricsWithoutWriter and TestAuditMetricsFollowTheWriter compare the collector's exposition against the writer's Stats snapshot with and without a writer installed; the gate tests behind the counters (audit_gate_test.go, audit_originator_test.go) drive the values they read."
+  },
+  {
+   "name": "loxilb_audit_sink_connected",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "gauge",
+   "definition_mechanism": "desc",
+   "labels": [
+    "sink"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/restapi/handler/audit_metrics.go:114",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "auditCollector",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 169,
+     "writes": "auditSinkConnectedDesc",
+     "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 245,
+     "call_line": 246,
+     "calls": "auditCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+  },
+  {
+   "name": "loxilb_audit_sink_cursor_lag_bytes",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "gauge",
+   "definition_mechanism": "desc",
+   "labels": [
+    "sink"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/restapi/handler/audit_metrics.go:134",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "auditCollector",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 169,
+     "writes": "auditSinkLagBytesDesc",
+     "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 245,
+     "call_line": 246,
+     "calls": "auditCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+  },
+  {
+   "name": "loxilb_audit_sink_cursor_lag_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "gauge",
+   "definition_mechanism": "desc",
+   "labels": [
+    "sink"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/restapi/handler/audit_metrics.go:138",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "auditCollector",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 169,
+     "writes": "auditSinkLagSecondsDesc",
+     "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 245,
+     "call_line": 246,
+     "calls": "auditCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+  },
+  {
+   "name": "loxilb_audit_sink_export_failures_total",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "counter",
+   "definition_mechanism": "desc",
+   "labels": [
+    "sink"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/restapi/handler/audit_metrics.go:122",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "auditCollector",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 169,
+     "writes": "auditSinkExportFailuresDesc",
+     "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 245,
+     "call_line": 246,
+     "calls": "auditCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+  },
+  {
+   "name": "loxilb_audit_sink_lag_drops_total",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "counter",
+   "definition_mechanism": "desc",
+   "labels": [
+    "sink"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/restapi/handler/audit_metrics.go:130",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "auditCollector",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 169,
+     "writes": "auditSinkLagDropsDesc",
+     "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 245,
+     "call_line": 246,
+     "calls": "auditCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+  },
+  {
+   "name": "loxilb_audit_sink_poison_total",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "counter",
+   "definition_mechanism": "desc",
+   "labels": [
+    "sink"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/restapi/handler/audit_metrics.go:126",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "auditCollector",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 169,
+     "writes": "auditSinkPoisonDesc",
+     "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 245,
+     "call_line": 246,
+     "calls": "auditCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
+  },
+  {
+   "name": "loxilb_audit_sink_records_exported_total",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "counter",
+   "definition_mechanism": "desc",
+   "labels": [
+    "sink"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/restapi/handler/audit_metrics.go:118",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "auditCollector",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 169,
+     "writes": "auditSinkExportedDesc",
+     "note": "read at scrape time from each running sink tailer's counters and place, one series per configured sink; the tailers are listed without the sink lock and nothing on the export path touches a metric"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/restapi/handler/audit_metrics.go",
+     "def_line": 245,
+     "call_line": 246,
+     "calls": "auditCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/restapi/handler TestAuditMetricsFollowTheSinks scrapes the collector with two sinks configured, compares the exported count with the tailer's own, and takes one receiver away to see connected, failures and lag move for that sink alone; pkg/audit TestSinkTailerPlaceSaysHowFarBehindTheSinkIs and TestTrailBytesBehind check the place and the byte count against the files."
   },
   {
    "name": "loxilb_audit_sync_failures_total",
@@ -4880,7 +5222,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:50",
+   "source": "api/restapi/handler/audit_metrics.go:52",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4891,7 +5233,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditSyncFailuresDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4899,8 +5241,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4921,7 +5263,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:46",
+   "source": "api/restapi/handler/audit_metrics.go:48",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4932,7 +5274,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditWriteFailuresDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4940,8 +5282,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -4962,7 +5304,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:58",
+   "source": "api/restapi/handler/audit_metrics.go:60",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -4973,7 +5315,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditWriterPanicsDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -4981,8 +5323,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -5003,7 +5345,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:62",
+   "source": "api/restapi/handler/audit_metrics.go:64",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -5014,7 +5356,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditWriterRestartsDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -5022,8 +5364,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -5044,7 +5386,7 @@
    "privacy": "none",
    "consumers": [],
    "waiver": "",
-   "source": "api/restapi/handler/audit_metrics.go:30",
+   "source": "api/restapi/handler/audit_metrics.go:32",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
    "implementation_status": "verified-static",
@@ -5055,7 +5397,7 @@
      "kind": "method",
      "receiver": "auditCollector",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 126,
+     "def_line": 169,
      "writes": "auditWriterUpDesc",
      "note": "read from the audit writer's Stats snapshot and the gate's own counters at scrape time; nothing on the write path touches a metric. Emitted from start, at zero, so absence and quiet are distinguishable"
     },
@@ -5063,8 +5405,8 @@
      "symbol": "init",
      "kind": "func",
      "file": "api/restapi/handler/audit_metrics.go",
-     "def_line": 173,
-     "call_line": 174,
+     "def_line": 245,
+     "call_line": 246,
      "calls": "auditCollector",
      "entry_point": "registry-collector",
      "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"

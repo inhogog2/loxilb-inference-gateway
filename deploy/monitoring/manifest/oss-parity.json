@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-01T06:36:23+00:00",
-  "source_revision": "5214f2f2b4b3bf1e9ca9362d5a94f6c162cd074a",
+  "generated_at": "2026-10-02T12:18:21+00:00",
+  "source_revision": "4e5712b4f3b9b89b1a618bc1d26d88c5cec4c9a1",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 305,
+  "gateway_families": 313,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 270,
+  "absent": 278,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -1485,6 +1485,17 @@
    }
   },
   {
+   "name": "loxilb_audit_records_lost_to_retention_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
    "name": "loxilb_audit_records_unattributed_total",
    "owner": "loxilb",
    "class": "default",
@@ -1550,6 +1561,97 @@
    "gateway": {
     "type": "counter",
     "labels": []
+   }
+  },
+  {
+   "name": "loxilb_audit_sink_connected",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": [
+     "sink"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_audit_sink_cursor_lag_bytes",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": [
+     "sink"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_audit_sink_cursor_lag_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": [
+     "sink"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_audit_sink_export_failures_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "sink"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_audit_sink_lag_drops_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "sink"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_audit_sink_poison_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "sink"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_audit_sink_records_exported_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "sink"
+    ]
    }
   },
   {
