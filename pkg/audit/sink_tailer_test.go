@@ -502,6 +502,130 @@ func TestSinkTailerFailedWriteBurnsItsNumberAndResendsTheWindow(t *testing.T) {
 	}
 }
 
+// The window is owed to the receiver whether or not the process that
+// noticed the failure lives to send it: a sink stopped while its receiver
+// is away starts again at the window, not after it.
+func TestSinkTailerWindowSurvivesARestartDuringTheOutage(t *testing.T) {
+	cfg := testConfig(t)
+	w := startWriter(t, cfg)
+	writeN(t, w, 6, "r")
+
+	sink := &fakeSink{}
+	tc := tailerConfig(cfg.Dir, "second", sink, w)
+	tc.Filter = SinkFilter{Streams: []Stream{StreamMgmt}}
+	tc.ReconnectWindow = 3
+	tl := startTailer(t, tc)
+	waitFor(t, "the first records", func() bool { return len(sink.got()) == 6 })
+	waitFor(t, "the cursor to be saved behind them", func() bool {
+		return tl.Stats().Cursor.Position == tl.Progress().Position
+	})
+	at := tl.Progress().Position
+
+	// The receiver dies with the session up: a write fails after bytes
+	// went out, and every attempt after it.
+	sink.setVerdict(func(int, []byte) error { return errors.New("write: broken pipe") })
+	writeN(t, w, 1, "during")
+	waitFor(t, "the sink to report the outage", func() bool { return tl.Stats().State == SinkDisconnected })
+	// The state changes before the cursor is saved; the save is what a
+	// restart goes by.
+	waitFor(t, "the saved cursor to go back to the start of the window", func() bool {
+		saved := tl.Stats().Cursor.Position
+		return saved.SegmentUUID == at.SegmentUUID && saved.Seq < at.Seq
+	})
+	if reached := tl.Progress().Position; reached != at {
+		t.Fatalf("the sink reports itself at %+v, want %+v: what it sent it is still past", reached, at)
+	}
+	stopTailer(t, tl)
+
+	sink.setVerdict(nil)
+	startTailer(t, tc)
+	waitFor(t, "the window and the record of the outage", func() bool { return len(sink.got()) == 10 })
+	time.Sleep(20 * time.Millisecond)
+	got := sink.got()
+	if len(got) != 10 {
+		t.Fatalf("%d frames, want 10", len(got))
+	}
+	type key struct{ epoch, xseq uint64 }
+	used := map[key]bool{}
+	for i, f := range got {
+		k := key{f.epoch, f.xseq}
+		if used[k] {
+			t.Fatalf("xseq %d was used twice", f.xseq)
+		}
+		used[k] = true
+		if i >= 6 && i < 9 && f.field(t, "seq") != got[i-3].field(t, "seq") {
+			t.Fatalf("frame %d is seq %s, want the window's %s again", i, f.field(t, "seq"), got[i-3].field(t, "seq"))
+		}
+	}
+	if !strings.Contains(string(got[9].raw), `"/during/0"`) {
+		t.Fatalf("the record written during the outage did not follow the window: %s", got[9].raw)
+	}
+}
+
+// A resend ends at the record the sink had reached. Retention can take the
+// segment that record is in while the receiver is away; the resend must
+// end all the same, or the cursor never moves again.
+func TestSinkTailerResendEndsWhenItsPlaceWasRemoved(t *testing.T) {
+	cfg := testConfig(t)
+	w := startWriter(t, cfg)
+	writeN(t, w, 4, "one")
+	sink := &fakeSink{}
+	tc := tailerConfig(cfg.Dir, "siem", sink, w)
+	tc.Compliance = true
+	// Wide enough that the window begins in the first segment.
+	tc.ReconnectWindow = 32
+	tl := startTailer(t, tc)
+	settled(t, cfg.Dir, sink, 0)
+	sealNow(t, w)
+	writeN(t, w, 3, "two")
+	settled(t, cfg.Dir, sink, 0)
+	place := tl.Progress().Position.SegmentUUID
+	if place != w.seg.currentUUID() {
+		t.Fatalf("the sink is in %s, want the second segment %s", place, w.seg.currentUUID())
+	}
+
+	sink.setVerdict(func(int, []byte) error { return errors.New("write: broken pipe") })
+	writeN(t, w, 1, "lost")
+	waitFor(t, "the sink to report the outage", func() bool { return tl.Stats().State == SinkDisconnected })
+
+	// While the receiver is away the second segment is sealed and removed.
+	sealNow(t, w)
+	writeN(t, w, 2, "three")
+	waitCompressed(t, cfg.Dir)
+	removed := 0
+	entries, _ := os.ReadDir(cfg.Dir)
+	for _, e := range entries {
+		path := filepath.Join(cfg.Dir, e.Name())
+		if _, _, ok := parseSegmentName(e.Name()); ok && readHeaderUUID(path) == place {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			removed++
+		}
+	}
+	if removed != 1 {
+		t.Fatalf("%d files held the second segment, want 1", removed)
+	}
+
+	sink.setVerdict(nil)
+	waitFor(t, "the cursor to reach the segment being written", func() bool {
+		return tl.Stats().Cursor.SegmentUUID == w.seg.currentUUID()
+	})
+	st := tl.Stats()
+	if st.LagDrops != 1 {
+		t.Fatalf("lag drops %d, want 1: the segment was removed before it was sent", st.LagDrops)
+	}
+	before := st.Resent
+	writeN(t, w, 2, "four")
+	waitFor(t, "the records written afterwards", func() bool {
+		got := sink.got()
+		return strings.Contains(string(got[len(got)-1].raw), `"/four/1"`) || strings.Contains(string(got[len(got)-2].raw), `"/four/1"`)
+	})
+	if after := tl.Stats().Resent; after != before {
+		t.Fatalf("%d records written after the resend were sent as repeats", after-before)
+	}
+}
+
 func TestSinkTailerPoisonRecordIsSkippedAndNamed(t *testing.T) {
 	cfg := testConfig(t)
 	w := startWriter(t, cfg)
@@ -767,6 +891,84 @@ func TestSinkTailerSegmentRemovedBeforeItWasSent(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(arrived, "\n"), `"/two/`) {
 		t.Fatal("a record of a removed segment arrived")
+	}
+}
+
+func TestSinkTailerReportsASegmentItCannotRead(t *testing.T) {
+	cfg := testConfig(t)
+	w := startWriter(t, cfg)
+	writeN(t, w, 3, "one")
+	sink := &fakeSink{}
+	tc := tailerConfig(cfg.Dir, "siem", sink, w)
+	tc.Compliance = true
+	tl := startTailer(t, tc)
+	settled(t, cfg.Dir, sink, 0)
+	stopTailer(t, tl)
+
+	// While the sink is away the trail rotates twice, and the newer of
+	// the two sealed segments is damaged where it lies: it is cut short,
+	// so that it still says which segment it is and cannot be read out.
+	sealNow(t, w)
+	writeN(t, w, 3, "two")
+	sealNow(t, w)
+	writeN(t, w, 2, "three")
+	waitCompressed(t, cfg.Dir)
+	var damaged string
+	entries, _ := os.ReadDir(cfg.Dir)
+	for _, e := range entries {
+		if _, gz, ok := parseSegmentName(e.Name()); ok && gz {
+			damaged = filepath.Join(cfg.Dir, e.Name())
+		}
+	}
+	if damaged == "" {
+		t.Fatal("no compressed segment to damage")
+	}
+	whole, err := os.ReadFile(damaged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(damaged, whole[:len(whole)*3/4], fileMode); err != nil {
+		t.Fatal(err)
+	}
+	if hdr, ok := readSegmentHeader(damaged); !ok || hdr.SegmentUUID == "" {
+		t.Fatal("the cut took the segment's header with it; the test needs a segment that is still listed")
+	}
+
+	before := len(sink.got())
+	tl2 := startTailer(t, tc)
+	waitFor(t, "the sink to stall", func() bool { return tl2.Stats().State == SinkStalled })
+	waitFor(t, "further attempts on the same segment", func() bool { return tl2.Stats().ReadErrors >= 4 })
+	failed := eventsOf(t, cfg.Dir, "sys.sink.cursor_recovery_failed")
+	if len(failed) != 1 {
+		t.Fatalf("%d cursor_recovery_failed records for one stall, want 1", len(failed))
+	}
+	detail, _ := failed[0]["detail"].(map[string]any)
+	if detail["resource"] != "audit_sink:siem" || detail["errno_class"] != "other" {
+		t.Fatalf("the record does not name the sink and the class of the failure: %v", detail)
+	}
+	if at, _ := detail["cursor"].(map[string]any); at["segment_uuid"] == nil || at["segment_uuid"] == "" {
+		t.Fatalf("the record does not name the place the sink stands at: %v", detail)
+	}
+	for _, f := range sink.got()[before:] {
+		if strings.Contains(string(f.raw), `"/three/`) {
+			t.Fatal("the sink went past a segment it could not read")
+		}
+	}
+
+	// The segment is taken away. What was in it is lost to this sink; the
+	// records behind it are not.
+	if err := os.Remove(damaged); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the records behind the damaged segment", func() bool {
+		var arrived []string
+		for _, f := range sink.got()[before:] {
+			arrived = append(arrived, string(f.raw))
+		}
+		return strings.Contains(strings.Join(arrived, "\n"), `"/three/1"`)
+	})
+	if tl2.Stats().State == SinkStalled {
+		t.Fatal("the sink still reports itself stalled after it continued")
 	}
 }
 

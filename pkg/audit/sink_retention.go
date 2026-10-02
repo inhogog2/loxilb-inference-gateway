@@ -186,6 +186,22 @@ func (w *Writer) sinkStandings(segs []SegmentInfo, at int, uuid string) (exporte
 		}
 		return 0, false
 	}
+	// segs was listed when the pass began, and the records the pass writes
+	// can seal the active segment under it. A place in a segment sealed
+	// since then is in none of segs and is not the active one either; it is
+	// later than all of them, and not a place that was lost.
+	var sealedNow map[string]bool
+	sealedSince := func(u string) bool {
+		if sealedNow == nil {
+			sealedNow = map[string]bool{}
+			if fresh, err := w.seg.listSealed(); err == nil {
+				for _, s := range fresh {
+					sealedNow[w.seg.uuidOf(s.Path)] = true
+				}
+			}
+		}
+		return sealedNow[u]
+	}
 	var inside []SinkProgress
 	for _, s := range sinks {
 		p := s.Position
@@ -197,9 +213,13 @@ func (w *Writer) sinkStandings(segs []SegmentInfo, at int, uuid string) (exporte
 		case p.SegmentUUID == uuid:
 			inside = append(inside, s)
 		default:
-			if i, ok := indexOf(p.SegmentUUID); ok && i > at {
+			i, ok := indexOf(p.SegmentUUID)
+			switch {
+			case ok && i > at:
 				exported = append(exported, s.Name)
-			} else {
+			case !ok && sealedSince(p.SegmentUUID):
+				exported = append(exported, s.Name)
+			default:
 				pending = append(pending, s.Name)
 			}
 		}

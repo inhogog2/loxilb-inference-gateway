@@ -138,6 +138,20 @@ func (r *TrailReader) Seek(after Position) {
 	r.start, r.opened = after, false
 }
 
+// Holds reports whether the directory still holds the segment uuid names.
+func (r *TrailReader) Holds(uuid string) (bool, error) {
+	segs, err := r.scan()
+	if err != nil {
+		return false, err
+	}
+	for i := range segs {
+		if segs[i].uuid == uuid {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Close releases the open segment. The reader can be used again: the next
 // call to Next continues after the last record returned.
 func (r *TrailReader) Close() {

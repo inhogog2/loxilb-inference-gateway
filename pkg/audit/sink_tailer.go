@@ -520,6 +520,8 @@ func (t *SinkTailer) run() {
 		// While resending, the tailer is going over records at or before
 		// pos again; pos does not move until it is reached.
 		resending bool
+		// resendSeg is the segment the resend was last seen in.
+		resendSeg string
 		backoff   = t.cfg.Retry
 		// One place more than the window: sending the window again means
 		// continuing after the record before it.
@@ -541,6 +543,22 @@ func (t *SinkTailer) run() {
 		}
 		dirty, inBatch = false, 0
 		t.setCursor(seq.cursor())
+	}
+	// rewind saves the cursor at an earlier place than pos: the start of a
+	// resend. The resend is owed to the receiver whether or not this
+	// process lives to make it, and the saved cursor is all a later one
+	// has to go by. pos itself, and what the pruner is told, stay where
+	// they are.
+	rewind := func(to Position) {
+		if err := seq.commit(to); err != nil {
+			t.cursorErrors.Add(1)
+			t.cfg.Logf("audit: sink %s: cursor not saved: %v", t.cfg.Name, err)
+		}
+		dirty, inBatch = false, 0
+		c := seq.cursor()
+		t.mu.Lock()
+		t.cursor = c
+		t.mu.Unlock()
 	}
 	finish := func() {
 		commit()
@@ -622,6 +640,21 @@ func (t *SinkTailer) run() {
 				}
 				backoff = nextBackoff(backoff, t.cfg.RetryMax)
 				continue
+			}
+		}
+
+		// A resend ends at the record pos names. When retention has taken
+		// the segment that record was in, it will never be met, and a
+		// resend left waiting for it would send every later record as a
+		// repeat and never move the cursor again. The directory is asked
+		// once for each segment the resend enters.
+		if resending && cur.Pos.SegmentUUID != resendSeg {
+			resendSeg = cur.Pos.SegmentUUID
+			if held, err := rd.Holds(pos.SegmentUUID); err == nil && !held && pos.SegmentUUID != "" {
+				t.lagDrops.Add(1)
+				t.cfg.Logf("audit: sink %s: segment %s was removed before it was sent; continuing from %s",
+					t.cfg.Name, pos.SegmentUUID, cur.Pos.SegmentUUID)
+				resending = false
 			}
 		}
 
@@ -715,17 +748,24 @@ func (t *SinkTailer) run() {
 					ReconnectWindowRecords: &w,
 				}), false)
 			}
-			commit()
 			// A session that was up and then failed may have lost what
 			// was written just before the failure. Go back over the
-			// window; the record in hand is read again after it.
+			// window; the record in hand is read again after it. The
+			// cursor is saved at the start of the window, not at pos: a
+			// restart before the receiver is back must begin there too.
+			rewound := false
 			if from == SinkConnected && !resending {
 				if start, ok := recent.oldest(); ok && start != pos {
-					resending = true
+					resending, resendSeg = true, ""
 					have = false
 					recent.clear()
 					rd.Seek(start)
+					rewind(start)
+					rewound = true
 				}
+			}
+			if !rewound && !resending {
+				commit()
 			}
 			if !t.wait(backoff) {
 				finish()

@@ -137,6 +137,45 @@ func TestPruneRecordsWhatASinkWasNeverSent(t *testing.T) {
 	}
 }
 
+// The records a pass writes can seal the active segment under it. A sink
+// that was in that segment is then in none of the segments the pass listed,
+// and it is ahead of all of them: it must not be called behind.
+func TestPruneDoesNotCallASinkBehindForASegmentSealedDuringThePass(t *testing.T) {
+	st := newSealedTrail(t)
+	oldest := st.uuids[0]
+	was := st.w.seg.currentUUID()
+	sealed := false
+	// The pruner asks from the writer goroutine, which is where a segment
+	// is sealed, so the seal lands exactly between the listing and the
+	// decision.
+	st.w.SetSinkProgress(func() []SinkProgress {
+		if !sealed {
+			sealed = true
+			if err := st.w.rotate(); err != nil {
+				t.Errorf("seal: %v", err)
+			}
+		}
+		return []SinkProgress{{Name: "follower", Position: Position{SegmentUUID: was, Seq: 1}}}
+	})
+	st.pruneOldest(t)
+	if got := st.w.Stats().LostToRetention; got != 0 {
+		t.Errorf("%d records counted as lost to a sink that is ahead", got)
+	}
+	closeWriter(t, st.w)
+
+	ls := readDir(t, st.cfg.Dir)
+	if lost := ofType(ls, "sys.segment.lost_to_retention"); len(lost) != 0 {
+		t.Fatalf("a loss is recorded for a sink that is ahead: %v", lost[0].detail())
+	}
+	prunes := ofType(ls, "sys.segment.prune")
+	if len(prunes) != 1 || prunes[0].detail()["resource"] != "audit_segment:"+oldest {
+		t.Fatalf("%d prune records, want one of the oldest segment", len(prunes))
+	}
+	if got, want := stringsOf(prunes[0].detail()["exported_to"]), []string{"follower"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("exported to %v, want %v", got, want)
+	}
+}
+
 // A segment every sink has been sent is pruned as before, with the sinks
 // that have it named, and nothing is called lost.
 func TestPruneOfAnExportedSegmentLosesNothing(t *testing.T) {
