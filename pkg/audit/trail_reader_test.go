@@ -335,7 +335,10 @@ func TestTrailReaderPositionLost(t *testing.T) {
 	pos := first.Pos
 	r.Close()
 
-	// Retention removes the segment the position is in.
+	// Retention removes the segment the position is in. The directory is
+	// listed once compression has finished: a segment removed while it is
+	// being compressed comes back under its compressed name.
+	waitCompressed(t, cfg.Dir)
 	entries, _ := os.ReadDir(cfg.Dir)
 	removed := 0
 	for _, e := range entries {
