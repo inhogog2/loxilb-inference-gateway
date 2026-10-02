@@ -10325,8 +10325,13 @@ definitions:
               the connection is accelerated is not accelerated, so that it can
               be held. off cuts the client at its FIN, as before. inherit, or
               omitted on create, runs on the process default, which is off.
-              hold+parked is refused (400) until it is available, and hold is
-              refused (400) on a service whose mode is not fullproxy. Replace and
+              hold+parked is refused (400) until it is available. hold is refused
+              (400) on a service whose mode is not fullproxy, whose clients use
+              TLS (security 1 or 2: TLS connections are never held), or that runs
+              P/D (pd_disagg_mode, not yet measured) - judged on the service as a
+              replace leaves it, so switching pd_disagg_mode on under a stored
+              hold is refused as well. A snapshot restore of such a rule drops
+              the hold with a warning. Replace and
               null semantics as fc_mode; a replace that changes nothing else
               applies in place, to half-closes from then on. Read back only when
               declared.

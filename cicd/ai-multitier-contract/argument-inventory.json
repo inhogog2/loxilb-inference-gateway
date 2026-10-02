@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "4a22a83c7e4da322639bcb7bfcb0a9b0e071f4106b13d24324bd36c191c41b29"
+    "swagger.yml": "00c978e9c90395f7839935e91f3323497e3077f4b3c5d10d569dd9235040a2b0"
   },
   "fields": [
     {
@@ -1055,7 +1055,7 @@
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/half_close_mode",
       "required": false,
       "contract": {
-        "description": "What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default, which is off. hold+parked is refused (400) until it is available, and hold is refused (400) on a service whose mode is not fullproxy. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.",
+        "description": "What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default, which is off. hold+parked is refused (400) until it is available. hold is refused (400) on a service whose mode is not fullproxy, whose clients use TLS (security 1 or 2: TLS connections are never held), or that runs P/D (pd_disagg_mode, not yet measured) - judged on the service as a replace leaves it, so switching pd_disagg_mode on under a stored hold is refused as well. A snapshot restore of such a rule drops the hold with a warning. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.",
         "enum": [
           "off",
           "hold",
