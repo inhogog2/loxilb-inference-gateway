@@ -60,23 +60,46 @@ docker run -u root --cap-add SYS_ADMIN --restart unless-stopped --privileged \
   recreated.
 - **Allow at least 2 GiB of memory** if you set a container memory limit.
 
-Then create a rule through the REST API on port `11111`. This one puts a pool of identical
-vLLM replicas behind one OpenAI-compatible VIP, with prefix affinity (`sel: 8`) on the L7
-fullproxy (`mode: 4`, required for every AI feature):
+Then create a rule through the REST API on port `11111`. This one is **engine-exact
+KV-cache-aware routing**: the gateway subscribes to each vLLM replica's KV-cache event
+stream, tokenizes every prompt itself, and sends the request to the replica that already
+holds the longest cached prefix.
 
 ```bash
 curl -s -X POST http://127.0.0.1:11111/netlox/v1/config/loadbalancer \
   -H 'Content-Type: application/json' -d '{
   "serviceArguments": {
     "externalIP": "192.0.2.20", "port": 8080, "protocol": "tcp",
-    "sel": 8, "mode": 4, "host": "192.0.2.20" },
+    "sel": 0, "mode": 4, "host": "192.0.2.20", "sse_mode": true,
+    "kvExactMode": 3, "kvEngineType": "vllm", "kvZmqPort": 5557, "kvBlockSize": 16 },
   "endpoints": [
     { "endpointIP": "198.51.100.11", "targetPort": 8000, "weight": 1 },
-    { "endpointIP": "198.51.100.12", "targetPort": 8000, "weight": 1 } ]}'
+    { "endpointIP": "198.51.100.12", "targetPort": 8000, "weight": 1 },
+    { "endpointIP": "198.51.100.13", "targetPort": 8000, "weight": 1 } ]}'
 ```
 
-The addresses are placeholders. For the full path — readiness, authentication, traffic,
-metrics and cleanup — follow [Installation][install] and the [Quickstart][quickstart].
+| Field | Meaning |
+|---|---|
+| `mode: 4` | L7 fullproxy, required for every AI feature |
+| `kvExactMode: 3` | Engine-exact routing over a single pool (`1` is the prefill/decode topology) |
+| `kvEngineType` | Which engine's cache contract to follow: `vllm` or `sglang` |
+| `kvZmqPort`, `kvBlockSize` | Must match the engine's event port and `--block-size` |
+| `sse_mode` | Stream-aware proxying for token streams |
+
+Each vLLM replica publishes its cache events:
+
+```bash
+PYTHONHASHSEED=0 vllm serve <MODEL> --port 8000 --block-size 16 \
+  --prefix-caching-hash-algo sha256_cbor \
+  --kv-events-config '{"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5557"}'
+```
+
+The gateway also needs the model's `tokenizer.json` staged under `/etc/loxilb/tokenizers/`;
+without it the rule silently falls back to load-based routing. The addresses above are
+placeholders. See [KV-cache routing][kv] for tokenizer staging and the zero-engine-change
+alternative (prefix-hash affinity, `sel: 8`), [P/D disaggregation][pd] for split
+prefill/decode pools, and the [Quickstart][quickstart] for the full path from readiness to
+cleanup.
 
 ## Documentation
 
