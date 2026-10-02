@@ -603,6 +603,14 @@ func TestSinkTailerWindowSurvivesARestartDuringTheOutage(t *testing.T) {
 	tc.ReconnectWindow = 3
 	tl := startTailer(t, tc)
 	waitFor(t, "the first records", func() bool { return len(sink.got()) == 6 })
+	// The record of the sink's own connect is written behind the records
+	// that caused it. This sink is not sent it and moves past it, so its
+	// place is taken once it has: the two records a writer starts with
+	// and that one are what the filter has kept from it by then, and it
+	// is the last record written.
+	waitFor(t, "the sink to be past the record of its connect", func() bool {
+		return tl.Stats().Filtered == 3 && tl.Progress().Position.Seq == w.SeqHigh()
+	})
 	waitFor(t, "the cursor to be saved behind them", func() bool {
 		return tl.Stats().Cursor.Position == tl.Progress().Position
 	})

@@ -154,6 +154,14 @@ func startWriter(t *testing.T, cfg Config) *Writer {
 		defer cancel()
 		_ = w.Close(ctx)
 	})
+	// Running is set before the start records are written. What is asked
+	// of the writer's loop is answered after them, so a test that arms a
+	// fault next arms it for its own record and not for one of those.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := w.onLoop(ctx, func() {}); err != nil {
+		t.Fatalf("start records: %v", err)
+	}
 	return w
 }
 
