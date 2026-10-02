@@ -4,7 +4,7 @@
 # older run's lines can never turn a leg green.
 #   0  preconditions: both engines up, serving the profile's model at the manifest's engine version; the engine's
 #      manifest installed (restored to the vLLM one on exit); the engine's fixture set present
-#   1  strict P/D rule (kvExactMode=1, kvExactApiMode=both, the profile) -> ladder READY in this run's trail
+#   1  strict P/D rule (kvExactMode=1, kvExactApiMode=both — chat where admission refuses completions, the profile) -> ladder READY in this run's trail
 #   2  chat x3 through the VIP -> tier-1.5 exact hits +2 and the P/D split proven by COUNTERS: the gateway's P/D
 #      counters for this model, each engine's request counter and the decode engine's KV-transfer counter all
 #      move (an absent series fails; see below for the one absent-before case)
@@ -27,6 +27,9 @@ case $ENG in
           EREQ_P='^sglang:num_requests_total'; EREQ_D='^sglang:kv_transfer_bootstrap_ms_count'; XFER='^sglang:kv_transfer_alloc_ms_count' ;;
   *) echo "usage: $0 vllm|sglang <profileId>"; exit 64 ;;
 esac
+# Strict surfaces: both. Where the engine encodes completions its own way (engineQuirks.<contract>), the gateway's
+# encoder for that engine reproduces it; step 2b proves it with exact hits on the completions surface.
+API=both
 SALT="kvmc${ENG}$(date +%s)$RANDOM"; TS=$(date +%Y%m%dT%H%M%S)
 EV=${EVROOT}/${ENG}-pd-${PROF}-${TS}; mkdir -p "${EV}"
 echo "RUN_ID=${ENG}-pd-${PROF}-${TS}"
@@ -39,7 +42,7 @@ del_rule() { curl -s -m 10 -o /dev/null -X DELETE "${LB}/hosturl/${VIP}/external
 pd_rule() { curl -s -m 10 -o "${EV}/rule-create-$1.json" -w "%{http_code}" -X POST "${LB}" -H 'Content-Type: application/json' -d "{
   \"serviceArguments\": { \"externalIP\": \"${VIP}\", \"port\": ${PORT}, \"protocol\": \"tcp\", \"sel\": 0,
     \"mode\": 4, \"host\": \"${VIP}\", \"probeRetries\": 1, \"pd_disagg_mode\": true, \"kvExactMode\": 1, \"kvBlockSize\": 16,
-    \"kvEngineType\": \"${ENG}\", \"model_name\": \"${MODEL}\", \"kvExactApiMode\": \"both\", \"kvModelProfile\": \"${PROF}\" },
+    \"kvEngineType\": \"${ENG}\", \"model_name\": \"${MODEL}\", \"kvExactApiMode\": \"${API}\", \"kvModelProfile\": \"${PROF}\" },
   \"endpoints\": [ { \"endpointIP\": \"${PREFILL}\", \"targetPort\": ${EPORT}, \"weight\": 1, \"ep_role\": 1 },
                    { \"endpointIP\": \"${DECODE}\", \"targetPort\": ${EPORT}, \"weight\": 1, \"ep_role\": 2 } ] }"; }
 since() { tail -n +$(( $2 + 1 )) "$1"; }
@@ -132,6 +135,22 @@ if [[ $PDF == 0 ]]; then
 fi
 [[ $PDF == 0 ]] || { echo PD_SPLIT_NOT_PROVEN; del_rule; exit 5; }
 echo "  P/D split proven: gateway +$((g1-g0)), prefill +$((p1-p0)), decode +$((d1-d0)), KV transfers +$((x1-x0))"
+
+echo "=== 2b. completions x3: exact hits on the completions surface ==="
+# A TEXT prompt: the gateway hashes its own encoding of it, the engine caches its own. A hit needs both to agree
+# on every id of a block, an engine-added BOS included (it shifts every block boundary by one).
+COMP_PROMPT="${SALT} pd completions probe. ${CHAT_USER#* }"
+c0=$(settle)
+for i in 1 2 3; do
+  python3 -c "import json,sys; print(json.dumps({'model': sys.argv[1], 'prompt': sys.argv[2], 'max_tokens': 8, 'temperature': 0}))" "$MODEL" "$COMP_PROMPT" \
+    | curl -s -m 90 -X POST "http://${VIP}:${PORT}/v1/completions" -H 'Content-Type: application/json' -d @- > "${EV}/pdcompl-r${i}.json"
+  python3 -c "import json;d=json.load(open('${EV}/pdcompl-r${i}.json'));u=d['usage'];print('  r${i} prompt=%s' % u.get('prompt_tokens'))" \
+    || { echo PD_COMPL_REQ_FAILED; head -c 300 "${EV}/pdcompl-r${i}.json"; del_rule; exit 7; }
+  sleep 2
+done
+c1=""; for _ in $(seq 1 15); do c1=$(hits); [[ -n "$c1" && "$c1" -ge $((c0+2)) ]] && break; sleep 2; done
+[[ -n "$c1" && "$c1" -ge $((c0+2)) ]] || { echo "PD_COMPL_NO_EXACT_HITS ${c0}->${c1}"; del_rule; exit 7; }
+c1=$(settle); echo "  tier15_hits ${c0}->${c1}"
 del_rule
 
 echo "=== 3. red arm: one flipped expected id -> not READY, token_mismatch on the prefill endpoint only ==="

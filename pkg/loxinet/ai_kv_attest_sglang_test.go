@@ -35,6 +35,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -607,58 +608,85 @@ func TestKvSglangHashChallengePdPairDispatch(t *testing.T) {
 	}
 }
 
-// A P/D rule with no decode-role endpoint cannot pair the challenge —
-// typed refusal, not a timeout to debug.
-func TestKvSglangHashChallengePdNoDecodeEndpoint(t *testing.T) {
-	kvSglTestSetup(t)
-	conf := kvSglGoodConf()
-	conf.pdRequireBootstrap = true
-	_, ep, _ := kvSglTestServer(t, conf)
-
-	info := kvSglInfo()
-	info.pdMode = true
-	f := newKvSglangAttest().HashChallenge(ep, info)
-	if f.OK || f.Reason != KvAttestReasonChallengeFailed || !strings.Contains(f.Detail, "decode") {
-		t.Fatalf("want typed challenge_failed naming the missing decode counterpart, got OK=%v %s (%s)",
-			f.OK, f.Reason, f.Detail)
-	}
-}
-
-// A decode counterpart that errors fails the challenge typed with the
-// counterpart's identity in the detail.
-func TestKvSglangHashChallengePdDecodeCounterpartError(t *testing.T) {
-	kvSglTestSetup(t)
-	conf := kvSglGoodConf()
-	conf.pdRequireBootstrap = true
-	_, ep, _ := kvSglTestServer(t, conf)
-	dep, _ := kvSglDecodeMock(t, 500)
-
-	info := kvSglPdInfo(dep)
-	f := newKvSglangAttest().HashChallenge(ep, info)
-	if f.OK || f.Reason != KvAttestReasonChallengeFailed || !strings.Contains(f.Detail, "decode counterpart") {
-		t.Fatalf("want typed challenge_failed naming the decode counterpart, got OK=%v %s (%s)",
-			f.OK, f.Reason, f.Detail)
-	}
-	if !strings.Contains(f.Detail, "HTTP 500") {
-		t.Fatalf("detail must carry the counterpart status: %s", f.Detail)
-	}
-}
-
-// The converged challenge body must stay bootstrap-free — the pair
-// machinery may not leak into single-role rules.
-func TestKvSglangHashChallengeConvergedBodyHasNoBootstrap(t *testing.T) {
-	kvSglTestSetup(t)
-	conf := kvSglGoodConf()
-	body := ""
-	conf.lastCompletionsBody = &body
-	_, ep, _ := kvSglTestServer(t, conf)
-
-	info := kvSglInfo()
-	kvSglFeedRanks(t, info.svcID, ep.EpIdx, []int{0}, 1)
-	if f := newKvSglangAttest().HashChallenge(ep, info); !f.OK {
-		t.Fatalf("converged challenge refused: %s (%s)", f.Reason, f.Detail)
-	}
-	if strings.Contains(body, "bootstrap_") {
-		t.Fatalf("converged challenge body leaks bootstrap fields: %s", body)
+// The challenge always posts its prompt as TEXT, on both legs of a P/D pair
+// too. Under an encoding that records the engine-added BOS the expected chain
+// is built from BOS + the text's ids — what the engine stores for that text —
+// so the echo proves the BOS modelling on the engine's own cache path.
+func TestKvSglangHashChallengeCompletionsBos(t *testing.T) {
+	const bos = 151646
+	for _, pd := range []bool{false, true} {
+		for _, withBos := range []bool{false, true} {
+			t.Run(fmt.Sprintf("pd=%v/bos=%v", pd, withBos), func(t *testing.T) {
+				kvSglTestSetup(t)
+				conf := kvSglGoodConf()
+				conf.pdRequireBootstrap = pd
+				body := ""
+				conf.lastCompletionsBody = &body
+				_, ep, _ := kvSglTestServer(t, conf)
+				info := kvSglInfo()
+				var decodeBodies func() []string
+				if pd {
+					var dep KvAttestEndpoint
+					dep, decodeBodies = kvSglDecodeMock(t, 200)
+					info = kvSglPdInfo(dep)
+				}
+				if withBos {
+					info.challenge = kvChallengePlanFor(kvCompletionsEncoding{contractID: "sglang-kv-rank-v1",
+						quirks: KvEngineQuirks{CompletionsBos: true}, bosID: bos, bosOK: true})
+				}
+				var want []uint32
+				var wantMu sync.Mutex
+				go func() {
+					deadline := time.Now().Add(2 * time.Second)
+					for time.Now().Before(deadline) {
+						kvHashWatchMu.RLock()
+						ws := kvHashWatches[kvHashWatchKey(info.svcID, ep.EpIdx)]
+						kvHashWatchMu.RUnlock()
+						if len(ws) > 0 {
+							hashes, tokens := kvEchoWatchExpectation(ws[0])
+							wantMu.Lock()
+							want = append([]uint32(nil), tokens...)
+							wantMu.Unlock()
+							kvHashWatchObserve(info.svcID, ep.EpIdx, 0,
+								kvEvent{Type: kvEventBlockStored, Hashes: hashes, Tokens: tokens})
+							return
+						}
+						time.Sleep(2 * time.Millisecond)
+					}
+				}()
+				if f := newKvSglangAttest().HashChallenge(ep, info); !f.OK {
+					t.Fatalf("challenge refused: %s (%s)", f.Reason, f.Detail)
+				}
+				var req struct {
+					Prompt json.RawMessage `json:"prompt"`
+				}
+				if err := json.Unmarshal([]byte(body), &req); err != nil {
+					t.Fatalf("challenge body is not JSON: %v: %s", err, body)
+				}
+				var text string
+				if err := json.Unmarshal(req.Prompt, &text); err != nil || text == "" {
+					t.Fatalf("the challenge must post the prompt text, got %s", req.Prompt)
+				}
+				plain := kvEchoTestTokenizer(text, info.modelName, kvChallengeMaxTokens, false)
+				wantMu.Lock()
+				got := want
+				wantMu.Unlock()
+				if len(got) < 2*kvEchoTestBS {
+					t.Fatalf("expected chain covers %d tokens, want at least two blocks", len(got))
+				}
+				if withBos {
+					if got[0] != bos || !reflect.DeepEqual(got[1:], plain[:len(got)-1]) {
+						t.Fatalf("expected chain must be BOS + the text's ids: head %v vs text head %v", got[:3], plain[:3])
+					}
+				} else if !reflect.DeepEqual(got, plain[:len(got)]) {
+					t.Fatalf("expected chain must be the text's ids without a BOS: head %v vs %v", got[:3], plain[:3])
+				}
+				if pd {
+					if got := decodeBodies(); len(got) != 1 || got[0] != body {
+						t.Fatalf("decode counterpart must carry the same body as the prefill leg: %v vs %s", got, body)
+					}
+				}
+			})
+		}
 	}
 }

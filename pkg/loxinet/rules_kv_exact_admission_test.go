@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	cmn "github.com/loxilb-io/loxilb/common"
+	"github.com/loxilb-io/loxilb/pkg/enginecontract"
 )
 
 // admissionDeps builds a deps set with sane defaults; individual tests
@@ -33,7 +34,10 @@ func admissionDeps(over func(*kvExactAdmissionDeps)) kvExactAdmissionDeps {
 		profileByID:    func(string) (*ModelPromptProfile, uint64, bool) { return nil, 0, false },
 		chatRenderer:   func(string) bool { return true },
 		contractRef: func(engineFamily string) (KvEngineContractRef, error) {
-			return KvEngineContractRef{ID: engineFamily + "-contract-v1", Gen: 1}, nil
+			// A compiled contract: admission resolves the engine's
+			// completions encoder through it.
+			ref, err := enginecontract.CurrentRef(kvEngineEffective(engineFamily))
+			return KvEngineContractRef{ID: ref.ID, Gen: 1}, err
 		},
 	}
 	if over != nil {
@@ -232,7 +236,7 @@ func TestKvExactAdmissionProfileResolution(t *testing.T) {
 		if res.Comps.Profile.ID != "prof-a" || res.Comps.Profile.Gen != 7 {
 			t.Fatalf("profile ref = %+v", res.Comps.Profile)
 		}
-		if res.Comps.Contract.ID != "sglang-contract-v1" || res.Comps.Contract.Gen != 1 {
+		if res.Comps.Contract.ID != "sglang-kv-rank-v1" || res.Comps.Contract.Gen != 1 {
 			t.Fatalf("contract ref = %+v", res.Comps.Contract)
 		}
 		if err := kvValidateBindingComponents(&res.Comps); err != nil {
@@ -283,7 +287,15 @@ func TestKvExactAdmissionHarmonyChatRefusal(t *testing.T) {
 				t.Fatalf("engine %q api %q: gpt_oss strict chat must be refused, got %v", eng, mode, err)
 			}
 		}
-		if _, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, KvExactApiCompletions, p.ProfileID, deps); err != nil {
+		_, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, KvExactApiCompletions, p.ProfileID, deps)
+		if eng == "llamacpp" {
+			// llama.cpp has no KV-exact contract: no strict surface at all.
+			if err == nil || !strings.Contains(err.Error(), "resolvable engine contract") {
+				t.Fatalf("engine %q: a strict rule needs an engine contract, got %v", eng, err)
+			}
+			continue
+		}
+		if err != nil {
 			t.Fatalf("engine %q: gpt_oss completions must stay admitted: %v", eng, err)
 		}
 	}
@@ -334,6 +346,79 @@ func TestKvExactAdmissionMistralCommonChatRefusal(t *testing.T) {
 	res, err := kvExactRuntimeValidate("trtllm", 3, p.BaseModel, "", p.ProfileID, deps)
 	if err != nil || !res.APIChat {
 		t.Fatalf("engine trtllm: mistral3 chat renders the template there and must stay admitted, got %+v %v", res, err)
+	}
+}
+
+// TestKvExactAdmissionCompletionsBos: the profile records that the SGLang
+// contract encodes a completions prompt with a BOS the tokenizer file does
+// not add. The SGLang encoder reproduces it, so strict completions is
+// admitted there once the BOS id is resolved; without a resolved id, on an
+// engine whose encoder does not model the fact, or on a contract with no
+// encoder, the completions surface is refused and chat stays admitted.
+func TestKvExactAdmissionCompletionsBos(t *testing.T) {
+	p := testProfile([]string{"chat", "completions"}, KvAliasPolicyBaseModelOnly, nil)
+	p.BaseModel = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+	p.EngineQuirks = map[string]KvEngineQuirks{"sglang-kv-rank-v1": {CompletionsBos: true}}
+	p.completionsBosID, p.completionsBosOK = 151646, true
+	contracts := map[string]string{"vllm": "vllm-kv-map-v2", "sglang": "sglang-kv-rank-v1", "trtllm": "trtllm-kv-http-v1"}
+	deps := admissionDeps(func(d *kvExactAdmissionDeps) {
+		d.profileByID = func(id string) (*ModelPromptProfile, uint64, bool) { return p, 7, id == p.ProfileID }
+		d.contractRef = func(eng string) (KvEngineContractRef, error) {
+			return KvEngineContractRef{ID: contracts[eng], Gen: 1}, nil
+		}
+	})
+	for _, mode := range []string{"", KvExactApiCompletions, KvExactApiBoth} {
+		res, err := kvExactRuntimeValidate("sglang", 3, p.BaseModel, mode, p.ProfileID, deps)
+		want := kvCompletionsEncoding{contractID: "sglang-kv-rank-v1", quirks: KvEngineQuirks{CompletionsBos: true}, bosID: 151646, bosOK: true}
+		if err != nil || !res.APICompletions || res.Encoding != want {
+			t.Fatalf("sglang api %q: the encoder adds the BOS, strict completions must be admitted with its encoding, got %+v %v", mode, res, err)
+		}
+	}
+	for _, eng := range []string{"", "vllm", "trtllm"} {
+		res, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, "", p.ProfileID, deps)
+		if err != nil || !res.APIChat || !res.APICompletions || res.Encoding.quirks.CompletionsBos {
+			t.Fatalf("engine %q: the fact is recorded for another contract, both surfaces must stay admitted without it, got %+v %v", eng, res, err)
+		}
+	}
+
+	refused := func(name, eng string) {
+		t.Helper()
+		for _, mode := range []string{"", KvExactApiCompletions, KvExactApiBoth} {
+			_, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, mode, p.ProfileID, deps)
+			if err == nil || !strings.Contains(err.Error(), "cannot reproduce how engine") {
+				t.Fatalf("%s, api %q: strict completions must be refused, got %v", name, mode, err)
+			}
+		}
+		res, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, KvExactApiChat, p.ProfileID, deps)
+		if err != nil || !res.APIChat || res.APICompletions {
+			t.Fatalf("%s: chat must stay admitted, got %+v %v", name, res, err)
+		}
+	}
+	// No resolved BOS id: the encoder has nothing to prepend.
+	p.completionsBosOK = false
+	refused("sglang without a resolved BOS id", "sglang")
+	p.completionsBosOK = true
+	// The fact recorded for an engine whose encoder does not model it.
+	p.EngineQuirks = map[string]KvEngineQuirks{"vllm-kv-map-v2": {CompletionsBos: true}, "trtllm-kv-http-v1": {CompletionsBos: true}}
+	refused("vllm with completionsBos", "vllm")
+	refused("trtllm with completionsBos", "trtllm")
+	// A contract that is not compiled has no encoder to resolve.
+	p.EngineQuirks = nil
+	contracts["sglang"] = "sglang-kv-rank-v2"
+	refused("sglang on an uncompiled contract", "sglang")
+	contracts["sglang"] = "sglang-kv-rank-v1"
+
+	// Admission hands the attestation controller the quirks of the contract
+	// the rule resolved, never another contract's.
+	p.EngineQuirks = map[string]KvEngineQuirks{
+		"sglang-kv-rank-v1": {CacheChunk: 64},
+		"vllm-kv-map-v2":    {ChallengeLastBlock: true},
+	}
+	for eng, want := range map[string]KvEngineQuirks{"sglang": {CacheChunk: 64}, "vllm": {ChallengeLastBlock: true}, "trtllm": {}} {
+		res, err := kvExactRuntimeValidate(eng, 3, p.BaseModel, "", p.ProfileID, deps)
+		if err != nil || res.Encoding.quirks != want || res.Encoding.contractID != contracts[eng] {
+			t.Fatalf("engine %q: admission encoding %+v (err %v), want quirks %+v on %s", eng, res.Encoding, err, want, contracts[eng])
+		}
 	}
 }
 

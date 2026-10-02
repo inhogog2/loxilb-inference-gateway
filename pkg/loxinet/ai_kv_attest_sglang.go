@@ -269,6 +269,7 @@ func (a *kvSglangAttest) TokenParityProbe(ep KvAttestEndpoint, info kvAttestRule
 	if f := kvFixtureSetCheck(fixtures, info); !f.OK {
 		return f
 	}
+	fixtures = kvFixturesForRule(fixtures, info)
 	url := fmt.Sprintf("http://%s:%d/v1/tokenize", ep.IP, ep.Port)
 	for _, fx := range fixtures {
 		if f := kvTokenizeFixtureProbe(a.client, url, fx, info.modelName); !f.OK {
@@ -353,7 +354,7 @@ func (a *kvSglangAttest) challengeOnce(ep KvAttestEndpoint, info kvAttestRuleInf
 	}
 	nonceHex := hex.EncodeToString(nonce[:])
 
-	prompt, wantTokens, err := kvChallengeBuildPrompt(info.modelName, nonceHex, blockSize)
+	prompt, wantTokens, err := kvChallengeBuildPrompt(info, nonceHex, blockSize)
 	if err != nil {
 		return nil, KvAttestFinding{Reason: KvAttestReasonChallengeFailed, Detail: err.Error()}
 	}
@@ -363,7 +364,7 @@ func (a *kvSglangAttest) challengeOnce(ep KvAttestEndpoint, info kvAttestRuleInf
 			Detail: fmt.Sprintf("expected-chain computation failed (algo=%s, %d hashes)", info.hashAlgo, len(expected))}
 	}
 
-	w := kvHashWatchRegister(info.svcID, ep.EpIdx, expected, wantTokens, blockSize)
+	w := kvHashWatchRegister(info.svcID, ep.EpIdx, expected, wantTokens, blockSize, info.challenge)
 	defer kvHashWatchUnregister(w)
 
 	url := fmt.Sprintf("http://%s:%d/v1/completions", ep.IP, ep.Port)

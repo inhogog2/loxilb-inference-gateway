@@ -243,9 +243,9 @@ type kvVllmTokenizeResp struct {
 	MaxModelLen *int     `json:"max_model_len"`
 }
 
-// TokenParityProbe sends every fixture's request bytes verbatim to the
-// endpoint's /tokenize and compares the FULL token array (§5: never a length
-// or prefix check).
+// TokenParityProbe sends the request bytes of every fixture on a surface the
+// rule serves verbatim to the endpoint's /tokenize and compares the FULL
+// token array (§5: never a length or prefix check).
 func (a *kvVllmAttest) TokenParityProbe(ep KvAttestEndpoint, info kvAttestRuleInfo) KvAttestFinding {
 	fixtures, err := kvProbeFixturesLoad(info.profileID)
 	if err != nil {
@@ -254,6 +254,7 @@ func (a *kvVllmAttest) TokenParityProbe(ep KvAttestEndpoint, info kvAttestRuleIn
 	if f := kvFixtureSetCheck(fixtures, info); !f.OK {
 		return f
 	}
+	fixtures = kvFixturesForRule(fixtures, info)
 	for _, fx := range fixtures {
 		if f := a.tokenizeProbeOne(ep, fx, info.modelName); !f.OK {
 			return f
@@ -286,6 +287,29 @@ func kvFixtureSurfaceCheck(fixtures []kvProbeFixture, info kvAttestRuleInfo) KvA
 			Detail: "declared completions surface has no completions-shape probe fixtures"}
 	}
 	return KvAttestFinding{OK: true}
+}
+
+// kvFixturesForRule keeps the fixtures of the API surfaces the rule serves.
+// A surface the rule does not declare routes no strict request, so its
+// fixtures say nothing about this rule; probing them would hold the rule
+// below READY on a surface admission already refused (an engine that encodes
+// completions with a BOS the gateway does not add, on a chat-only rule).
+// A rule info that declares neither surface carries no declaration to scope
+// by and keeps the whole set, so the probe can never run on an empty one:
+// kvFixtureSurfaceCheck has already required a fixture for every declared
+// surface.
+func kvFixturesForRule(fixtures []kvProbeFixture, info kvAttestRuleInfo) []kvProbeFixture {
+	if !info.apiChat && !info.apiCompl {
+		return fixtures
+	}
+	out := make([]kvProbeFixture, 0, len(fixtures))
+	for _, fx := range fixtures {
+		if (fx.API == "chat" && !info.apiChat) || (fx.API == "completions" && !info.apiCompl) {
+			continue
+		}
+		out = append(out, fx)
+	}
+	return out
 }
 
 // kvFixtureSetCheck is the per-set gate every adapter applies before
@@ -367,7 +391,9 @@ func kvTokenizeFixtureProbe(client *http.Client, url string, fx kvProbeFixture, 
 		// The banked ids must still be the gateway's own render at
 		// oracleNow: a stale or edited fixture fails here, before the
 		// engine is asked anything.
-		if f := kvTrtllmOracleFixtureCheck(fx, model); !f.OK {
+		// Only chat fixtures carry oracleNow, so this check never reaches
+		// the completions encoder and needs no engine contract.
+		if f := kvTrtllmOracleFixtureCheck(fx, kvAttestRuleInfo{modelName: model}); !f.OK {
 			return f
 		}
 		derivedAt = kvChatClock().UTC()

@@ -1,0 +1,445 @@
+# scripts/models/validated-models.yaml — the supported-models manifest (single source).
+#
+# docs/SUPPORTED-MODELS.md is rendered from this file and scripts/models/install-models.sh installs from it;
+# `scripts/models/modelctl.py check` fails when either, or any committed artifact this file pins, disagrees.
+#
+# A row is one model on one engine version. States:
+#   validated   supported. Needs every evidence gate of the surfaces it claims at "pass", an engine entry the
+#               support catalog has validated, and a reviewed change by the code owners. A green run never
+#               promotes a row by itself.
+#   candidate   has evidence, not promoted, not supported. Installed only with --include-candidates.
+#   blocked     refused, with a typed reason and the detail.
+# Evidence gates (pass | fail | not_run | n_a; not_run is not a pass):
+#   renderDifferential  gateway render + tokenization vs the engine's serving path over the probe corpus
+#   pdChat              live prefill/decode pair: READY through the attestation ladder, exact hits on chat, twice
+#   pdCompletions       the same on the completions surface
+#   abPerf              a measured A/B point against round-robin on the same fleet; "pass" needs the numbers in
+#                       the row's `perf` list (three repetitions, all integrity gates held), and the numbers need
+#                       "pass". Every validated row carries one.
+# Add a model: see "Adding or updating a model" in the generated page.
+
+schemaVersion: models.loxilb.io/v1alpha1
+
+engines:
+  - engine: vllm
+    version: v0.28.0
+    contract: vllm-kv-map-v2
+    image: vllm/vllm-openai
+    digest: sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050c24aeb7830ac02039b14
+  - engine: sglang
+    version: v0.5.18
+    contract: sglang-kv-rank-v1
+    image: lmsysorg/sglang
+    digest: sha256:9e148f5ac788e856a06166bd6347a831831eb9fcfab4d1770874823a7c29a1a1
+  - engine: trtllm
+    version: 1.3.0rc24
+    contract: trtllm-kv-http-preview-v1
+    digest: sha256:a867619fd56c85225927dac27e2111ae90ff66e23c59d9c5f8b9f345577cab6d
+    imageNote: "locally built from the release wheel (no registry image)"
+
+launchAll:
+  - "vLLM: `PYTHONHASHSEED=0` on the engine and `LLB_KV_NONE_HASH_SEED=0` on the gateway; without it the attestation challenge never completes."
+  - "Models whose chat template prints the date (Llama-3.2, gpt-oss): run the engine in UTC — no `TZ`, no host `/etc/localtime` mount."
+  - "SGLang: `--model-path <snapshot path> --revision <revision>`. A hub id makes the engine load a different tokenizer pre-tokenizer on some models, and a path without `--revision` fails the gateway's identity probe."
+  - "KV block size 16 (`--block-size 16` on vLLM, page size 16 on SGLang), matching the rule's `kvBlockSize`."
+
+excludedFeatures:
+  - "Tools: `tools`, `tool_choice`."
+  - "Fields that change the rendered prompt: `chat_template`, `chat_template_kwargs`, `documents`, `reasoning_effort`, `add_generation_prompt` other than the profile's value, `continue_final_message`, `add_special_tokens`, `truncate_prompt_tokens`."
+  - "Pre-tokenized or embedded prompts: `prompt_token_ids`, `prompt_embeds`; `cache_salt`."
+  - "Multimodal content parts, and a message with more than one text part (the engines join them differently)."
+  - "A conversation that ends on an assistant message."
+  - "On templates that iterate content parts: a message whose render differs between string and list content."
+
+models:
+  - profileId: olmo2-0425-1b-v1
+    repo: allenai/OLMo-2-0425-1B-Instruct
+    revision: 48d788eca847d4d7548f375ad03d3c9312f6139e
+    gated: false
+    tokenizerSha256: 73fd5254624f39a88e3faac6a8e11300fc3c735ed37880d4f4f08db898eaecca
+    templateSha256: fe689ffbd6a4e2d0532d7480696b065b10e0e1eff3f9b9fc4bea415761e4bf4a
+    weightsIndexSha256: 50a51bdc12ab521c5c17a1b50cfa869bb2659f2459c2770524866f3bd15d4234
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+        launch:
+          - "`--disable-cuda-graph` (CUDA-graph capture fails for this architecture; in a prefill/decode pair the decode member exits)"
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: blocked
+        reason: architecture_unsupported
+        detail: "the engine's model registry has no `Olmo2ForCausalLM`."
+  - profileId: r1-distill-qwen-15b-v1
+    repo: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+    revision: ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562
+    gated: false
+    tokenizerSha256: 88145e3c3249adc2546ede277e9819d6e405e19072456e4b521cbc724bd60773
+    templateSha256: 56a1447ad31926fdc21fb07e56e5642bd9c850c4f52d8c8af7bbe5f079a84f5f
+    weightsIndexSha256: 6f87cec5c8ff862a5885bbf68b0c625b91fe3af598ac41f7032483041d383e0b
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+        detail: "SGLang prepends a BOS to every text completions prompt for this model; the profile records it (`engineQuirks.sglang-kv-rank-v1.completionsBos`) and the gateway encodes completions the same way."
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: candidate
+        modes: [converged]
+        apis: [chat]
+        evidence: {renderDifferential: pass, pdChat: not_run, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-09-30"
+  - profileId: gemma3-1b-it-v1
+    repo: google/gemma-3-1b-it
+    revision: dcc83ea841ab6100d6b47a070329e1ba4cf78752
+    gated: true
+    tokenizerSha256: 4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795
+    templateSha256: 7de1c58e208eda46e9c7f86397df37ec49883aeece39fb961e0a6b24088dd3c4
+    weightsIndexSha256: 0d961732017f7f62cef5b0085eb942d34d69b4ef41b976fa3e2f8850a685496d
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+        launch:
+          - "SGLang 0.5.12–0.5.18 answer `/v1/tokenize` with HTTP 500 for this model (`model_max_length` beyond 64 bits): mount the fixed `serving_tokenize.py` from `cicd/kv-model-compat-pd/sglang-tokenize-fix/` (0.5.19 and later need nothing)"
+          - "`--disable-cuda-graph` converged on a 24 GB GPU; `--cuda-graph-backend-prefill=disabled` on both members of a prefill/decode pair (the prefill CUDA graph crashes the prefill member)"
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: candidate
+        modes: [converged]
+        apis: [chat]
+        evidence: {renderDifferential: pass, pdChat: not_run, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-09-30"
+  - profileId: gemma4-e2b-it-v1
+    repo: google/gemma-4-E2B-it
+    revision: 3e22461f65e89153144f8adb70e3b8c2cc9845a7
+    gated: false
+    tokenizerSha256: cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f
+    templateSha256: 0a2c8073c878ab1da004bee933a998606537bbb62016310352c7285c3f01c5b5
+    weightsIndexSha256: 73c877df430e91dc3ddbd9ab732772c86aeb55282418e75f01dd4d73d80b0367
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: blocked
+        reason: hardware_unsupported
+        detail: "the engine's attention kernel for this model reports `Unsupported architecture` on Ada-generation GPUs (L4, L40S); not qualified on other hardware."
+  - profileId: llama32-1b-v1
+    repo: meta-llama/Llama-3.2-1B-Instruct
+    revision: 9213176726f574b556790deb65791e0c5aa438b6
+    gated: true
+    tokenizerSha256: 79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4
+    templateSha256: 5816fce10444e03c2e9ee1ef8a4a1ea61ae7e69e438613f3b17b69d0426223a4
+    weightsIndexSha256: 8a50600109eda0f7c6852a2d0fe0ecc252acb2943cebc4847f1787ec611b6059
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: candidate
+        modes: [converged]
+        apis: [chat]
+        evidence: {renderDifferential: pass, pdChat: not_run, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-09-30"
+  - profileId: exaone4-12b-v1
+    repo: LGAI-EXAONE/EXAONE-4.0-1.2B
+    revision: 3abf2810673c7c0778df64a73c2d52eab32d91c4
+    gated: false
+    tokenizerSha256: 523b110391fc95d5c90ee3eaa05d65d21da1ef25b5766254307aceda9eb24a5b
+    templateSha256: de64119ec8394ec3619221283a05fc8019c9a319cbdf2a471fe1ee8c36119616
+    weightsIndexSha256: 772dfe918ed7a5b47e77209d029ba4ad3db20dbd35577049d418d2e333af4f15
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+        launch:
+          - "`--attention-backend triton` on Ada-generation GPUs"
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: candidate
+        modes: [converged]
+        apis: [chat]
+        evidence: {renderDifferential: pass, pdChat: not_run, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-09-30"
+  - profileId: phi4-mini-instruct-v1
+    repo: microsoft/Phi-4-mini-instruct
+    revision: cfbefacb99257ffa30c83adab238a50856ac3083
+    gated: false
+    tokenizerSha256: 382cc235b56c725945e149cc25f191da667c836655efd0857b004320e90e91ea
+    templateSha256: febf589225c9728ab791f52e8897d7607a823d45368f0a4c92fa68997b40cce9
+    weightsIndexSha256: 4f8c4c20ccd440fd4da9066409da54977543b69e082d93613e29329f12382120
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: candidate
+        modes: [converged]
+        apis: [chat]
+        evidence: {renderDifferential: pass, pdChat: not_run, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-09-30"
+  - profileId: granite42-3b-v1
+    repo: ibm-granite/granite-4.2-3b
+    revision: e459acceac81e5fe67c07d9cfc72329a332e7eb1
+    gated: false
+    tokenizerSha256: 883975314d58743726347caaf2c32ac89afd5ad57222cffbc4f052f2ab27b2d7
+    templateSha256: f0ba43f79b3cabca5e5a7584c77aec92f49feae45cdf7779c87d9fc54cd90258
+    weightsIndexSha256: b36647728defbef9b4b46e669101aa9cded9cfd3c47ac917ae6af376e04854c7
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+        launch:
+          - "SGLang 0.5.12–0.5.18 answer `/v1/tokenize` with HTTP 500 for this model (`model_max_length` beyond 64 bits): mount the fixed `serving_tokenize.py` from `cicd/kv-model-compat-pd/sglang-tokenize-fix/` (0.5.19 and later need nothing)"
+          - "on a 24 GB GPU run it alone with `--mem-fraction-static` above 0.5"
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: blocked
+        reason: architecture_unsupported
+        detail: "the engine's model registry has no `GraniteForCausalLM`."
+  - profileId: ministral3-3b-v1
+    repo: mistralai/Ministral-3-3B-Instruct-2512
+    revision: b35d4dfe56c142746f54dbd64f579faab2744308
+    gated: false
+    tokenizerSha256: 99cf274236c60277fcfad861a5a1007518687ad06ba8938760f50b55ffa0b1ef
+    templateSha256: 0701cfbdc2b7d44fdbad104dff604faee4b0543e8247624568777fe465746f9b
+    weightsIndexSha256: 45e10214baa214551b98f55577e91a319e1c9e6203d288b692e16add6b311742
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: blocked
+        reason: engine_renderer
+        detail: "the engine renders chat for this repository with its own Mistral encoder, not the chat template; a strict chat rule is refused at admission."
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: blocked
+        reason: engine_renderer
+        detail: "the engine's tokenizer backend for this repository ignores the chat template and adds a second BOS; a strict chat rule is refused at admission."
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: blocked
+        reason: checkpoint_format
+        detail: "the official checkpoint is per-tensor FP8; the engine's loader accepts block FP8 only."
+  - profileId: ax31-light-v1
+    repo: skt/A.X-3.1-Light
+    revision: 9b41bb2406472634d8812c0b8931fa40fa9a6c3a
+    gated: false
+    tokenizerSha256: e3973eceeed921e72d54fbbf597e1bea0a219112a0809ad8eaf62a1754f8ea44
+    templateSha256: 15f2d4a602c42c90a1f03e13fe353510d745422a5c61b9abdefe47d5b77b5113
+    weightsIndexSha256: ad8fae935ec2a1f0081454394238000d1c0b5c1896128e613f84d3b533d6bb2c
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-10-01"
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: candidate
+        modes: [converged]
+        apis: [chat]
+        evidence: {renderDifferential: pass, pdChat: not_run, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-09-30"
+        launch:
+          - "`--max_batch_size 16`; needs a 48 GB GPU"
+  - profileId: qwen36-27b-fp8-v1
+    repo: Qwen/Qwen3.6-27B-FP8
+    revision: e89b16ebf1988b3d6befa7de50abc2d76f26eb09
+    gated: false
+    tokenizerSha256: 5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42
+    templateSha256: e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259
+    weightsIndexSha256: 809b916519102e992a0d45bbedcb22edb1136637d31688a1b70b66bb6e736ab9
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-10-01"
+        launch:
+          - "`--max-num-seqs 64` on one 48 GB GPU"
+          - "`VLLM_SSM_CONV_STATE_LAYOUT=DS` on both members of a prefill/decode pair"
+        detail: "hybrid model: the engine caches block boundaries of its 784-token attention block plus the prompt's last full block; the profile records it (`challengeLastBlock`)."
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-10-01"
+        detail: "hybrid model: the engine caches a prompt in 64-token chunks; the profile records it (`cacheChunk: 64`)."
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: candidate
+        modes: [converged]
+        apis: [chat]
+        evidence: {renderDifferential: pass, pdChat: not_run, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-09-30"
+        launch:
+          - "`--max_batch_size 16` on one 48 GB GPU"
+  - profileId: qwen38-27b-fp8-v1
+    repo: Qwen/Qwen3.8-27B-FP8
+    revision: 017b9c7af6b5689d5dd426a76e0bc077eb5ca20a
+    gated: false
+    tokenizerSha256: 0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3
+    templateSha256: c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041
+    weightsIndexSha256: 5fb486c23f6d05e55359b0bf445518da18c341daddc0e0571716cc0fc93676ed
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+        launch:
+          - "`--max-num-seqs 64` on one 48 GB GPU"
+          - "`VLLM_SSM_CONV_STATE_LAYOUT=DS` on both members of a prefill/decode pair"
+        detail: "hybrid model: the engine caches block boundaries of its 784-token attention block plus the prompt's last full block; the profile records it (`challengeLastBlock`)."
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
+        lastValidated: "2026-10-01"
+        detail: "hybrid model: the engine caches a prompt in 64-token chunks; the profile records it (`cacheChunk: 64`)."
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: candidate
+        modes: [converged]
+        apis: [chat]
+        evidence: {renderDifferential: pass, pdChat: not_run, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-09-30"
+        launch:
+          - "`--max_batch_size 16` on one 48 GB GPU"
+  - profileId: gptoss-20b-v1
+    repo: openai/gpt-oss-20b
+    revision: 6cee5e81ee83917806bbde320786a8fb61efebee
+    gated: false
+    tokenizerSha256: 0614fe83cadab421296e664e1f48f4261fa8fef6e03e63bb75c20f38e37d07d3
+    templateSha256: a4c9919cbbd4acdd51ccffe22da049264b1b73e59055fa58811a99efbd7c8146
+    weightsIndexSha256: 52412ca45128dca02e6ed2f67e9865eac4f233b5789e7427bb5152ac5b31e5d6
+    tuples:
+      - engine: vllm
+        engineVersion: v0.28.0
+        state: blocked
+        reason: engine_renderer
+        detail: "the engine renders chat for this model with the Harmony encoder, not the chat template; a strict chat rule is refused at admission."
+      - engine: sglang
+        engineVersion: v0.5.18
+        state: candidate
+        modes: [converged, pd]
+        apis: [completions, chat]
+        evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: not_run, abPerf: not_run}
+        lastValidated: "2026-09-30"
+        launch:
+          - "SGLang 0.5.12–0.5.18 answer `/v1/tokenize` with HTTP 500 for this model (`model_max_length` beyond 64 bits): mount the fixed `serving_tokenize.py` from `cicd/kv-model-compat-pd/sglang-tokenize-fix/` (0.5.19 and later need nothing)"
+          - "48 GB GPU per member; alone on the GPU with `--mem-fraction-static` above 0.5"
+      - engine: trtllm
+        engineVersion: 1.3.0rc24
+        state: blocked
+        reason: engine_renderer
+        detail: "the engine renders chat for this model with the Harmony encoder, not the chat template; a strict chat rule is refused at admission."

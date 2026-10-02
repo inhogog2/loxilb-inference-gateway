@@ -202,6 +202,9 @@ type kvAttestRuleInfo struct {
 	pdMode          bool
 	pdBootstrapPort uint16             // 0 => engine default downstream
 	decodeEPs       []KvAttestEndpoint // ep_role 2 counterparts for the pair
+	// challenge shapes the echo challenge from the profile's measured
+	// engine quirks (zero value: every full block of a two-block prompt).
+	challenge kvChallengePlan
 }
 
 // equal is the controller-identity comparison (== is unavailable once the

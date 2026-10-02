@@ -37,8 +37,8 @@ preflight() {
   check "gateway published >= ${want} profiles and every committed candidate profile is staged (run ./config.sh, restart the gateway)" $?
 }
 
-admission_one() {  # admission_one <profileId> <sentence> <refusing engines...>
-  local prof=$1 sentence=$2; shift 2
+admission_one() {  # admission_one <profileId> chat|completions <sentence> <refusing engines...>
+  local prof=$1 surface=$2 sentence=$3; shift 3
   local refusing=" $* " model enc eng api out st want ok
   model=$(profile_field "$prof" baseModel)
   enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$model")
@@ -51,7 +51,8 @@ admission_one() {  # admission_one <profileId> <sentence> <refusing engines...>
                    { \"endpointIP\": \"${DECODE}\", \"targetPort\": ${EPORT}, \"weight\": 1, \"ep_role\": 2 } ] }")
     st=$(echo "$out" | sed -n 's/^HTTPSTATUS://p')
     [ "$st" = 200 ] && curl -s -m 10 -o /dev/null -X DELETE "${LB}/hosturl/${VIP}/externalipaddress/${VIP}/port/${PORT}/protocol/tcp?model_name=${enc}"
-    want=admit; [[ "$refusing" == *" $eng "* && $api != completions ]] && want=refuse
+    # the refused surface, alone or inside "both", is refused on the refusing engines; the other surface is admitted
+    want=admit; [[ "$refusing" == *" $eng "* && ( $api == both || $api == "$surface" ) ]] && want=refuse
     if [ $want = refuse ]; then [ "$st" != 200 ] && echo "$out" | grep -qF "$sentence"; ok=$?
     else [ "$st" = 200 ]; ok=$?; fi
     [ $ok = 0 ] || echo "    reply: HTTP $st $(echo "$out" | grep -v HTTPSTATUS: | head -c 240)"
@@ -62,8 +63,10 @@ admission_one() {  # admission_one <profileId> <sentence> <refusing engines...>
 admission() {
   echo "=== admission: engine-renderer matrix ==="
   curl -s -m 5 "${LB}/all" | grep -q "\"port\":${PORT}" && { check "rule port ${PORT} free before the matrix" 1; return; }
-  admission_one ministral3-3b-v1 "renders this model's chat with mistral_common" vllm sglang
-  admission_one gptoss-20b-v1 "renders this model's chat with the Harmony encoder" vllm trtllm
+  admission_one ministral3-3b-v1 chat "renders this model's chat with mistral_common" vllm sglang
+  admission_one gptoss-20b-v1 chat "renders this model's chat with the Harmony encoder" vllm trtllm
+  # no refusing engine: SGLang adds a BOS to this model's completions and the gateway's SGLang encoder reproduces it
+  admission_one r1-distill-qwen-15b-v1 completions "-"
   curl -s -m 5 "${LB}/all" | grep -q "\"port\":${PORT}"; [ $? != 0 ]
   check "no rule left on port ${PORT}" $?
 }

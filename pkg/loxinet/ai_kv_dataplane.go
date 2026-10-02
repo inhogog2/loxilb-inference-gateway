@@ -406,19 +406,45 @@ func KvSvcContractKickInstall(ruleIdent string) {
 // — a generation that no longer resolves is a profile_resolution_fault).
 // Returns 0 to proceed.
 func kvBridgeGate(svcID, bindingGen uint32) int {
+	_, rc := kvBridgeBinding(svcID, bindingGen)
+	return rc
+}
+
+// kvBridgeBinding is kvBridgeGate returning the resolved binding snapshot
+// (nil on a legacy path, which carries no binding).
+func kvBridgeBinding(svcID, bindingGen uint32) (*KvExactBinding, int) {
 	if svcID != 0 && kvSvcDenied(svcID) {
-		return KvTokErrNotReady
+		return nil, KvTokErrNotReady
 	}
-	if bindingGen != 0 {
-		ident, ok := kvSvcRuleIdent(svcID)
-		if !ok {
-			return KvTokErrProfile
-		}
-		if _, ok := KvBindingResolve(ident, bindingGen); !ok {
-			return KvTokErrProfile
-		}
+	if bindingGen == 0 {
+		return nil, 0
 	}
-	return 0
+	ident, ok := kvSvcRuleIdent(svcID)
+	if !ok {
+		return nil, KvTokErrProfile
+	}
+	b, ok := KvBindingResolve(ident, bindingGen)
+	if !ok {
+		return nil, KvTokErrProfile
+	}
+	return b, 0
+}
+
+// kvBridgeEncodeCompletions encodes a strict rule's text completions prompt
+// through the encoder of the engine contract its binding names. A profile or
+// contract that no longer resolves, or an encoding its engine module does
+// not reproduce, is a profile-resolution fault: admission proved both.
+func kvBridgeEncodeCompletions(b *KvExactBinding, text, model string, max int) ([]uint32, int) {
+	e, ok := kvProfileByID(b.Components.Profile.ID)
+	if !ok {
+		return nil, KvTokErrProfile
+	}
+	tokens, err := kvEncodeCompletions(kvTokenizeWithCache,
+		kvCompletionsEncodingOf(&e.Profile, b.Components.Contract.ID), text, model, max)
+	if err != nil {
+		return nil, KvTokErrProfile
+	}
+	return tokens, 0
 }
 
 // kvBridgeTokenize is the typed core of the llb_ai_kv_tokenize CGO export.
@@ -426,7 +452,8 @@ func kvBridgeGate(svcID, bindingGen uint32) int {
 // produced (-1 for every failure) so legacy rule behavior — and its metric
 // attribution — is unchanged; strict paths classify per plan §8.
 func kvBridgeTokenize(svcID, bindingGen uint32, text, model string, max int) ([]uint32, int) {
-	if rc := kvBridgeGate(svcID, bindingGen); rc != 0 {
+	binding, rc := kvBridgeBinding(svcID, bindingGen)
+	if rc != 0 {
 		return nil, rc
 	}
 	if text == "" || model == "" || max <= 0 {
@@ -435,10 +462,19 @@ func kvBridgeTokenize(svcID, bindingGen uint32, text, model string, max int) ([]
 	if rc := kvBridgeNulGuard(text, bindingGen != 0); rc != 0 {
 		return nil, rc
 	}
-	// Raw completions prompt: encode with specials so the id stream matches
-	// vLLM's add_special_tokens=True completions tokenization (BOS included
-	// on tokenizers that declare one).
-	tokens := kvTokenizeWithCache(text, model, max, true)
+	var tokens []uint32
+	if binding != nil {
+		// Strict rule: the bound engine's encoder module decides how a text
+		// completions prompt becomes ids.
+		if tokens, rc = kvBridgeEncodeCompletions(binding, text, model, max); rc != 0 {
+			return nil, rc
+		}
+	} else {
+		// Legacy rule, raw completions prompt: encode with specials so the id
+		// stream matches vLLM's add_special_tokens=True completions
+		// tokenization (BOS included on tokenizers that declare one).
+		tokens = kvTokenizeWithCache(text, model, max, true)
+	}
 	if len(tokens) == 0 {
 		if bindingGen != 0 {
 			// Admission proved this tokenizer loadable; its absence now is

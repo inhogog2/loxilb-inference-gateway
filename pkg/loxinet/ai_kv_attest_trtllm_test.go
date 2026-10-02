@@ -618,7 +618,7 @@ func kvCommittedChatFixturesParity(t *testing.T, slug, profileDir, fixtureSub, s
 		if fx.API != "chat" {
 			t.Fatalf("fixture %s: api %q, want chat", base, fx.API)
 		}
-		if f := kvTrtllmOracleFixtureCheck(fx, servedModel); !f.OK {
+		if f := kvTrtllmOracleFixtureCheck(fx, kvAttestRuleInfo{modelName: servedModel}); !f.OK {
 			t.Fatalf("fixture %s failed the oracle chain: %s %s", base, f.Reason, f.Detail)
 		}
 		checked++
@@ -631,9 +631,32 @@ func kvCommittedChatFixturesParity(t *testing.T, slug, profileDir, fixtureSub, s
 		fx := loadPair(t, "chat-user-only")
 		fx.ExpectedIDs = append([]int64(nil), fx.ExpectedIDs...)
 		fx.ExpectedIDs[len(fx.ExpectedIDs)-1]++
-		f := kvTrtllmOracleFixtureCheck(fx, servedModel)
+		f := kvTrtllmOracleFixtureCheck(fx, kvAttestRuleInfo{modelName: servedModel})
 		if f.OK || f.Reason != KvAttestReasonTokenMismatch {
 			t.Fatalf("drifted banked ids must fail token comparison: OK=%v %s", f.OK, f.Reason)
 		}
 	})
+}
+
+// TestKvTrtllmTokenParityDeclaredSurfacesOnly: the oracle path checks only
+// fixtures of a surface the rule serves. A chat fixture the oracle cannot
+// parse must not fail a completions-only rule, and must fail a rule that
+// serves chat.
+func TestKvTrtllmTokenParityDeclaredSurfacesOnly(t *testing.T) {
+	info := kvTrtInfo()
+	_, ep := kvTrtTestServer(t, kvTrtGoodConf())
+	root := kvAttestFixtureRoot(t, info.profileID, info.modelName)
+	kvWriteTrtllmProbeFixture(t, root, info.profileID, "basic", "completions",
+		[]byte(`{"model":"m-trt","prompt":"oracle parity probe"}`), []int64{101, 202})
+	kvWriteTrtllmProbeFixture(t, root, info.profileID, "chat-bad", "chat",
+		[]byte(`{"model":"m-trt","messages":[]}`), []int64{7})
+	kvTrtOracleSeam(t, []uint32{101, 202})
+	info.apiChat, info.apiCompl = false, true
+	if f := newKvTrtllmAttest().TokenParityProbe(ep, info); !f.OK {
+		t.Fatalf("completions-only rule must not be failed by a chat fixture: %s %s", f.Reason, f.Detail)
+	}
+	info.apiChat = true
+	if f := newKvTrtllmAttest().TokenParityProbe(ep, info); f.OK {
+		t.Fatalf("rule serving chat must be failed by its chat fixture, got %+v", f)
+	}
 }

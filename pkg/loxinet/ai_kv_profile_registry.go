@@ -344,6 +344,15 @@ func kvProfileLoadOne(rootFd int, name string) (*kvProfileEntry, error) {
 	}
 	entry.TokenizerBytes = tokBytes
 	entry.Receipts = append(entry.Receipts, tokReceipt)
+	if kvProfileNeedsBosID(p) {
+		// Fail-closed at publish: an engine-added BOS the pinned tokenizer
+		// cannot name would leave the completions encoder without its id.
+		id, err := kvTokenizerSpecialID(tokBytes, p.RenderPolicy.BosToken)
+		if err != nil {
+			return nil, fmt.Errorf("%s: completionsBos: renderPolicy.bosToken: %w", name, err)
+		}
+		entry.Profile.completionsBosID, entry.Profile.completionsBosOK = id, true
+	}
 
 	if p.TemplateArtifact != "" {
 		tplBytes, tplReceipt, err := kvReadArtifact(rootFd, p.TemplateArtifact, p.TemplateSha256)

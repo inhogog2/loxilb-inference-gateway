@@ -3104,6 +3104,10 @@ type kvExactAdmissionResult struct {
 	// contract install packs these into the data-plane contract word's api_mode byte.
 	APIChat        bool
 	APICompletions bool
+	// Encoding is the resolved engine contract with the profile's measured
+	// behaviour for it (strict rules only); the echo challenge is planned
+	// from it and encodes its prompt through it.
+	Encoding kvCompletionsEncoding
 }
 
 // kvExactRuntimeValidate turns the cross-process KV-exact parity inputs into
@@ -3248,9 +3252,19 @@ func kvExactRuntimeValidate(engine string, kvExactMode uint8, modelName, apiMode
 		if err != nil {
 			return res, fmt.Errorf("strict KV-exact rule requires a resolvable engine contract for %q: %w", eng, err)
 		}
+		enc := kvCompletionsEncodingOf(p, ref.ID)
+		if wantCompletions {
+			// The engine's encoder module must reproduce how this engine
+			// encodes this model's completions prompts, or a strict
+			// completions surface would hash a prompt the engine never builds.
+			if _, eerr := kvEncoderForContract(enc); eerr != nil {
+				return res, fmt.Errorf("profile %q declares completions, but the gateway cannot reproduce how engine %q (contract %s) encodes this model's completions prompts: %v — declare kvExactApiMode chat", profileID, eng, ref.ID, eerr)
+			}
+		}
 		res.Strict = true
 		res.APIChat = wantChat
 		res.APICompletions = wantCompletions
+		res.Encoding = enc
 		res.Comps = KvExactBindingComponents{
 			Profile:               KvModelProfileRef{ID: p.ProfileID, Gen: gen},
 			Contract:              ref,
@@ -4679,6 +4693,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 				zmqPort:         eRule.kvZmqPort,
 				pdMode:          eRule.pdDisaggMode,
 				pdBootstrapPort: eRule.pdBootstrapPort,
+				challenge:       kvChallengePlanFor(kvAdmission.Encoding),
 				decodeEPs:       kvAttestDecodeEPs(eRule.pdDisaggMode, lBActs.endPoints),
 			}, attEps)
 			// A restore replay allocates NOTHING (same split as the create
@@ -5001,6 +5016,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			zmqPort:         r.kvZmqPort,
 			pdMode:          r.pdDisaggMode,
 			pdBootstrapPort: r.pdBootstrapPort,
+			challenge:       kvChallengePlanFor(kvAdmission.Encoding),
 			decodeEPs:       kvAttestDecodeEPs(r.pdDisaggMode, lBActs.endPoints),
 		}, attEps)
 	}
