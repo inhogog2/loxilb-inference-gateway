@@ -83,7 +83,7 @@ func (w *Writer) prunePass() {
 
 	now := w.now()
 	pruned := 0
-	for _, s := range segs {
+	for i, s := range segs {
 		if pruned >= pol.MaxPrunePerPass {
 			break
 		}
@@ -105,9 +105,30 @@ func (w *Writer) prunePass() {
 		if !breached && w.grandfatherHolds(uuid, now) {
 			continue
 		}
+		exported, pending, rng, ready := w.sinkStandings(segs, i, uuid)
+		if !ready {
+			// What the segment holds is being read off this goroutine;
+			// the pass ends here rather than prune a newer segment
+			// ahead of this one.
+			break
+		}
+		// Retention wins over a sink that is behind: the segment goes,
+		// and what the sink will now never be sent is put on record
+		// first, as the range of numbers a receiver will find missing.
+		if len(pending) > 0 && !rng.empty {
+			if !rng.unknown {
+				w.stats.lostToRetention.Add(rng.last - rng.first + 1)
+			}
+			if err := w.writeSystemDurable(sysRecord("sys.segment.lost_to_retention", "audit_segment:"+uuid, &SysDetail{
+				SeqFrom: rng.first, SeqTo: rng.last, SinksPending: pending,
+			})); err != nil {
+				w.logf("audit: loss of %s to retention not announced, kept: %v", s.Name, err)
+				return
+			}
+		}
 		// Announce first, durably; only then delete.
 		if err := w.writeSystemDurable(sysRecord("sys.segment.prune", "audit_segment:"+uuid, &SysDetail{
-			AgeDays: int(age.Hours() / 24), Bytes: s.Bytes, Hold: false,
+			AgeDays: int(age.Hours() / 24), Bytes: s.Bytes, Hold: false, ExportedTo: exported,
 		})); err != nil {
 			w.logf("audit: prune of %s not announced, kept: %v", s.Name, err)
 			return
@@ -117,6 +138,7 @@ func (w *Writer) prunePass() {
 			continue
 		}
 		w.forgetGrandfather(uuid)
+		w.seg.forgetRange(uuid)
 		total -= s.Bytes
 		pruned++
 		w.stats.pruned.Add(1)

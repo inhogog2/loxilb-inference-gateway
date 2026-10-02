@@ -389,6 +389,9 @@ func configureAPI(api *operations.LoxilbRestAPIAPI) http.Handler {
 	api.AuditPostAuditPolicyHandler = auditops.PostAuditPolicyHandlerFunc(handler.AuditPostPolicy)
 	api.AuditGetAuditSinkHandler = auditops.GetAuditSinkHandlerFunc(handler.AuditGetSink)
 	api.AuditPostAuditSinkHandler = auditops.PostAuditSinkHandlerFunc(handler.AuditPostSink)
+	api.AuditGetAuditSinksNameHandler = auditops.GetAuditSinksNameHandlerFunc(handler.AuditGetNamedSink)
+	api.AuditPutAuditSinksNameHandler = auditops.PutAuditSinksNameHandlerFunc(handler.AuditPutNamedSink)
+	api.AuditDeleteAuditSinksNameHandler = auditops.DeleteAuditSinksNameHandlerFunc(handler.AuditDeleteNamedSink)
 	api.AuditPostAuditRotateHandler = auditops.PostAuditRotateHandlerFunc(handler.AuditPostRotate)
 
 	// Log

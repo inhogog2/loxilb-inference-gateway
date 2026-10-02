@@ -17,6 +17,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -240,6 +241,179 @@ func TestMaxFrameBytesTooSmallIsAnErrorNotASilentCut(t *testing.T) {
 	s := newSink(t, func(c *Config) { c.MaxFrameBytes = 40 })
 	if _, _, err := s.frame([]byte(sampleRecord)); err == nil {
 		t.Fatal("a cap below the identity-only record must be refused, never silently cut")
+	}
+}
+
+// sdField returns the STRUCTURED-DATA field of a SYSLOG-MSG whose MSG is the
+// sample record: the seventh space-separated field of the header.
+func sdField(t *testing.T, msg string) string {
+	t.Helper()
+	head, _, ok := strings.Cut(msg, " {")
+	if !ok {
+		t.Fatalf("no MSG in %q", msg)
+	}
+	f := strings.SplitN(head, " ", 7)
+	if len(f) != 7 {
+		t.Fatalf("header has %d fields, want 7: %q", len(f), head)
+	}
+	return f[6]
+}
+
+func TestExportSequenceTravelsInStructuredData(t *testing.T) {
+	s := newSink(t, func(c *Config) { c.EnterpriseNumber = 32473 })
+	// A receiver that is not there refuses the dial after the frame was
+	// built, which is all this needs.
+	var built []byte
+	orig := frameBuilt
+	frameBuilt = func(f []byte) { built = append([]byte(nil), f...) }
+	defer func() { frameBuilt = orig }()
+
+	_ = s.Submit([]byte(sampleRecord))
+	if built == nil {
+		t.Fatal("no frame was built")
+	}
+	plain := built
+	if got := sdField(t, splitFrame(t, plain)); got != "-" {
+		t.Fatalf("a plain submission carries STRUCTURED-DATA %q, want NILVALUE", got)
+	}
+
+	built = nil
+	_ = s.SubmitExport([]byte(sampleRecord), 41, 1700000000)
+	if built == nil {
+		t.Fatal("no frame was built")
+	}
+	msg := splitFrame(t, built)
+	if got, want := sdField(t, msg), `[audit-export@32473 xseq="41" xseq_epoch="1700000000"]`; got != want {
+		t.Fatalf("STRUCTURED-DATA %q, want %q", got, want)
+	}
+	// The record is the same bytes with or without the element.
+	if !strings.HasSuffix(msg, " "+sampleRecord) {
+		t.Fatalf("MSG is not the record verbatim: %q", msg)
+	}
+	if want := strings.Replace(splitFrame(t, plain), " - {", ` [audit-export@32473 xseq="41" xseq_epoch="1700000000"] {`, 1); msg != want {
+		t.Fatalf("the element changed more than the STRUCTURED-DATA field:\n got %q\nwant %q", msg, want)
+	}
+}
+
+func TestExportSequenceNeedsAnEnterpriseNumber(t *testing.T) {
+	s := newSink(t, nil)
+	err := s.SubmitExport([]byte(sampleRecord), 1, 1)
+	if !errors.Is(err, ErrNoEnterpriseNumber) {
+		t.Fatalf("got %v, want ErrNoEnterpriseNumber", err)
+	}
+	// Refused before anything was attempted: no dial, nothing counted.
+	if st := s.Stats(); st.Dials != 0 || st.Submitted != 0 {
+		t.Fatalf("a refused submission touched the network: %+v", st)
+	}
+}
+
+func TestSubmitSaysWhetherAnythingWasWritten(t *testing.T) {
+	// Nobody listens on the address: the dial fails, so nothing was written.
+	s := newSink(t, func(c *Config) { c.Address = "127.0.0.1:1"; c.DialTimeout = time.Second })
+	err := s.Submit([]byte(sampleRecord))
+	if !errors.Is(err, ErrNotAttempted) || errors.Is(err, ErrRejected) {
+		t.Fatalf("an unreachable receiver: %v, want ErrNotAttempted only", err)
+	}
+	// A record that is not an object can never be framed.
+	err = s.Submit([]byte("not json"))
+	if !errors.Is(err, ErrRejected) || errors.Is(err, ErrNotAttempted) {
+		t.Fatalf("an unframeable record: %v, want ErrRejected only", err)
+	}
+	if st := s.Stats(); st.Dials != 1 {
+		t.Fatalf("the rejected record was dialed for: %+v", st)
+	}
+}
+
+func TestExportSequenceCountsTowardTheFrameCap(t *testing.T) {
+	rec := `{"schema_version":1,"event_id":"e","ts":"2026-09-27T01:02:03.004Z",` +
+		`"instance_id":"gw-1","boot_id":"b","seq":7,"stream":"data",` +
+		`"event_type":"data.ai.complete","actor":{"user":"u"},"detail":{"blob":"` + strings.Repeat("x", 300) + `"}}`
+	s := newSink(t, nil)
+	plain, _, err := s.frame([]byte(rec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A cap the plain message exactly fits: the element is what pushes
+	// the message over, so the record must give way, not the cap.
+	limit := len(splitFrame(t, plain))
+	capped := newSink(t, func(c *Config) { c.MaxFrameBytes = limit })
+	if _, truncated, err := capped.frame([]byte(rec)); err != nil || truncated {
+		t.Fatalf("the plain message at the cap: truncated %v, err %v", truncated, err)
+	}
+	sd := []byte(`[audit-export@32473 xseq="7" xseq_epoch="9"]`)
+	frame, truncated, err := capped.frameSD([]byte(rec), sd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := splitFrame(t, frame)
+	if len(msg) > limit {
+		t.Fatalf("message with the element is %d octets, cap is %d", len(msg), limit)
+	}
+	if !truncated {
+		t.Fatal("the record was not marked truncated although the element pushed it over the cap")
+	}
+	if !strings.Contains(msg, " "+string(sd)+" {") {
+		t.Fatalf("the element was dropped to make room: %q", msg)
+	}
+	// Dropping the detail was enough, so that is all that was dropped:
+	// the element is weighed at the first step, not discovered at the
+	// last one.
+	if strings.Contains(msg, `"detail"`) || !strings.Contains(msg, `"actor":{"user":"u"}`) {
+		t.Fatalf("want the detail dropped and the rest kept: %q", msg)
+	}
+
+	// A cap that only the identity fields fit under: the element is
+	// still there, and still counted.
+	wide := `{"schema_version":1,"event_id":"e","ts":"2026-09-27T01:02:03.004Z",` +
+		`"instance_id":"gw-1","boot_id":"b","seq":7,"stream":"data",` +
+		`"event_type":"data.ai.complete","extra":"` + strings.Repeat("y", 600) + `","detail":{}}`
+	tight := newSink(t, func(c *Config) { c.MaxFrameBytes = 330 })
+	frame, truncated, err = tight.frameSD([]byte(wide), sd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg = splitFrame(t, frame)
+	if len(msg) > 330 || !truncated {
+		t.Fatalf("identity-only message is %d octets (cap 330), truncated %v", len(msg), truncated)
+	}
+	if !strings.Contains(msg, " "+string(sd)+" {") {
+		t.Fatalf("the element was dropped from the identity-only message: %q", msg)
+	}
+	if strings.Contains(msg, `"extra"`) {
+		t.Fatalf("the test did not reach the identity-only step: %q", msg)
+	}
+}
+
+func TestExportSequenceReachesTheReceiver(t *testing.T) {
+	caCert, caKey, caPEM := genCAFull(t)
+	trusted := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(trusted, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, addr, lines := tlsReceiver(t, serverCert(t, caCert, caKey))
+	defer srv.Close()
+	s, err := New(Config{Address: addr, CABundlePath: trusted, ServerName: "localhost", Now: fixedNow, EnterpriseNumber: 32473})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for x := uint64(1); x <= 3; x++ {
+		if err := s.SubmitExport([]byte(sampleRecord), x, 5); err != nil {
+			t.Fatalf("SubmitExport: %v", err)
+		}
+	}
+	for x := 1; x <= 3; x++ {
+		select {
+		case got := <-lines:
+			if want := fmt.Sprintf(`[audit-export@32473 xseq="%d" xseq_epoch="5"]`, x); sdField(t, got) != want {
+				t.Fatalf("frame %d carries %q, want %q", x, sdField(t, got), want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("receiver saw %d frames, want 3", x-1)
+		}
+	}
+	if st := s.Stats(); st.Submitted != 3 {
+		t.Fatalf("stats %+v, want 3 submitted", st)
 	}
 }
 

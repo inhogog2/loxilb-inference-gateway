@@ -54,6 +54,9 @@ func NewLoxilbRestAPIAPI(spec *loads.Document) *LoxilbRestAPIAPI {
 		BinProducer:  runtime.ByteStreamProducer(),
 		JSONProducer: runtime.JSONProducer(),
 
+		AuditDeleteAuditSinksNameHandler: audit.DeleteAuditSinksNameHandlerFunc(func(params audit.DeleteAuditSinksNameParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation audit.DeleteAuditSinksName has not yet been implemented")
+		}),
 		UsersDeleteAuthUsersIDHandler: users.DeleteAuthUsersIDHandlerFunc(func(params users.DeleteAuthUsersIDParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation users.DeleteAuthUsersID has not yet been implemented")
 		}),
@@ -167,6 +170,9 @@ func NewLoxilbRestAPIAPI(spec *loads.Document) *LoxilbRestAPIAPI {
 		}),
 		AuditGetAuditSinkHandler: audit.GetAuditSinkHandlerFunc(func(params audit.GetAuditSinkParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation audit.GetAuditSink has not yet been implemented")
+		}),
+		AuditGetAuditSinksNameHandler: audit.GetAuditSinksNameHandlerFunc(func(params audit.GetAuditSinksNameParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation audit.GetAuditSinksName has not yet been implemented")
 		}),
 		AuditGetAuditStatusHandler: audit.GetAuditStatusHandlerFunc(func(params audit.GetAuditStatusParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation audit.GetAuditStatus has not yet been implemented")
@@ -594,6 +600,9 @@ func NewLoxilbRestAPIAPI(spec *loads.Document) *LoxilbRestAPIAPI {
 		PostSniCertificatesHandler: PostSniCertificatesHandlerFunc(func(params PostSniCertificatesParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation PostSniCertificates has not yet been implemented")
 		}),
+		AuditPutAuditSinksNameHandler: audit.PutAuditSinksNameHandlerFunc(func(params audit.PutAuditSinksNameParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation audit.PutAuditSinksName has not yet been implemented")
+		}),
 		UsersPutAuthUsersIDHandler: users.PutAuthUsersIDHandlerFunc(func(params users.PutAuthUsersIDParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation users.PutAuthUsersID has not yet been implemented")
 		}),
@@ -807,6 +816,8 @@ type LoxilbRestAPIAPI struct {
 	// APIAuthorizer provides access control (ACL/RBAC/ABAC) by providing access to the request and authenticated principal
 	APIAuthorizer runtime.Authorizer
 
+	// AuditDeleteAuditSinksNameHandler sets the operation handler for the delete audit sinks name operation
+	AuditDeleteAuditSinksNameHandler audit.DeleteAuditSinksNameHandler
 	// UsersDeleteAuthUsersIDHandler sets the operation handler for the delete auth users ID operation
 	UsersDeleteAuthUsersIDHandler users.DeleteAuthUsersIDHandler
 	// DeleteConfigBfdRemoteIPRemoteIPHandler sets the operation handler for the delete config bfd remote IP remote IP operation
@@ -883,6 +894,8 @@ type LoxilbRestAPIAPI struct {
 	AuditGetAuditPolicyHandler audit.GetAuditPolicyHandler
 	// AuditGetAuditSinkHandler sets the operation handler for the get audit sink operation
 	AuditGetAuditSinkHandler audit.GetAuditSinkHandler
+	// AuditGetAuditSinksNameHandler sets the operation handler for the get audit sinks name operation
+	AuditGetAuditSinksNameHandler audit.GetAuditSinksNameHandler
 	// AuditGetAuditStatusHandler sets the operation handler for the get audit status operation
 	AuditGetAuditStatusHandler audit.GetAuditStatusHandler
 	// UsersGetAuthUsersHandler sets the operation handler for the get auth users operation
@@ -1167,6 +1180,8 @@ type LoxilbRestAPIAPI struct {
 	PostConfigWorkerMetricsHandler PostConfigWorkerMetricsHandler
 	// PostSniCertificatesHandler sets the operation handler for the post sni certificates operation
 	PostSniCertificatesHandler PostSniCertificatesHandler
+	// AuditPutAuditSinksNameHandler sets the operation handler for the put audit sinks name operation
+	AuditPutAuditSinksNameHandler audit.PutAuditSinksNameHandler
 	// UsersPutAuthUsersIDHandler sets the operation handler for the put auth users ID operation
 	UsersPutAuthUsersIDHandler users.PutAuthUsersIDHandler
 	// PutConfigIpsecTunnelsNameHandler sets the operation handler for the put config ipsec tunnels name operation
@@ -1358,6 +1373,9 @@ func (o *LoxilbRestAPIAPI) Validate() error {
 		unregistered = append(unregistered, "AuthorizationAuth")
 	}
 
+	if o.AuditDeleteAuditSinksNameHandler == nil {
+		unregistered = append(unregistered, "audit.DeleteAuditSinksNameHandler")
+	}
 	if o.UsersDeleteAuthUsersIDHandler == nil {
 		unregistered = append(unregistered, "users.DeleteAuthUsersIDHandler")
 	}
@@ -1471,6 +1489,9 @@ func (o *LoxilbRestAPIAPI) Validate() error {
 	}
 	if o.AuditGetAuditSinkHandler == nil {
 		unregistered = append(unregistered, "audit.GetAuditSinkHandler")
+	}
+	if o.AuditGetAuditSinksNameHandler == nil {
+		unregistered = append(unregistered, "audit.GetAuditSinksNameHandler")
 	}
 	if o.AuditGetAuditStatusHandler == nil {
 		unregistered = append(unregistered, "audit.GetAuditStatusHandler")
@@ -1898,6 +1919,9 @@ func (o *LoxilbRestAPIAPI) Validate() error {
 	if o.PostSniCertificatesHandler == nil {
 		unregistered = append(unregistered, "PostSniCertificatesHandler")
 	}
+	if o.AuditPutAuditSinksNameHandler == nil {
+		unregistered = append(unregistered, "audit.PutAuditSinksNameHandler")
+	}
 	if o.UsersPutAuthUsersIDHandler == nil {
 		unregistered = append(unregistered, "users.PutAuthUsersIDHandler")
 	}
@@ -2160,6 +2184,10 @@ func (o *LoxilbRestAPIAPI) initHandlerCache() {
 	if o.handlers["DELETE"] == nil {
 		o.handlers["DELETE"] = make(map[string]http.Handler)
 	}
+	o.handlers["DELETE"]["/audit/sinks/{name}"] = audit.NewDeleteAuditSinksName(o.context, o.AuditDeleteAuditSinksNameHandler)
+	if o.handlers["DELETE"] == nil {
+		o.handlers["DELETE"] = make(map[string]http.Handler)
+	}
 	o.handlers["DELETE"]["/auth/users/{id}"] = users.NewDeleteAuthUsersID(o.context, o.UsersDeleteAuthUsersIDHandler)
 	if o.handlers["DELETE"] == nil {
 		o.handlers["DELETE"] = make(map[string]http.Handler)
@@ -2309,6 +2337,10 @@ func (o *LoxilbRestAPIAPI) initHandlerCache() {
 		o.handlers["GET"] = make(map[string]http.Handler)
 	}
 	o.handlers["GET"]["/audit/sink"] = audit.NewGetAuditSink(o.context, o.AuditGetAuditSinkHandler)
+	if o.handlers["GET"] == nil {
+		o.handlers["GET"] = make(map[string]http.Handler)
+	}
+	o.handlers["GET"]["/audit/sinks/{name}"] = audit.NewGetAuditSinksName(o.context, o.AuditGetAuditSinksNameHandler)
 	if o.handlers["GET"] == nil {
 		o.handlers["GET"] = make(map[string]http.Handler)
 	}
@@ -2877,6 +2909,10 @@ func (o *LoxilbRestAPIAPI) initHandlerCache() {
 		o.handlers["POST"] = make(map[string]http.Handler)
 	}
 	o.handlers["POST"]["/sni/certificates"] = NewPostSniCertificates(o.context, o.PostSniCertificatesHandler)
+	if o.handlers["PUT"] == nil {
+		o.handlers["PUT"] = make(map[string]http.Handler)
+	}
+	o.handlers["PUT"]["/audit/sinks/{name}"] = audit.NewPutAuditSinksName(o.context, o.AuditPutAuditSinksNameHandler)
 	if o.handlers["PUT"] == nil {
 		o.handlers["PUT"] = make(map[string]http.Handler)
 	}

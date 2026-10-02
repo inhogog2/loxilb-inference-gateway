@@ -28,6 +28,9 @@ type AuditStatus struct {
 	// Identity of this writer process, stamped on every record it wrote.
 	BootID string `json:"boot_id,omitempty"`
 
+	// A compliance sink is configured. When false no record leaves the gateway in full and the trail is local only.
+	ComplianceSink bool `json:"compliance_sink,omitempty"`
+
 	// compress failed
 	CompressFailed int64 `json:"compress_failed,omitempty"`
 
@@ -115,6 +118,9 @@ type AuditStatus struct {
 	// Highest sequence number written in this boot.
 	SeqHigh int64 `json:"seq_high,omitempty"`
 
+	// Every configured sink that follows the trail, the compliance sink first, then by name.
+	Sinks []*AuditSinkStatus `json:"sinks"`
+
 	// sync failures
 	SyncFailures int64 `json:"sync_failures,omitempty"`
 
@@ -142,6 +148,10 @@ func (m *AuditStatus) Validate(formats strfmt.Registry) error {
 	}
 
 	if err := m.validateSegment(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateSinks(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -241,6 +251,32 @@ func (m *AuditStatus) validateSegment(formats strfmt.Registry) error {
 	return nil
 }
 
+func (m *AuditStatus) validateSinks(formats strfmt.Registry) error {
+	if swag.IsZero(m.Sinks) { // not required
+		return nil
+	}
+
+	for i := 0; i < len(m.Sinks); i++ {
+		if swag.IsZero(m.Sinks[i]) { // not required
+			continue
+		}
+
+		if m.Sinks[i] != nil {
+			if err := m.Sinks[i].Validate(formats); err != nil {
+				if ve, ok := err.(*errors.Validation); ok {
+					return ve.ValidateName("sinks" + "." + strconv.Itoa(i))
+				} else if ce, ok := err.(*errors.CompositeError); ok {
+					return ce.ValidateName("sinks" + "." + strconv.Itoa(i))
+				}
+				return err
+			}
+		}
+
+	}
+
+	return nil
+}
+
 // ContextValidate validate this audit status based on the context it is used
 func (m *AuditStatus) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
 	var res []error
@@ -258,6 +294,10 @@ func (m *AuditStatus) ContextValidate(ctx context.Context, formats strfmt.Regist
 	}
 
 	if err := m.contextValidateSegment(ctx, formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.contextValidateSinks(ctx, formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -334,6 +374,26 @@ func (m *AuditStatus) contextValidateSegment(ctx context.Context, formats strfmt
 			}
 			return err
 		}
+	}
+
+	return nil
+}
+
+func (m *AuditStatus) contextValidateSinks(ctx context.Context, formats strfmt.Registry) error {
+
+	for i := 0; i < len(m.Sinks); i++ {
+
+		if m.Sinks[i] != nil {
+			if err := m.Sinks[i].ContextValidate(ctx, formats); err != nil {
+				if ve, ok := err.(*errors.Validation); ok {
+					return ve.ValidateName("sinks" + "." + strconv.Itoa(i))
+				} else if ce, ok := err.(*errors.CompositeError); ok {
+					return ce.ValidateName("sinks" + "." + strconv.Itoa(i))
+				}
+				return err
+			}
+		}
+
 	}
 
 	return nil

@@ -296,6 +296,24 @@ type SysDetail struct {
 	Hold              bool   `json:"hold"`
 	Recovered         bool   `json:"recovered,omitempty"`
 
+	// Sink sessions and cursors.
+	PeerSubject  string      `json:"peer_subject,omitempty"`
+	CertNotAfter string      `json:"cert_not_after,omitempty"`
+	Cursor       *Position   `json:"cursor,omitempty"`
+	OldCursor    *SinkCursor `json:"old_cursor,omitempty"`
+	NewCursor    *SinkCursor `json:"new_cursor,omitempty"`
+	Method       string      `json:"method,omitempty"`
+	PoisonSeq    uint64      `json:"poison_seq,omitempty"`
+	// ReconnectWindowRecords is a pointer so that a window of zero, which
+	// is a configuration and not an absence, is still written.
+	ReconnectWindowRecords *uint64 `json:"reconnect_window_records,omitempty"`
+
+	// A segment pruned before every sink had it.
+	SeqFrom      uint64   `json:"seq_from,omitempty"`
+	SeqTo        uint64   `json:"seq_to,omitempty"`
+	SinksPending []string `json:"sinks_pending,omitempty"`
+	ExportedTo   []string `json:"exported_to,omitempty"`
+
 	// Orphaned intents.
 	IntentEventID          string `json:"intent_event_id,omitempty"`
 	ConfigGenerationAtBoot uint64 `json:"config_generation_at_boot,omitempty"`

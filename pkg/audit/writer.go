@@ -179,6 +179,7 @@ type writerStats struct {
 	pathSanitized   atomic.Uint64
 	unattributed    atomic.Uint64
 	pruned          atomic.Uint64
+	lostToRetention atomic.Uint64
 	reserveBreaches atomic.Uint64
 	heartbeats      atomic.Uint64
 	rotations       atomic.Uint64
@@ -249,6 +250,7 @@ type Writer struct {
 	grandfathered map[string]time.Time
 
 	retention       atomic.Pointer[Retention]
+	sinkProgress    atomic.Pointer[func() []SinkProgress]
 	reserveBreached atomic.Bool
 	sealedBytes     atomic.Int64
 	lastOrphan      atomic.Pointer[string]
@@ -334,6 +336,9 @@ func (w *Writer) Close(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
+
+// Dir is the audit directory the writer owns.
+func (w *Writer) Dir() string { return w.cfg.Dir }
 
 // BootID identifies this process start in every record.
 func (w *Writer) BootID() string { return w.bootID }
@@ -470,6 +475,26 @@ func (w *Writer) enqueueSystem(r *Record) {
 	default:
 		w.stats.dropped[sSystem][dropIdxQueueFull].Add(1)
 	}
+}
+
+// EmitSystem appends an audit_system record for a component that runs
+// beside the writer, such as a sink. With durable set it returns once the
+// record is on stable storage, which is what a record announcing an action
+// needs before the action is taken; otherwise the record is queued and a
+// full queue drops and counts it like any other.
+func (w *Writer) EmitSystem(ctx context.Context, r *Record, durable bool) error {
+	if !w.running.Load() {
+		return ErrUnavailable
+	}
+	if !durable {
+		w.enqueueSystem(r)
+		return nil
+	}
+	var werr error
+	if err := w.onLoop(ctx, func() { werr = w.writeSystemDurable(r) }); err != nil {
+		return err
+	}
+	return werr
 }
 
 // SealNow seals the active segment and opens the next one.
@@ -1006,6 +1031,9 @@ type Stats struct {
 	CompressFailed  uint64
 	CompressSkipped uint64
 	Pruned          uint64
+	// LostToRetention counts the records of segments pruned before every
+	// sink had been sent them.
+	LostToRetention uint64
 	ReserveBreaches uint64
 	ReserveBreached bool
 	SealedBytes     int64
@@ -1066,6 +1094,7 @@ func (w *Writer) Stats() Stats {
 		CompressFailed:    w.seg.stats.compressFailed.Load(),
 		CompressSkipped:   w.seg.stats.compressSkipped.Load(),
 		Pruned:            w.stats.pruned.Load(),
+		LostToRetention:   w.stats.lostToRetention.Load(),
 		ReserveBreaches:   w.stats.reserveBreaches.Load(),
 		ReserveBreached:   w.reserveBreached.Load(),
 		SealedBytes:       w.sealedBytes.Load(),
