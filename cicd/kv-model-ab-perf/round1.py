@@ -26,7 +26,9 @@ def main():
         return 2
     a, b = statistics.median(first), statistics.median(later)
     ratio = a / b if b > 0 else float("inf")
-    print(f"round-1 TTFT p50 {a:.0f} ms, later rounds {b:.0f} ms, ratio {ratio:.2f} (limit {limit})")
+    cold = sum(1 for t in first if t >= limit * b)
+    print(f"round-1 TTFT p50 {a:.0f} ms, later rounds {b:.0f} ms, ratio {ratio:.2f} (limit {limit}), "
+          f"round-1 requests cold {cold} of {len(first)}")
     return 1 if ratio >= limit else 0
 
 

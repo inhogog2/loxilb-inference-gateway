@@ -5,6 +5,11 @@ A point is void unless every request of both arms completed, every (repetition, 
 arms, and there are three repetitions. A TTFT difference is CLAIMED only when the arms' per-repetition values
 do not overlap: the worst exact repetition must beat the best baseline repetition (or the reverse). Anything
 else is reported as "overlap" — the measured numbers stand, the claim does not.
+
+Two shares are reported next to the percentiles, because a percentile says nothing when the slow requests of
+both arms sit on the same side of its rank: the share of slow requests (TTFT at least twice the lower arm's
+median) and, when the arm directories hold vLLM engine scrapes, the share of prompt tokens the engines computed
+instead of taking from their cache.
 """
 import argparse
 import json
@@ -44,7 +49,30 @@ def validate(rows):
         raise ValueError("at least three repetitions are required")
 
 
-def arm_summary(rows):
+COMPUTED = 'vllm:prompt_tokens_by_source_total'
+
+
+def computed_tokens(arm_dir):
+    """Prompt tokens the engines computed during one arm (after - before, all engines), or None without scrapes."""
+    def total(path):
+        v = [float(line.rsplit(" ", 1)[1]) for line in path.read_text().splitlines()
+             if line.startswith(COMPUTED) and 'source="local_compute"' in line]
+        return sum(v) if v else None
+    out, after = 0.0, sorted(arm_dir.glob("after-engine-*.prom"))
+    for a in after:
+        before = a.with_name(a.name.replace("after-", "before-", 1))
+        hi, lo = total(a), total(before) if before.exists() else None
+        if hi is None or lo is None:
+            return None
+        out += hi - lo
+    return out if after else None
+
+
+def share(part, whole):
+    return None if part is None else round(part / whole * 100, 1)
+
+
+def arm_summary(rows, slow_ms, computed):
     per_run = []
     for rep in sorted({r["repetition"] for r in rows}):
         run = [r for r in rows if r["repetition"] == rep]
@@ -57,8 +85,14 @@ def arm_summary(rows):
             "ttft_p95_ms": round(percentile([r["ttft_ms"] for r in run], 0.95), 1),
             "tpot_p95_ms": round(percentile([r["tpot_ms"] for r in run], 0.95), 2),
             "schedule_delay_p95_ms": round(percentile([r.get("schedule_delay_ms") or 0 for r in run], 0.95), 1),
+            "slow_request_percent": share(sum(r["ttft_ms"] >= slow_ms for r in run), len(run)),
+            "computed_prompt_token_percent": share(computed.get(rep), sum(int(r["prompt_tokens"]) for r in run)),
         })
+    known = [computed.get(x["repetition"]) for x in per_run]
     return {
+        "slow_request_percent": share(sum(r["ttft_ms"] >= slow_ms for r in rows), len(rows)),
+        "computed_prompt_token_percent": share(None if None in known else sum(known),
+                                               sum(int(r["prompt_tokens"]) for r in rows)),
         "requests": len(rows), "success_rate": sum(bool(r["completed"]) for r in rows) / len(rows),
         "ttft_p50_ms": round(statistics.median(r["ttft_ms"] for r in rows), 1),
         "ttft_p95_ms": round(percentile([r["ttft_ms"] for r in rows], 0.95), 1),
@@ -108,13 +142,18 @@ def main():
             except ValueError:
                 continue
             raise RuntimeError("the validator accepted a mutated row set")
-    arm = {x: arm_summary([r for r in rows if r["arm"] == x]) for x in ("exact", "baseline")}
+    slow_ms = 2 * min(statistics.median(r["ttft_ms"] for r in rows if r["arm"] == x) for x in ("exact", "baseline"))
+    computed = {x: {} for x in ("exact", "baseline")}
+    for d in pathlib.Path(a.input_dir).glob("repetition-*/*"):
+        if d.name in computed and d.parent.name.split("-")[1].isdigit():
+            computed[d.name][int(d.parent.name.split("-")[1])] = computed_tokens(d)
+    arm = {x: arm_summary([r for r in rows if r["arm"] == x], slow_ms, computed[x]) for x in ("exact", "baseline")}
     base = {(r["repetition"], r["prompt_id"]): r["ttft_ms"] for r in rows if r["arm"] == "baseline"}
     pairs = [(r["ttft_ms"], base[(r["repetition"], r["prompt_id"])]) for r in rows if r["arm"] == "exact"]
     e, b = arm["exact"], arm["baseline"]
     pct = lambda x, y: round((x - y) / y * 100, 1)
     summary = {
-        "schema_version": 2, "arms": arm,
+        "schema_version": 3, "arms": arm, "slow_request_ttft_ms": round(slow_ms, 1),
         "effects": {
             "ttft_p95_delta_percent": pct(e["ttft_p95_ms"], b["ttft_p95_ms"]),
             "ttft_p95_delta_95ci_percent": bootstrap(pairs, lambda v: percentile(v, 0.95)),

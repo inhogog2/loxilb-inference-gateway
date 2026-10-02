@@ -117,6 +117,10 @@ for f in sorted(glob.glob(base + "/*/ab-summary.json")):
     topo = f"pd-{npre}p{ndec}d" if ndec else f"converged-{npre}e"
     print(f"# {os.path.basename(d)}: p95 {fx['ttft_p95_delta_percent']:+.1f}% ({fx['ttft_p95_separation']}), CI {fx['ttft_p95_delta_95ci_percent']}, "
           f"p50 {fx['ttft_p50_delta_percent']:+.1f}% ({fx['ttft_p50_separation']}), TPOT p95 {fx['tpot_p95_delta_percent']:+.1f}%, tokens/s {fx['output_tokens_per_sec_delta_percent']:+.1f}%")
+    if "slow_request_percent" in e:
+        na = lambda v: "n/a" if v is None else f"{v}%"
+        print(f"#   slow requests (TTFT >= {s['slow_request_ttft_ms']} ms) {na(e['slow_request_percent'])} exact vs {na(b['slow_request_percent'])} baseline; "
+              f"prompt tokens computed {na(e['computed_prompt_token_percent'])} exact vs {na(b['computed_prompt_token_percent'])} baseline")
     print(f"- {{topology: {topo}, surface: {meta['api']}, corpus: {os.path.basename(d).split('-')[0]}, rateRps: {meta['rate']}, "
           f"requestsPerArm: {e['requests']}, exactTtftP95Ms: {e['ttft_p95_ms']}, baselineTtftP95Ms: {b['ttft_p95_ms']}, "
           f"exactTtftP50Ms: {e['ttft_p50_ms']}, baselineTtftP50Ms: {b['ttft_p50_ms']}, date: \"{os.popen('date -r ' + f + ' +%F').read().strip()}\"}}")

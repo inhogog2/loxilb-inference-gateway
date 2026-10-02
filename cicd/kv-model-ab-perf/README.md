@@ -48,7 +48,7 @@ with the typed line and leaves no summary.
 | exact arm: tier-1.5 hits rise by exactly the number of timed requests | `EXACT_HITS` |
 | exact arm: the fall-through counter does not move | `EXACT_FALLTHROUGH` |
 | exact arm: every prefill engine served the requests the gateway counted as hits on it (the engine's own request counter); spills past a loaded owner are recorded, not refused | `EXACT_PREFILL_SHARE` |
-| exact arm: the first round is not slower than the later ones (median TTFT ratio under 2): the seeded prefixes are the ones hit | `EXACT_ROUND1_COLD` |
+| exact arm: the first round is not slower than the later ones (median TTFT ratio under 2) | `EXACT_ROUND1_COLD`, with the number of cold round-1 requests and the arm's spill count. Two causes: the seeds were not the prefixes hit (a date in the template across 00:00 UTC), or the seeds were hit and the gateway sent requests past a busy owner to an engine that had not seen the family (a request outlives the arrival gap: offer a lower rate or use more engines). The arm's files do not say which engine served a request, so the line does not choose; a spill count below the cold count rules the second out, and seed plus timed prompt sent to one engine directly settles it. |
 | exact arm: no prefill engine is left without a request | `EXACT_ENGINE_IDLE` |
 | no arm is seeded on one UTC day and timed on the next (a chat template may print the date; an arm that would straddle 00:00 UTC waits for it) | `ARM_CROSSED_UTC_MIDNIGHT` |
 | baseline arm: tier-1.5 hits do not move | `BASELINE_HITS` |
@@ -58,7 +58,10 @@ with the typed line and leaves no summary.
 ## Reading the result
 
 `ab-summary.json` has, per arm, TTFT p50/p95, per-token time p95 and output tokens per second, overall and per
-repetition. A difference is **claimed** only when the arms' per-repetition values do not overlap
+repetition. It also has two shares, because p50 and p95 say nothing when the slow requests of both arms fall on
+the same side of the rank: `slow_request_percent` (TTFT at least twice the lower arm's median) and
+`computed_prompt_token_percent` (prompt tokens the engines computed instead of reading from their cache, from
+the vLLM scrapes of the arm; absent for other engines). A difference is **claimed** only when the arms' per-repetition values do not overlap
 (`ttft_p95_separation`: `exact_lower`, `baseline_lower`); `overlap` means the numbers stand and the claim does
 not. The short-prefix control has no cache benefit to win: it bounds the routing overhead and the noise, and a
 long-prefix result is read against it.

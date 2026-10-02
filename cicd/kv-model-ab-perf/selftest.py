@@ -84,6 +84,10 @@ def main():
         rc, s = analyze(tmp, "a1", rows([100, 110, 105], [300, 320, 310]))
         check("A1 every exact repetition under every baseline one -> exact_lower", rc == 0 and s and
               s["effects"]["ttft_p95_separation"] == "exact_lower" and s["effects"]["ttft_p95_delta_percent"] < 0, (rc, s))
+        check("A1 slow share: every baseline request is at least twice the exact median, no exact one is; no scrapes -> no computed share",
+              rc == 0 and s and s["arms"]["baseline"]["slow_request_percent"] == 100.0 and
+              s["arms"]["exact"]["slow_request_percent"] == 0.0 and
+              s["arms"]["exact"]["computed_prompt_token_percent"] is None, (rc, s and s["arms"]["exact"]))
         rc, s = analyze(tmp, "a2", rows([100, 330, 105], [300, 320, 310]))
         check("A2 one exact repetition above a baseline one -> overlap, no claim", rc == 0 and s and
               s["effects"]["ttft_p95_separation"] == "overlap", (rc, s))
@@ -122,7 +126,6 @@ def main():
         check("R2 first round 3.6x the later ones -> cold, refused", round1("r2", 180, 50) == 1)
         check("R3 first round 1.4x (a decode pull) -> still warm", round1("r3", 350, 250) == 0)
         check("R4 rows without a round number -> cannot judge, refused", round1("r4", 55, 50, suffix=False) == 2)
-
         print("load generator")
         srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stub)
         threading.Thread(target=srv.serve_forever, daemon=True).start()

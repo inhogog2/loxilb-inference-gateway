@@ -143,7 +143,10 @@ arm() { # arm <repetition> exact|baseline
     [ "$f" = 0 ] || { echo "EXACT_FALLTHROUGH +$f"; return 1; }
     # A hit on every request does not say the seeded prefix was the one hit: see round1.py.
     if [ "$REPEAT" -gt 1 ]; then
-      python3 "$AB_DIR/round1.py" "$d/requests.jsonl" > "$d/round1.txt" || { echo "EXACT_ROUND1_COLD $(cat "$d/round1.txt")"; return 1; }
+      # The arm's spill count goes on the line: a cold round has two causes this check cannot tell apart from the
+      # arm's own files (see README), and a spill count far below the cold count rules one of them out.
+      python3 "$AB_DIR/round1.py" "$d/requests.jsonl" > "$d/round1.txt" || {
+        echo "EXACT_ROUND1_COLD $(cat "$d/round1.txt"); the arm spilled $(( $(msum "$d/after-gateway.prom" loxilb_pd_kv_tier15_spills_total) - $(msum "$d/before-gateway.prom" loxilb_pd_kv_tier15_spills_total) )) of $NREQ requests"; return 1; }
     fi
   else
     [ "$h" = 0 ] || { echo "BASELINE_HITS +$h (the baseline rule must not route by cache)"; return 1; }
