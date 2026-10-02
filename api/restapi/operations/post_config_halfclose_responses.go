@@ -17,7 +17,7 @@ import (
 const PostConfigHalfcloseOKCode int = 200
 
 /*
-PostConfigHalfcloseOK OK
+PostConfigHalfcloseOK The settings in force once applied
 
 swagger:response postConfigHalfcloseOK
 */
@@ -26,7 +26,7 @@ type PostConfigHalfcloseOK struct {
 	/*
 	  In: Body
 	*/
-	Payload *models.OperationResult `json:"body,omitempty"`
+	Payload *models.HalfCloseConfig `json:"body,omitempty"`
 }
 
 // NewPostConfigHalfcloseOK creates PostConfigHalfcloseOK with default headers values
@@ -36,13 +36,13 @@ func NewPostConfigHalfcloseOK() *PostConfigHalfcloseOK {
 }
 
 // WithPayload adds the payload to the post config halfclose o k response
-func (o *PostConfigHalfcloseOK) WithPayload(payload *models.OperationResult) *PostConfigHalfcloseOK {
+func (o *PostConfigHalfcloseOK) WithPayload(payload *models.HalfCloseConfig) *PostConfigHalfcloseOK {
 	o.Payload = payload
 	return o
 }
 
 // SetPayload sets the payload to the post config halfclose o k response
-func (o *PostConfigHalfcloseOK) SetPayload(payload *models.OperationResult) {
+func (o *PostConfigHalfcloseOK) SetPayload(payload *models.HalfCloseConfig) {
 	o.Payload = payload
 }
 

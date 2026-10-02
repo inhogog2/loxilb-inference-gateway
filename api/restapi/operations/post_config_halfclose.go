@@ -34,7 +34,7 @@ func NewPostConfigHalfclose(ctx *middleware.Context, handler PostConfigHalfclose
 
 # Set the half-close hold settings
 
-Sets whether new holds may be taken and the idle bound on a hold. A field omitted keeps the value in force; a body with neither is refused (400). Blocking stops new holds only: the clients already held stay held until their answers are out or the bound ends them, and /config/halfclose/release is what closes them at once. A new bound applies to every hold from the next pass of the data path, those already held included. The settings are kept across a restart and in a configuration snapshot.
+Sets whether new holds may be taken and the idle bound on a hold. A field omitted keeps the value in force; a body with neither, or with a field the model does not have, is refused (400). The answer is the settings in force once applied. Blocking stops new holds only: the clients already held stay held until their answers are out or the bound ends them, and /config/halfclose/release is what closes them at once. A new bound applies to every hold from the next pass of the data path, those already held included. The settings are kept across a restart and in a configuration snapshot.
 */
 type PostConfigHalfclose struct {
 	Context *middleware.Context

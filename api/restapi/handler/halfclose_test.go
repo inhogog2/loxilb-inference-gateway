@@ -72,10 +72,26 @@ func halfCloseGet(t *testing.T) (bool, int32) {
 }
 
 func halfClosePost(attr *models.HalfCloseConfig) interface{} {
-	return ConfigPostHalfClose(operations.PostConfigHalfcloseParams{
-		HTTPRequest: httptest.NewRequest(http.MethodPost, "/netlox/v1/config/halfclose", nil),
-		Attr:        attr,
-	}, nil)
+	return halfClosePostRaw(attr, "")
+}
+
+// halfClosePostRaw posts attr with raw as the body the middleware captured.
+func halfClosePostRaw(attr *models.HalfCloseConfig, raw string) interface{} {
+	req := httptest.NewRequest(http.MethodPost, "/netlox/v1/config/halfclose", nil)
+	if raw != "" {
+		req = req.WithContext(WithRawLoadbalancerBody(req.Context(), []byte(raw)))
+	}
+	return ConfigPostHalfClose(operations.PostConfigHalfcloseParams{HTTPRequest: req, Attr: attr}, nil)
+}
+
+// applied returns the settings a POST answered with.
+func applied(t *testing.T, res interface{}) (bool, int32) {
+	t.Helper()
+	ok, isOK := res.(*operations.PostConfigHalfcloseOK)
+	if !isOK {
+		t.Fatalf("POST answered %T", res)
+	}
+	return *ok.Payload.Allow, *ok.Payload.CapSeconds
 }
 
 // GET answers the defaults until the settings are set; a POST that names one
@@ -90,15 +106,18 @@ func TestHalfCloseSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("defaults read back as allow=%v cap=%d, want true 240", allow, capSec)
 	}
 
-	if _, ok := halfClosePost(&models.HalfCloseConfig{Allow: swag.Bool(false)}).(*ResultResponse); !ok {
-		t.Fatal("blocking was refused")
+	// The answer is the settings in force once applied, and GET agrees.
+	if allow, capSec := applied(t, halfClosePostRaw(&models.HalfCloseConfig{Allow: swag.Bool(false)},
+		`{"allow":false}`)); allow || capSec != 240 {
+		t.Fatalf("blocking answered allow=%v cap=%d, want false 240", allow, capSec)
 	}
 	if allow, capSec := halfCloseGet(t); allow || capSec != 240 {
 		t.Fatalf("after blocking: allow=%v cap=%d, want false 240", allow, capSec)
 	}
 
-	if _, ok := halfClosePost(&models.HalfCloseConfig{CapSeconds: swag.Int32(30)}).(*ResultResponse); !ok {
-		t.Fatal("a new bound was refused")
+	// A new bound alone keeps the block in force.
+	if allow, capSec := applied(t, halfClosePost(&models.HalfCloseConfig{CapSeconds: swag.Int32(30)})); allow || capSec != 30 {
+		t.Fatalf("a new bound answered allow=%v cap=%d, want false 30", allow, capSec)
 	}
 	if allow, capSec := halfCloseGet(t); allow || capSec != 30 {
 		t.Fatalf("after a new bound: allow=%v cap=%d, want false 30", allow, capSec)
@@ -112,17 +131,25 @@ func TestHalfCloseSettingsRefused(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		attr *models.HalfCloseConfig
+		raw  string
 	}{
-		{"neither field", &models.HalfCloseConfig{}},
-		{"no body", nil},
-		{"a bound of zero", &models.HalfCloseConfig{CapSeconds: swag.Int32(0)}},
-		{"a negative bound", &models.HalfCloseConfig{CapSeconds: swag.Int32(-1)}},
-		{"a bound over an hour", &models.HalfCloseConfig{CapSeconds: swag.Int32(3601)}},
+		{"neither field", &models.HalfCloseConfig{}, `{}`},
+		{"no body", nil, ""},
+		{"a bound of zero", &models.HalfCloseConfig{CapSeconds: swag.Int32(0)}, ""},
+		{"a negative bound", &models.HalfCloseConfig{CapSeconds: swag.Int32(-1)}, ""},
+		{"a bound over an hour", &models.HalfCloseConfig{CapSeconds: swag.Int32(3601)}, ""},
+		// A misspelt field must not pass for "omitted": the operator would
+		// believe holds were blocked.
+		{"a misspelt field alone", &models.HalfCloseConfig{}, `{"alow":false}`},
+		{"a misspelt field beside a known one", &models.HalfCloseConfig{CapSeconds: swag.Int32(240)},
+			`{"alow":false,"capSeconds":240}`},
+		{"a field from another API", &models.HalfCloseConfig{Allow: swag.Bool(false)},
+			`{"allow":false,"max_idle_sec":240}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			stub := &stubHalfCloseHook{}
 			ApiHooks = stub
-			res := halfClosePost(c.attr)
+			res := halfClosePostRaw(c.attr, c.raw)
 			er, ok := res.(*ErrorResponse)
 			if !ok {
 				t.Fatalf("answered %T, want an error", res)

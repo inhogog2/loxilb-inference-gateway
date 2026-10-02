@@ -228,7 +228,7 @@ connection, when no answer byte has reached it for the bound below, or on a rele
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/config/halfclose` | The settings in force: `{"allow": true, "capSeconds": 240}` until set |
-| `POST` | `/config/halfclose` | Set `allow` (new holds allowed or blocked, on every service) and/or `capSeconds` (the idle bound, `1`–`3600`); an omitted field keeps its value; persisted |
+| `POST` | `/config/halfclose` | Set `allow` (new holds allowed or blocked, on every service) and/or `capSeconds` (the idle bound, `1`–`3600`); an omitted field keeps its value, any other field is refused (`400`); answers with the settings in force once applied; persisted |
 | `POST` | `/config/halfclose/release` | Close every held client at the next pass (within a second); stores nothing |
 
 Blocking stops new holds only; the clients already held finish as they started. To stop

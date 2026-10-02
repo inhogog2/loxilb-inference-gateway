@@ -14,7 +14,7 @@ import (
 	"github.com/go-openapi/validate"
 )
 
-// HalfCloseConfig The process-wide half-close hold settings. They apply to the services whose half_close_mode is hold; a service's own mode decides whether it holds at all.
+// HalfCloseConfig The process-wide half-close hold settings. They apply to the services whose half_close_mode is hold; a service's own mode decides whether it holds at all. A field this model does not have is refused (400), so a misspelt one cannot pass for a change that was not made.
 //
 // swagger:model HalfCloseConfig
 type HalfCloseConfig struct {

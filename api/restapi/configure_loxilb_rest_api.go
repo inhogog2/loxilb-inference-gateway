@@ -615,7 +615,10 @@ func setupGlobalMiddleware(next http.Handler) http.Handler {
 		isLBPost := r.Method == http.MethodPost && r.URL.Path == "/netlox/v1/config/loadbalancer"
 		isLBPatch := r.Method == http.MethodPatch &&
 			strings.HasPrefix(r.URL.Path, "/netlox/v1/config/loadbalancer/externalipaddress/")
-		if (isLBPost || isLBPatch) && r.Body != nil {
+		// The half-close settings take a partial body, so a misspelt field
+		// would pass silently as "omitted"; its handler refuses unknown keys.
+		isHalfClosePost := r.Method == http.MethodPost && r.URL.Path == "/netlox/v1/config/halfclose"
+		if (isLBPost || isLBPatch || isHalfClosePost) && r.Body != nil {
 			raw := &bytes.Buffer{}
 			r.Body = &teeReadCloser{Reader: io.TeeReader(r.Body, raw), Closer: r.Body}
 			r = r.WithContext(withRawLoadbalancerBodyBuffer(r.Context(), raw))

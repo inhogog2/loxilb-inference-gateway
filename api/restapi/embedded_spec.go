@@ -2214,7 +2214,8 @@ func init() {
       "type": "object"
     },
     "HalfCloseConfig": {
-      "description": "The process-wide half-close hold settings. They apply to the services whose half_close_mode is hold; a service's own mode decides whether it holds at all.",
+      "additionalProperties": false,
+      "description": "The process-wide half-close hold settings. They apply to the services whose half_close_mode is hold; a service's own mode decides whether it holds at all. A field this model does not have is refused (400), so a misspelt one cannot pass for a change that was not made.",
       "properties": {
         "allow": {
           "description": "Whether new holds may be taken. false blocks them on every service, whatever its mode, and leaves the clients already held to finish.",
@@ -12281,7 +12282,7 @@ func init() {
         "summary": "Get the half-close hold settings"
       },
       "post": {
-        "description": "Sets whether new holds may be taken and the idle bound on a hold. A field omitted keeps the value in force; a body with neither is refused (400). Blocking stops new holds only: the clients already held stay held until their answers are out or the bound ends them, and /config/halfclose/release is what closes them at once. A new bound applies to every hold from the next pass of the data path, those already held included. The settings are kept across a restart and in a configuration snapshot.",
+        "description": "Sets whether new holds may be taken and the idle bound on a hold. A field omitted keeps the value in force; a body with neither, or with a field the model does not have, is refused (400). The answer is the settings in force once applied. Blocking stops new holds only: the clients already held stay held until their answers are out or the bound ends them, and /config/halfclose/release is what closes them at once. A new bound applies to every hold from the next pass of the data path, those already held included. The settings are kept across a restart and in a configuration snapshot.",
         "operationId": "postConfigHalfclose",
         "parameters": [
           {
@@ -12296,9 +12297,9 @@ func init() {
         ],
         "responses": {
           "200": {
-            "description": "OK",
+            "description": "The settings in force once applied",
             "schema": {
-              "$ref": "#/definitions/OperationResult"
+              "$ref": "#/definitions/HalfCloseConfig"
             }
           },
           "400": {
@@ -25199,7 +25200,7 @@ func init() {
         }
       },
       "post": {
-        "description": "Sets whether new holds may be taken and the idle bound on a hold. A field omitted keeps the value in force; a body with neither is refused (400). Blocking stops new holds only: the clients already held stay held until their answers are out or the bound ends them, and /config/halfclose/release is what closes them at once. A new bound applies to every hold from the next pass of the data path, those already held included. The settings are kept across a restart and in a configuration snapshot.",
+        "description": "Sets whether new holds may be taken and the idle bound on a hold. A field omitted keeps the value in force; a body with neither, or with a field the model does not have, is refused (400). The answer is the settings in force once applied. Blocking stops new holds only: the clients already held stay held until their answers are out or the bound ends them, and /config/halfclose/release is what closes them at once. A new bound applies to every hold from the next pass of the data path, those already held included. The settings are kept across a restart and in a configuration snapshot.",
         "summary": "Set the half-close hold settings",
         "operationId": "postConfigHalfclose",
         "parameters": [
@@ -25215,9 +25216,9 @@ func init() {
         ],
         "responses": {
           "200": {
-            "description": "OK",
+            "description": "The settings in force once applied",
             "schema": {
-              "$ref": "#/definitions/OperationResult"
+              "$ref": "#/definitions/HalfCloseConfig"
             }
           },
           "400": {
@@ -36570,7 +36571,7 @@ func init() {
       }
     },
     "HalfCloseConfig": {
-      "description": "The process-wide half-close hold settings. They apply to the services whose half_close_mode is hold; a service's own mode decides whether it holds at all.",
+      "description": "The process-wide half-close hold settings. They apply to the services whose half_close_mode is hold; a service's own mode decides whether it holds at all. A field this model does not have is refused (400), so a misspelt one cannot pass for a change that was not made.",
       "type": "object",
       "properties": {
         "allow": {
@@ -36586,7 +36587,8 @@ func init() {
           "minimum": 1,
           "x-nullable": true
         }
-      }
+      },
+      "additionalProperties": false
     },
     "HealthCheckResponse": {
       "type": "object",

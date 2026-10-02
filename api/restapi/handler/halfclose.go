@@ -17,7 +17,10 @@
 package handler
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"sort"
 
 	"github.com/go-openapi/runtime/middleware"
 	"github.com/loxilb-io/loxilb/api/models"
@@ -51,17 +54,55 @@ func ConfigGetHalfClose(params operations.GetConfigHalfcloseParams, principal in
 	if err != nil {
 		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
 	}
+	return operations.NewGetConfigHalfcloseOK().WithPayload(halfClosePayload(cfg))
+}
+
+// halfCloseKeys are the fields POST /config/halfclose takes.
+var halfCloseKeys = map[string]bool{"allow": true, "capSeconds": true}
+
+// halfCloseUnknownKeys names the fields of a raw body that the settings do
+// not have. A partial body treats an absent field as "keep", so without this
+// a misspelt one - {"alow":false} - would succeed and change nothing.
+func halfCloseUnknownKeys(raw []byte) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	var unknown []string
+	for k := range m {
+		if !halfCloseKeys[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown, nil
+}
+
+// halfClosePayload is the answer of GET and POST: the settings in force.
+func halfClosePayload(cfg cmn.HalfCloseConfig) *models.HalfCloseConfig {
 	allow := cfg.Allow
 	capSec := int32(cfg.CapSeconds)
-	return operations.NewGetConfigHalfcloseOK().WithPayload(
-		&models.HalfCloseConfig{Allow: &allow, CapSeconds: &capSec})
+	return &models.HalfCloseConfig{Allow: &allow, CapSeconds: &capSec}
 }
 
 // ConfigPostHalfClose - POST /config/halfclose. A field omitted keeps the
-// value in force, so blocking new holds in an incident needs no other value.
+// value in force, so blocking new holds in an incident needs no other value;
+// a field the settings do not have is refused, and the answer is the settings
+// in force once applied, so the caller sees what it got.
 func ConfigPostHalfClose(params operations.PostConfigHalfcloseParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: half-close %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
 
+	unknown, err := halfCloseUnknownKeys(rawLoadbalancerBodyFromContext(params.HTTPRequest.Context()))
+	if err != nil {
+		return errorResponseWithCode(http.StatusBadRequest, "malformed half-close settings body")
+	}
+	if len(unknown) > 0 {
+		return errorResponseWithCode(http.StatusBadRequest,
+			fmt.Sprintf("unknown field(s) %v: the settings are allow and capSeconds", unknown))
+	}
 	attr := params.Attr
 	if attr == nil || (attr.Allow == nil && attr.CapSeconds == nil) {
 		return errorResponseWithCode(http.StatusBadRequest, "give allow, capSeconds or both")
@@ -82,7 +123,11 @@ func ConfigPostHalfClose(params operations.PostConfigHalfcloseParams, principal 
 	if _, err := ApiHooks.NetHalfCloseSet(&cfg); err != nil {
 		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
 	}
-	return &ResultResponse{Result: "Success"}
+	applied, err := halfCloseInForce()
+	if err != nil {
+		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
+	}
+	return operations.NewPostConfigHalfcloseOK().WithPayload(halfClosePayload(applied))
 }
 
 // ConfigPostHalfCloseRelease - POST /config/halfclose/release
