@@ -179,6 +179,7 @@ type writerStats struct {
 	pathSanitized   atomic.Uint64
 	unattributed    atomic.Uint64
 	pruned          atomic.Uint64
+	lostToRetention atomic.Uint64
 	reserveBreaches atomic.Uint64
 	heartbeats      atomic.Uint64
 	rotations       atomic.Uint64
@@ -249,6 +250,7 @@ type Writer struct {
 	grandfathered map[string]time.Time
 
 	retention       atomic.Pointer[Retention]
+	sinkProgress    atomic.Pointer[func() []SinkProgress]
 	reserveBreached atomic.Bool
 	sealedBytes     atomic.Int64
 	lastOrphan      atomic.Pointer[string]
@@ -1029,6 +1031,9 @@ type Stats struct {
 	CompressFailed  uint64
 	CompressSkipped uint64
 	Pruned          uint64
+	// LostToRetention counts the records of segments pruned before every
+	// sink had been sent them.
+	LostToRetention uint64
 	ReserveBreaches uint64
 	ReserveBreached bool
 	SealedBytes     int64
@@ -1089,6 +1094,7 @@ func (w *Writer) Stats() Stats {
 		CompressFailed:    w.seg.stats.compressFailed.Load(),
 		CompressSkipped:   w.seg.stats.compressSkipped.Load(),
 		Pruned:            w.stats.pruned.Load(),
+		LostToRetention:   w.stats.lostToRetention.Load(),
 		ReserveBreaches:   w.stats.reserveBreaches.Load(),
 		ReserveBreached:   w.reserveBreached.Load(),
 		SealedBytes:       w.sealedBytes.Load(),

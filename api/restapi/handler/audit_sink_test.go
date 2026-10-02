@@ -18,12 +18,14 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -93,6 +95,21 @@ func newSinkPKI(t *testing.T) sinkPKI {
 type sinkFrame struct {
 	sd     string
 	record map[string]any
+}
+
+var sinkExportSD = regexp.MustCompile(`^\[audit-export@(\d+) xseq="(\d+)" xseq_epoch="(\d+)"\]$`)
+
+// export returns the frame's export sequence element.
+func (f sinkFrame) export(t *testing.T) (pen, xseq, epoch uint64) {
+	t.Helper()
+	m := sinkExportSD.FindStringSubmatch(f.sd)
+	if m == nil {
+		t.Fatalf("the frame's structured data is %q, not an export sequence", f.sd)
+	}
+	pen, _ = strconv.ParseUint(m[1], 10, 64)
+	xseq, _ = strconv.ParseUint(m[2], 10, 64)
+	epoch, _ = strconv.ParseUint(m[3], 10, 64)
+	return pen, xseq, epoch
 }
 
 func (f sinkFrame) seq() uint64 {
@@ -226,7 +243,13 @@ func resetAuditSink(t *testing.T) {
 		if err := stopAuditSinkLocked(ctx); err != nil {
 			t.Errorf("the sink tailer did not stop: %v", err)
 		}
-		auditSink.sink, auditSink.cfg, auditSink.tailer = nil, syslog.Config{}, nil
+		for name, ns := range auditSink.named {
+			if err := ns.stop(ctx); err != nil {
+				t.Errorf("the tailer of sink %s did not stop: %v", name, err)
+			}
+		}
+		auditSink.sink, auditSink.cfg, auditSink.tailer, auditSink.named = nil, syslog.Config{}, nil, nil
+		publishAuditSinksLocked()
 	})
 }
 
@@ -514,5 +537,428 @@ func TestSyslogSubmitterSaysHowASubmissionFailed(t *testing.T) {
 	}
 	if want := `[audit-export@32473 xseq="9" xseq_epoch="4"]`; frames[1].sd != want {
 		t.Errorf("a numbered submission carries %q, want %q", frames[1].sd, want)
+	}
+}
+
+// ── secondary sinks ───────────────────────────────────────────────────────
+
+const testPEN = 32473 // the enterprise number RFC 5612 reserves for documentation
+
+// waitCount waits until the receiver holds at least n frames.
+func (r *sinkReceiver) waitCount(n int) []sinkFrame {
+	r.t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		frames := r.got()
+		if len(frames) >= n {
+			return frames
+		}
+		if time.Now().After(deadline) {
+			r.t.Fatalf("the receiver has %d frames, want at least %d", len(frames), n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// putNamedSink sends a secondary sink through the gate and returns its status.
+func putNamedSink(f *gateFixture, name string, m models.AuditNamedSink) int {
+	f.t.Helper()
+	code := 0
+	f.inside = func(r *http.Request) {
+		RecordAuditPrincipal(r, "alice|admin")
+		resp := AuditPutNamedSink(auditops.PutAuditSinksNameParams{HTTPRequest: r, Name: name, Attr: &m}, "alice|admin")
+		code = f.serve(resp).Code
+	}
+	f.do("PUT", "/netlox/v1/audit/sinks/"+name, `{}`, "Content-Type", "application/json")
+	f.inside = nil
+	f.status = http.StatusOK
+	return code
+}
+
+func deleteNamedSink(f *gateFixture, name string) int {
+	f.t.Helper()
+	code := 0
+	f.inside = func(r *http.Request) {
+		RecordAuditPrincipal(r, "alice|admin")
+		resp := AuditDeleteNamedSink(auditops.DeleteAuditSinksNameParams{HTTPRequest: r, Name: name}, "alice|admin")
+		code = f.serve(resp).Code
+	}
+	f.do("DELETE", "/netlox/v1/audit/sinks/"+name, "")
+	f.inside = nil
+	f.status = http.StatusOK
+	return code
+}
+
+// getNamedSink reads a secondary sink as GET /audit/sinks/{name} serves it.
+func getNamedSink(f *gateFixture, name string) (int, models.AuditNamedSink) {
+	f.t.Helper()
+	req, _ := http.NewRequest("GET", "/netlox/v1/audit/sinks/"+name, nil)
+	rec := f.serve(AuditGetNamedSink(auditops.GetAuditSinksNameParams{HTTPRequest: req, Name: name}, "alice|admin"))
+	f.status = http.StatusOK
+	var m models.AuditNamedSink
+	if rec.Code == http.StatusOK {
+		if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+			f.t.Fatalf("GET of sink %s is not a sink: %v", name, err)
+		}
+	}
+	return rec.Code, m
+}
+
+func namedTailer(name string) *audit.SinkTailer {
+	auditSink.mu.Lock()
+	defer auditSink.mu.Unlock()
+	if ns := auditSink.named[name]; ns != nil {
+		return ns.tailer
+	}
+	return nil
+}
+
+func mgmtOnly(rcv *sinkReceiver, pki sinkPKI) models.AuditNamedSink {
+	return models.AuditNamedSink{
+		Address: rcv.addr, CaBundlePath: pki.caPath, EnterpriseNumber: testPEN,
+		Filter: &models.AuditSinkFilter{Streams: []string{"mgmt"}},
+	}
+}
+
+// A secondary sink receives what its filter selects and nothing else, and
+// numbers it: the trail's own seq has holes there by construction, so the
+// export sequence beside each record is what is contiguous for that
+// receiver. The compliance sink beside it still receives everything, with
+// nothing beside the record.
+func TestAuditNamedSinkSendsWhatItSelectsUnderItsOwnSequence(t *testing.T) {
+	withAuthMode(t, true)
+	f := newGateFixture(t)
+	resetAuditSink(t)
+	pki := newSinkPKI(t)
+	all, some := newSinkReceiver(t, pki), newSinkReceiver(t, pki)
+
+	if code := postSink(f, models.AuditSink{Enabled: true, Address: all.addr, CaBundlePath: pki.caPath}); code != http.StatusNoContent {
+		t.Fatalf("enabling the compliance sink answered %d", code)
+	}
+	// Its session record is an audit_system record, now on the trail
+	// between the management records either side of it.
+	all.waitFor("the record of its own session", isEvent("sys.sink.connect"))
+	if code := putNamedSink(f, "mgmt-only", mgmtOnly(some, pki)); code != http.StatusNoContent {
+		t.Fatalf("configuring the secondary sink answered %d", code)
+	}
+	mutate(f, 3)
+
+	// Two sink changes and three mutations, an intent and a result each.
+	frames := some.waitCount(10)
+	_, _, epoch := frames[0].export(t)
+	if epoch == 0 {
+		t.Fatal("the export epoch is zero")
+	}
+	holes := false
+	for i, fr := range frames {
+		if fr.record["stream"] != "mgmt" {
+			t.Fatalf("frame %d is a %v record; the filter selects mgmt", i, fr.record["stream"])
+		}
+		pen, xseq, e := fr.export(t)
+		if pen != testPEN || xseq != uint64(i+1) || e != epoch {
+			t.Fatalf("frame %d carries %q, want xseq %d under epoch %d and number %d", i, fr.sd, i+1, epoch, testPEN)
+		}
+		if i > 0 {
+			if fr.seq() <= frames[i-1].seq() {
+				t.Fatalf("frame %d has seq %d after %d", i, fr.seq(), frames[i-1].seq())
+			}
+			holes = holes || fr.seq() != frames[i-1].seq()+1
+		}
+	}
+	if !holes {
+		t.Error("seq is contiguous at the filtered receiver: the test did not filter anything out")
+	}
+	for i, fr := range all.waitFor("an audit_system record", func(fr sinkFrame) bool { return fr.record["stream"] == "audit_system" }) {
+		if fr.sd != "-" {
+			t.Fatalf("frame %d of the compliance sink carries %q", i, fr.sd)
+		}
+	}
+
+	// The cursor is published when it is saved, which the tailer does once
+	// it finds the trail idle.
+	var got models.AuditNamedSink
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		var code int
+		if code, got = getNamedSink(f, "mgmt-only"); code != http.StatusOK {
+			t.Fatalf("GET of the sink answered %d", code)
+		}
+		if got.XseqHigh >= int64(len(frames)) || time.Now().After(deadline) {
+			break
+		}
+	}
+	if got.Name != "mgmt-only" || got.State != audit.SinkConnected || got.EnterpriseNumber != testPEN ||
+		got.XseqEpoch != int64(epoch) || got.XseqHigh < int64(len(frames)) || got.Cursor == nil || got.Cursor.Seq == 0 {
+		t.Errorf("GET reports %+v (cursor %+v)", got, got.Cursor)
+	}
+	if got.Filter == nil || len(got.Filter.Streams) != 1 || got.Filter.Streams[0] != "mgmt" {
+		t.Errorf("GET does not report the filter: %+v", got.Filter)
+	}
+	if got.Filtered == 0 {
+		t.Error("GET reports no record kept from the sink, and some were")
+	}
+
+	st := auditStatusModel(f.w, time.Now())
+	if !st.ComplianceSink || len(st.Sinks) != 2 {
+		t.Fatalf("status reports compliance_sink=%v and %d sinks, want true and 2", st.ComplianceSink, len(st.Sinks))
+	}
+	if c, s := st.Sinks[0], st.Sinks[1]; c.Name != auditComplianceSink || !c.Compliance || s.Name != "mgmt-only" || s.Compliance {
+		t.Errorf("status lists %s (compliance=%v) then %s (compliance=%v)", c.Name, c.Compliance, s.Name, s.Compliance)
+	}
+	if s := st.Sinks[1]; !s.InActiveSegment || s.Cursor.SegmentUUID != st.Segment.UUID || s.LagRecords < 0 || s.LagRecords > st.SeqHigh {
+		t.Errorf("status places the secondary sink at %+v (in_active_segment=%v, lag %d of %d)", s.Cursor, s.InActiveSegment, s.LagRecords, st.SeqHigh)
+	}
+}
+
+// Status without any sink says so: no compliance sink is what "the trail
+// is local only" looks like to a monitor.
+func TestAuditStatusWithoutSinks(t *testing.T) {
+	f := newGateFixture(t)
+	resetAuditSink(t)
+	if st := auditStatusModel(f.w, time.Now()); st.ComplianceSink || len(st.Sinks) != 0 {
+		t.Fatalf("status reports compliance_sink=%v and %d sinks with none configured", st.ComplianceSink, len(st.Sinks))
+	}
+}
+
+// What a secondary sink cannot be is refused when it is configured, and a
+// refusal installs nothing and disturbs nothing.
+func TestAuditNamedSinkRefusals(t *testing.T) {
+	withAuthMode(t, true)
+	f := newGateFixture(t)
+	resetAuditSink(t)
+	pki := newSinkPKI(t)
+	rcv := newSinkReceiver(t, pki)
+	ok := func() models.AuditNamedSink {
+		return models.AuditNamedSink{Address: rcv.addr, CaBundlePath: pki.caPath, EnterpriseNumber: testPEN}
+	}
+	with := func(edit func(*models.AuditNamedSink)) models.AuditNamedSink { m := ok(); edit(&m); return m }
+
+	for _, tt := range []struct {
+		what, name string
+		m          models.AuditNamedSink
+	}{
+		{"the compliance sink's name", auditComplianceSink, ok()},
+		{"a name that is not a file name", "Bad.Name", ok()},
+		{"no enterprise number", "a", with(func(m *models.AuditNamedSink) { m.EnterpriseNumber = 0 })},
+		{"an enterprise number past 32 bits", "a", with(func(m *models.AuditNamedSink) { m.EnterpriseNumber = 1 << 32 })},
+		{"a negative enterprise number", "a", with(func(m *models.AuditNamedSink) { m.EnterpriseNumber = -1 })},
+		{"an unknown stream", "a", with(func(m *models.AuditNamedSink) { m.Filter = &models.AuditSinkFilter{Streams: []string{"nope"}} })},
+		{"an unknown outcome", "a", with(func(m *models.AuditNamedSink) { m.Filter = &models.AuditSinkFilter{Outcome: "maybe"} })},
+		{"a negative sample", "a", with(func(m *models.AuditNamedSink) { m.Filter = &models.AuditSinkFilter{DataSample: -1} })},
+		{"no trust anchor", "a", with(func(m *models.AuditNamedSink) { m.CaBundlePath = "" })},
+		{"a facility outside RFC 5424", "a", with(func(m *models.AuditNamedSink) { m.Facility = 24 })},
+	} {
+		if code := putNamedSink(f, tt.name, tt.m); code != http.StatusBadRequest {
+			t.Errorf("%s answered %d, want 400", tt.what, code)
+		}
+		if namedTailer(tt.name) != nil {
+			t.Errorf("%s was refused and installed anyway", tt.what)
+		}
+	}
+
+	if code := putNamedSink(f, "a", ok()); code != http.StatusNoContent {
+		t.Fatalf("a valid sink answered %d", code)
+	}
+	running := namedTailer("a")
+	if running == nil {
+		t.Fatal("a valid sink started no tailer")
+	}
+	// A secondary sink that selects everything is a secondary sink still:
+	// what it sends is numbered.
+	if _, xseq, _ := rcv.waitCount(1)[0].export(t); xseq != 1 {
+		t.Fatalf("the first record of an unfiltered secondary sink carries xseq %d", xseq)
+	}
+	if code := putNamedSink(f, "a", with(func(m *models.AuditNamedSink) { m.EnterpriseNumber = 0 })); code != http.StatusBadRequest {
+		t.Fatalf("a refused replacement answered %d", code)
+	}
+	if namedTailer("a") != running || running.Stats().State == audit.SinkStopped {
+		t.Fatal("a refused replacement disturbed the running sink")
+	}
+	if code, _ := getNamedSink(f, "b"); code != http.StatusNotFound {
+		t.Errorf("GET of a sink that does not exist answered %d", code)
+	}
+	if code := deleteNamedSink(f, "b"); code != http.StatusNotFound {
+		t.Errorf("DELETE of a sink that does not exist answered %d", code)
+	}
+}
+
+// A secondary sink that is replaced, or removed and configured again,
+// continues its export sequence: the next number under the same epoch,
+// and the trail from where it was.
+func TestAuditNamedSinkContinuesItsSequence(t *testing.T) {
+	withAuthMode(t, true)
+	f := newGateFixture(t)
+	resetAuditSink(t)
+	pki := newSinkPKI(t)
+	first, second, third := newSinkReceiver(t, pki), newSinkReceiver(t, pki), newSinkReceiver(t, pki)
+
+	if code := putNamedSink(f, "s", mgmtOnly(first, pki)); code != http.StatusNoContent {
+		t.Fatalf("configuring the sink answered %d", code)
+	}
+	mutate(f, 2)
+	first.waitCount(4)
+	old := namedTailer("s")
+
+	// Replaced.
+	if code := putNamedSink(f, "s", mgmtOnly(second, pki)); code != http.StatusNoContent {
+		t.Fatalf("replacing the sink answered %d", code)
+	}
+	if old.Stats().State != audit.SinkStopped {
+		t.Fatalf("the replaced tailer is %q, want stopped", old.Stats().State)
+	}
+	sent := first.drained()
+	last := sent[len(sent)-1]
+	_, lastX, epoch := last.export(t)
+	got := second.waitCount(1)[0]
+	if _, x, e := got.export(t); x != lastX+1 || e != epoch || got.seq() <= last.seq() {
+		t.Fatalf("after the replacement the sink sends %q at seq %d; it had reached xseq %d under epoch %d at seq %d",
+			got.sd, got.seq(), lastX, epoch, last.seq())
+	}
+
+	// Removed: nothing more is sent, and what the sink kept is still there.
+	if code := deleteNamedSink(f, "s"); code != http.StatusNoContent {
+		t.Fatalf("removing the sink answered %d", code)
+	}
+	if code, _ := getNamedSink(f, "s"); code != http.StatusNotFound {
+		t.Fatalf("GET of the removed sink answered %d", code)
+	}
+	sent = second.drained()
+	mutate(f, 2)
+	time.Sleep(5 * audit.DefaultSinkIdle)
+	if n := len(second.got()); n != len(sent) {
+		t.Fatalf("%d records were sent after the sink was removed", n-len(sent))
+	}
+	last = sent[len(sent)-1]
+	_, lastX, _ = last.export(t)
+
+	// Configured again under its name.
+	if code := putNamedSink(f, "s", mgmtOnly(third, pki)); code != http.StatusNoContent {
+		t.Fatalf("configuring the sink again answered %d", code)
+	}
+	got = third.waitCount(1)[0]
+	if _, x, e := got.export(t); x != lastX+1 || e != epoch || got.seq() <= last.seq() {
+		t.Fatalf("configured again the sink sends %q at seq %d; it had reached xseq %d under epoch %d at seq %d",
+			got.sd, got.seq(), lastX, epoch, last.seq())
+	}
+}
+
+// A change to a secondary sink is recorded as a sink change that names
+// which sink, where it sends and what vouches for the receiver.
+func TestAuditNamedSinkChangeIsRecordedUnderItsName(t *testing.T) {
+	withAuthMode(t, true)
+	f := newGateFixture(t)
+	resetAuditSink(t)
+	pki := newSinkPKI(t)
+	rcv := newSinkReceiver(t, pki)
+
+	if code := putNamedSink(f, "siem-b", mgmtOnly(rcv, pki)); code != http.StatusNoContent {
+		t.Fatalf("configuring the sink answered %d", code)
+	}
+	if code := deleteNamedSink(f, "siem-b"); code != http.StatusNoContent {
+		t.Fatalf("removing the sink answered %d", code)
+	}
+	recs := recordsOfType(t, f, "mgmt.audit.sink")
+	if len(recs) != 4 {
+		t.Fatalf("%d mgmt.audit.sink records, want an intent and a result for each of the two changes", len(recs))
+	}
+	for i, r := range recs {
+		blob, _ := json.Marshal(r)
+		if !strings.Contains(string(blob), `"audit_sink:siem-b"`) {
+			t.Errorf("record %d does not name the sink: %s", i, blob)
+		}
+	}
+	put := detailOf(recs[1])
+	if put["endpoint"] != rcv.addr || put["tls_ca_id"] != pki.caPath {
+		t.Errorf("the result of the PUT names endpoint %v and anchor %v", put["endpoint"], put["tls_ca_id"])
+	}
+}
+
+// Shutdown ends the secondary sinks' tailers too.
+func TestCloseAuditWriterStopsTheSecondarySinks(t *testing.T) {
+	withAuthMode(t, true)
+	f := newGateFixture(t)
+	resetAuditSink(t)
+	pki := newSinkPKI(t)
+	rcv := newSinkReceiver(t, pki)
+
+	if code := putNamedSink(f, "s", mgmtOnly(rcv, pki)); code != http.StatusNoContent {
+		t.Fatalf("configuring the sink answered %d", code)
+	}
+	rcv.waitCount(1)
+	tailer := namedTailer("s")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := CloseAuditWriter(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := tailer.Stats(); st.State != audit.SinkStopped {
+		t.Fatalf("the tailer is %q after shutdown, want stopped", st.State)
+	}
+}
+
+// The sinks the handlers run are the sinks the pruner asks about. A
+// segment pruned while one of them has not been sent it is put on record
+// as lost to that sink, and the sinks that do have it are named on the
+// prune.
+func TestAuditSinksStandInThePruneRecords(t *testing.T) {
+	withAuthMode(t, true)
+	f := newGateFixtureWith(t, func(c *audit.Config) { c.HeartbeatInterval = 50 * time.Millisecond })
+	resetAuditSink(t)
+	pki := newSinkPKI(t)
+	rcv := newSinkReceiver(t, pki)
+
+	// A receiver that is not there: this sink never gets past anything.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := ln.Addr().String()
+	_ = ln.Close()
+	if code := putNamedSink(f, "unreachable", models.AuditNamedSink{Address: dead, CaBundlePath: pki.caPath, EnterpriseNumber: testPEN}); code != http.StatusNoContent {
+		t.Fatalf("configuring the unreachable sink answered %d", code)
+	}
+	if code := postSink(f, models.AuditSink{Enabled: true, Address: rcv.addr, CaBundlePath: pki.caPath}); code != http.StatusNoContent {
+		t.Fatalf("enabling the compliance sink answered %d", code)
+	}
+	mutate(f, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sealed, _, err := f.w.RotateNow(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutate(f, 1)
+	// The compliance sink is past the sealed segment once it reads the
+	// one being written.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		st := auditStatusModel(f.w, time.Now())
+		if len(st.Sinks) == 2 && st.Sinks[0].InActiveSegment {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the compliance sink never reached the active segment")
+		}
+	}
+	f.w.SetRetention(audit.Retention{MaxBytes: 1})
+
+	frames := rcv.waitFor("the prune of the sealed segment", isEvent("sys.segment.prune"))
+	var lost, prune map[string]any
+	for _, fr := range frames {
+		switch fr.record["event_type"] {
+		case "sys.segment.lost_to_retention":
+			lost = detailOf(fr.record)
+		case "sys.segment.prune":
+			prune = detailOf(fr.record)
+		}
+	}
+	if lost == nil {
+		t.Fatal("the segment was pruned without a record of what the unreachable sink lost")
+	}
+	if lost["resource"] != "audit_segment:"+sealed || lost["seq_from"] != float64(1) {
+		t.Errorf("the loss is %v, want segment %s from seq 1", lost, sealed)
+	}
+	if got := fmt.Sprint(lost["sinks_pending"]); got != "[unreachable]" {
+		t.Errorf("sinks pending %s, want [unreachable]", got)
+	}
+	if got := fmt.Sprint(prune["exported_to"]); got != "["+auditComplianceSink+"]" {
+		t.Errorf("exported to %s, want [%s]", got, auditComplianceSink)
 	}
 }

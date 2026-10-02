@@ -149,6 +149,10 @@ type segmenter struct {
 	// worker renames files, so it shares the cache with the writer.
 	uuidMu sync.Mutex
 	uuids  map[string]string
+	// ranges caches segment UUID -> the sequence numbers the segment
+	// holds, for the pruner; resolving marks the ones being read.
+	ranges    map[string]segRange
+	resolving map[string]bool
 	// curUUID mirrors uuid for readers off the writer goroutine; the
 	// three counters below mirror opened, count and size the same way.
 	curUUID    atomic.Pointer[string]
@@ -221,6 +225,8 @@ func newSegmenter(dir, instanceID, bootID string, maxBytes int64, maxAge time.Du
 		compressQ:    make(chan string, 16),
 		compressDone: make(chan struct{}),
 		uuids:        make(map[string]string),
+		ranges:       make(map[string]segRange),
+		resolving:    make(map[string]bool),
 	}
 }
 
@@ -503,6 +509,7 @@ func (s *segmenter) seal() (uuidSealed string, count uint64, err error) {
 	cerr := s.f.Close()
 	uuidSealed, count = s.uuid, s.count
 	s.cacheUUID(filepath.Base(bak), uuidSealed)
+	s.cacheRange(uuidSealed, segRange{first: ft.FirstSeq, last: ft.LastSeq, empty: s.count == 0})
 	s.prevUUID = uuidSealed
 	s.f = nil
 	if werr != nil {

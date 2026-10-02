@@ -160,6 +160,9 @@ type auditRouteLookup struct {
 // set and cleared together so a caller can never find one alive and the
 // other empty.
 func SetAuditWriter(w *audit.Writer) {
+	if w != nil {
+		w.SetSinkProgress(auditSinkProgress)
+	}
 	auditWriter.Store(w)
 	audit.SetGlobal(w)
 }
@@ -177,6 +180,13 @@ func CloseAuditWriter(ctx context.Context) error {
 	if err := stopAuditSinkLocked(sctx); err != nil {
 		tk.LogIt(tk.LogError, "api: audit sink: the tailer did not stop: %v\n", err)
 	}
+	for name, ns := range auditSink.named {
+		if err := ns.stop(sctx); err != nil {
+			tk.LogIt(tk.LogError, "api: audit sink %s: the tailer did not stop: %v\n", name, err)
+		}
+	}
+	// A stopped tailer is at a fixed place, so the pruner may go on
+	// asking it; the secondaries stay listed until the process ends.
 	auditSink.mu.Unlock()
 	cancel()
 	w := auditWriter.Swap(nil)
@@ -242,18 +252,20 @@ var auditRawRoutes = map[string]bool{
 // auditNamedMutations gives the routes with their own contract their own
 // event type and resource. Everything else is mgmt.config.mutate.
 var auditNamedMutations = map[string]struct{ event, resource string }{
-	"POST /auth/login":         {"mgmt.auth.login", "session"},
-	"POST /auth/logout":        {"mgmt.auth.logout", "session"},
-	"POST /auth/token/upgrade": {"mgmt.auth.token_upgrade", "manual_token"},
-	"POST /auth/users":         {"mgmt.user.create", "user"},
-	"PUT /auth/users/{id}":     {"mgmt.user.update", "user"},
-	"DELETE /auth/users/{id}":  {"mgmt.user.delete", "user"},
-	"PUT /maintenance":         {"mgmt.maintenance", "maintenance"},
-	"POST /config/persist":     {"mgmt.snapshot.persist", "snapshot"},
-	"POST /config/restore":     {"mgmt.snapshot.restore", "snapshot"},
-	"POST /audit/policy":       {"mgmt.audit.policy", "audit_policy"},
-	"POST /audit/sink":         {"mgmt.audit.sink", "audit_sink"},
-	"POST /audit/rotate":       {"mgmt.audit.rotate_now", "audit_segment"},
+	"POST /auth/login":           {"mgmt.auth.login", "session"},
+	"POST /auth/logout":          {"mgmt.auth.logout", "session"},
+	"POST /auth/token/upgrade":   {"mgmt.auth.token_upgrade", "manual_token"},
+	"POST /auth/users":           {"mgmt.user.create", "user"},
+	"PUT /auth/users/{id}":       {"mgmt.user.update", "user"},
+	"DELETE /auth/users/{id}":    {"mgmt.user.delete", "user"},
+	"PUT /maintenance":           {"mgmt.maintenance", "maintenance"},
+	"POST /config/persist":       {"mgmt.snapshot.persist", "snapshot"},
+	"POST /config/restore":       {"mgmt.snapshot.restore", "snapshot"},
+	"POST /audit/policy":         {"mgmt.audit.policy", "audit_policy"},
+	"POST /audit/sink":           {"mgmt.audit.sink", "audit_sink"},
+	"PUT /audit/sinks/{name}":    {"mgmt.audit.sink", "audit_sink"},
+	"DELETE /audit/sinks/{name}": {"mgmt.audit.sink", "audit_sink"},
+	"POST /audit/rotate":         {"mgmt.audit.rotate_now", "audit_segment"},
 }
 
 // AuditGETAllowlist lists the side-effecting GET templates the gate covers.
@@ -383,6 +395,8 @@ func auditRouteFor(r *http.Request) (auditRoute, bool) {
 			route.event, route.resource = named.event, named.resource
 			if id := params["id"]; id != "" {
 				route.resource += ":" + id
+			} else if name := params["name"]; name != "" {
+				route.resource += ":" + name
 			}
 			route.login = route.event == "mgmt.auth.login"
 		} else {

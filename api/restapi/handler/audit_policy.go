@@ -56,6 +56,8 @@ var auditSink struct {
 	cfg    syslog.Config
 	sink   *syslog.Sink
 	tailer *audit.SinkTailer
+	// named are the secondary sinks of /audit/sinks/{name}.
+	named map[string]*auditNamedSink
 }
 
 // AuditSink returns the configured sink, or nil when none is configured.
@@ -209,13 +211,15 @@ func AuditPostSink(params auditops.PostAuditSinkParams, principal interface{}) m
 	// Without a writer there is no trail to follow; the sink is held as
 	// configured and sends nothing.
 	if w := AuditWriter(); w != nil {
-		t, err := startAuditSinkTailer(w, s)
+		t, err := newAuditSinkTailer(w, auditComplianceSink, s, true, audit.SinkFilter{})
 		if err != nil {
 			tk.LogIt(tk.LogError, "api: audit sink: %v\n", err)
 			auditSink.sink, auditSink.cfg = nil, syslog.Config{}
 			return auditops.NewPostAuditSinkServiceUnavailable()
 		}
+		t.Start()
 		auditSink.tailer = t
+		publishAuditSinksLocked()
 	}
 	AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) {
 		d.ChangedFields = changed

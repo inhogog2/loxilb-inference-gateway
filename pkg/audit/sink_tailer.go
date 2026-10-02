@@ -211,6 +211,10 @@ type SinkTailerConfig struct {
 	Fault func(point string) bool
 }
 
+// ValidSinkName reports whether name can identify a sink: 1 to 64 of a-z,
+// 0-9, '-' and '_'. The name becomes part of a file name.
+func ValidSinkName(name string) bool { return validSinkName(name) }
+
 func validSinkName(name string) bool {
 	if name == "" || len(name) > 64 {
 		return false
@@ -231,7 +235,8 @@ type SinkTailerStats struct {
 	Name       string
 	Compliance bool
 	State      string
-	Cursor     SinkCursor
+	// Cursor is the sink's state as it was last saved.
+	Cursor SinkCursor
 	// Submitted counts accepted submissions, records sent again included.
 	Submitted uint64
 	// Filtered counts records the filter kept from this sink.
@@ -278,6 +283,7 @@ type SinkTailer struct {
 	mu      sync.Mutex
 	state   string
 	cursor  SinkCursor
+	reached Position
 	lastErr string
 }
 
@@ -369,6 +375,16 @@ func (t *SinkTailer) Stats() SinkTailerStats {
 	}
 }
 
+// Progress reports the last record the sink is past, whether or not the
+// cursor that says so has been saved yet. It is what the pruner asks: a
+// record already sent is not lost to the sink because the save that
+// follows it is still to come.
+func (t *SinkTailer) Progress() SinkProgress {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return SinkProgress{Name: t.cfg.Name, Position: t.reached}
+}
+
 func (t *SinkTailer) resource() string { return "audit_sink:" + t.cfg.Name }
 
 func (t *SinkTailer) emit(r *Record, durable bool) error {
@@ -400,7 +416,13 @@ func (t *SinkTailer) setState(state string, err error) (changed bool, from strin
 
 func (t *SinkTailer) setCursor(c SinkCursor) {
 	t.mu.Lock()
-	t.cursor = c
+	t.cursor, t.reached = c, c.Position
+	t.mu.Unlock()
+}
+
+func (t *SinkTailer) setReached(p Position) {
+	t.mu.Lock()
+	t.reached = p
 	t.mu.Unlock()
 }
 
@@ -538,6 +560,7 @@ func (t *SinkTailer) run() {
 		} else {
 			pos, dirty = cur.Pos, true
 			inBatch++
+			t.setReached(pos)
 		}
 		have = false
 		if inBatch >= t.cfg.Batch {

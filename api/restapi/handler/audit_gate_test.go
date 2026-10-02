@@ -57,10 +57,20 @@ type gateFixture struct {
 
 func newGateFixture(t *testing.T) *gateFixture {
 	t.Helper()
+	return newGateFixtureWith(t, nil)
+}
+
+// newGateFixtureWith lets a test adjust the writer's configuration.
+func newGateFixtureWith(t *testing.T, edit func(*audit.Config)) *gateFixture {
+	t.Helper()
 	// The writer insists on a 0700 directory; a fresh subdirectory gets that
 	// mode from CreateDir, where the test harness's own directory does not.
 	f := &gateFixture{t: t, dir: filepath.Join(t.TempDir(), "audit"), status: http.StatusOK, remote: "10.1.2.3:4444"}
-	w, err := audit.New(audit.Config{Dir: f.dir, CreateDir: true, InstanceID: "gw-test"})
+	cfg := audit.Config{Dir: f.dir, CreateDir: true, InstanceID: "gw-test"}
+	if edit != nil {
+		edit(&cfg)
+	}
+	w, err := audit.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,6 +94,8 @@ func newGateFixture(t *testing.T) *gateFixture {
 			return "/netlox/v1/oauth/{provider}", true
 		case strings.HasPrefix(rel, "/auth/users/"):
 			return "/netlox/v1/auth/users/{id}", true
+		case strings.HasPrefix(rel, "/audit/sinks/"):
+			return "/netlox/v1/audit/sinks/{name}", true
 		case strings.HasPrefix(rel, "/log-archives/"):
 			return "/netlox/v1/log-archives/{filename}", true
 		case strings.HasPrefix(rel, "/config/ai/apikey/"):

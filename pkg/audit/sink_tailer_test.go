@@ -221,6 +221,42 @@ func TestSinkTailerComplianceSinkReceivesEveryRecordUnchanged(t *testing.T) {
 	}
 }
 
+// Progress is where the sink is, not where its saved cursor is: a record
+// that was sent is behind the sink at once, and the save follows a batch
+// later. The pruner judges a segment by the first of the two.
+func TestSinkTailerProgressRunsAheadOfTheSavedCursor(t *testing.T) {
+	cfg := testConfig(t)
+	w := startWriter(t, cfg)
+	writeN(t, w, 6, "one")
+	all := rawRecords(t, cfg.Dir)
+	third := frame{raw: all[2]}
+
+	// The fourth submission does not return until the test lets it, so
+	// the tailer is held between two saves with three records behind it.
+	hold := make(chan struct{})
+	sink := &fakeSink{verdict: func(attempt int, _ []byte) error {
+		if attempt == 4 {
+			<-hold
+		}
+		return nil
+	}}
+	tc := tailerConfig(cfg.Dir, "held", sink, nil)
+	tc.Batch = 100
+	tl := startTailer(t, tc)
+	defer close(hold)
+
+	waitFor(t, "the third record to be behind the sink", func() bool {
+		p := tl.Progress()
+		return fmt.Sprint(p.Position.Seq) == third.field(t, "seq") && p.Position.SegmentUUID == third.field(t, "segment_uuid")
+	})
+	if p := tl.Progress(); p.Name != "held" {
+		t.Errorf("progress is reported for %q", p.Name)
+	}
+	if c := tl.Stats().Cursor; c.Seq != 0 {
+		t.Fatalf("the cursor was saved at seq %d; the test needs the tailer between two saves", c.Seq)
+	}
+}
+
 func TestSinkTailerFilteredSinkHasItsOwnContiguousSequence(t *testing.T) {
 	cfg := testConfig(t)
 	w := startWriter(t, cfg)
