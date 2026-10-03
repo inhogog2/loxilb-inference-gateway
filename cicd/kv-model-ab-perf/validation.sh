@@ -26,8 +26,8 @@ code=0
 
 fleet_up() {
   local n pids=() rc=0
-  for n in "${PNODES[@]}"; do PREFILL=$n CONVERGED=$n "$COMPAT/engine.sh" start "$ENG" "$ROLE1" "$PROF" & pids+=($!); done
-  for n in "${DNODES[@]}"; do DECODE=$n "$COMPAT/engine.sh" start "$ENG" decode "$PROF" & pids+=($!); done
+  for n in "${PNODES[@]}"; do PREFILL=$n CONVERGED=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" start "$ENG" "$ROLE1" "$PROF" & pids+=($!); done
+  for n in "${DNODES[@]}"; do DECODE=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" start "$ENG" decode "$PROF" & pids+=($!); done
   for p in "${pids[@]}"; do wait "$p" || rc=1; done
   return $rc
 }
@@ -90,18 +90,9 @@ PY
     fleet_up >/dev/null || { echo "CAL_FLEET_RESTART_FAILED"; return 1; }
   done
   [ $rc = 0 ] || { echo "CAL_REQUESTS_INCOMPLETE at every concurrency"; return 1; }
-  python3 - "$BASE/cal-requests.jsonl" "$BASE/calibration.json" "$BASE/cal-concurrency.txt" <<'PY'
-import json, statistics, sys
-r = [json.loads(l) for l in open(sys.argv[1])]
-dur = max(x["ended_at_unix"] for x in r) - min(x["started_at_unix"] for x in r)
-rps = len(r) / dur
-out = {"requests": len(r), "duration_sec": round(dur, 2), "cold_closed_loop_rps": round(rps, 2),
-       "ttft_p50_ms": round(statistics.median(x["ttft_ms"] for x in r), 1),
-       "prompt_tokens_median": statistics.median(x["prompt_tokens"] for x in r),
-       "concurrency": int(open(sys.argv[3]).read()),
-       "rate_low": max(0.5, round(rps * 0.4 * 2) / 2), "rate_high": max(1.0, round(rps * 0.8 * 2) / 2)}
-json.dump(out, open(sys.argv[2], "w"), indent=1); print("  calibration:", json.dumps(out))
-PY
+  # The point rates have floors. A fleet whose measured capacity is below a floored rate would be offered more than
+  # it can serve in every arm: that is refused here, with no calibration banked.
+  python3 "$AB_DIR/calib.py" "$BASE/cal-requests.jsonl" "$BASE/calibration.json" "$BASE/cal-concurrency.txt"
 }
 cal() { python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BASE/calibration.json" "$1"; }
 repeat_for() { python3 -c "import math,sys; print(max(3, math.ceil(float(sys.argv[1]) * $ARM_SECONDS / $FAMILIES)))" "$1"; }

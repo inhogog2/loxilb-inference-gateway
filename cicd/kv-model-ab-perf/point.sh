@@ -97,6 +97,7 @@ arm() { # arm <repetition> exact|baseline
   del_rule
   restart_fleet || return 1
   http=$(rule "$a" "$d"); [ "$http" = 200 ] || { echo "RULE_CREATE_FAILED $a $http $(head -c 200 "$d/rule-create.json")"; return 1; }
+  curl -s -m 10 "${LB}/all" > "$d/rule-readback.json"
   if [ "$a" = exact ]; then
     es=""; for _ in $(seq 1 100); do es=$(state); [[ "$es" == READY* ]] && break; sleep 3; done
     echo "$es" > "$d/state.txt"
@@ -152,23 +153,24 @@ arm() { # arm <repetition> exact|baseline
     [ "$h" = 0 ] || { echo "BASELINE_HITS +$h (the baseline rule must not route by cache)"; return 1; }
   fi
   # Where the requests went, from the prefill engines' own counters. Exact arm: every prefill engine served the
-  # requests the gateway counted as tier-1.5 hits on that endpoint (endpoint index = position in the rule, the
-  # prefill engines first). Equal shares are not required: when two engines hold blocks of a prompt, the
+  # requests the gateway counted as tier-1.5 hits on that endpoint. The endpoint index is the engine's position
+  # in the gateway's read-back of the rule: the gateway orders a rule's endpoints by address, not as posted, so
+  # the position in PREFILLS is the index only when the prefill addresses sort first. Equal shares are not required: when two engines hold blocks of a prompt, the
   # gateway's bounded-load selection may spill past a loaded owner, and the engine it spilled to then holds the
   # prefix too. The spill count is stored with the arm. Baseline arm: the requests must spread over every prefill
   # engine, or it is not a round-robin baseline.
-  local share=$(( NREQ / ${#PNODES[@]} )) s spread="" off i=0 hi
+  local share=$(( NREQ / ${#PNODES[@]} )) s spread="" off i hi
   local sp=$(( $(msum "$d/after-gateway.prom" loxilb_pd_kv_tier15_spills_total) - $(msum "$d/before-gateway.prom" loxilb_pd_kv_tier15_spills_total) ))
   echo "$sp" > "$d/tier15-spill-delta.txt"
   for n in "${PNODES[@]}"; do
     s=$(served "$d" "$n") || return 1; spread+="$n=$s "
     if [ "$a" = exact ]; then
+      i=$(python3 "$AB_DIR/epidx.py" "$d/rule-readback.json" "$VIP" "$PORT" "$MODEL" "$n") || { echo "RULE_READBACK_NO_ENDPOINT $n: $i"; return 1; }
       hi=$(( $(msum "$d/after-gateway.prom" "loxilb_pd_kv_tier15_hits_total{ep_idx=\"$i\"}") - $(msum "$d/before-gateway.prom" "loxilb_pd_kv_tier15_hits_total{ep_idx=\"$i\"}") ))
       off=$(( s > hi ? s - hi : hi - s ))
       [ "$off" -le 2 ] || { echo "EXACT_PREFILL_SHARE $n served $s, the gateway counted $hi hits on endpoint $i"; return 1; }
       # Every engine owns families, so an engine that served nothing was never chosen for its own prefixes.
       [ "$s" -gt 0 ] || { echo "EXACT_ENGINE_IDLE $n served 0 of $NREQ"; return 1; }
-      i=$((i+1))
     else
       [ "$s" -ge $((share * 8 / 10)) ] || { echo "BASELINE_NOT_SPREAD $n served $s of $NREQ"; return 1; }
     fi
