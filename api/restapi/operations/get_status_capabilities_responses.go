@@ -147,3 +147,48 @@ func (o *GetStatusCapabilitiesForbidden) WriteResponse(rw http.ResponseWriter, p
 		}
 	}
 }
+
+// GetStatusCapabilitiesServiceUnavailableCode is the HTTP code returned for type GetStatusCapabilitiesServiceUnavailable
+const GetStatusCapabilitiesServiceUnavailableCode int = 503
+
+/*
+GetStatusCapabilitiesServiceUnavailable Management credential store unavailable; optional capability readiness is reported in the 200 response
+
+swagger:response getStatusCapabilitiesServiceUnavailable
+*/
+type GetStatusCapabilitiesServiceUnavailable struct {
+
+	/*
+	  In: Body
+	*/
+	Payload *models.Error `json:"body,omitempty"`
+}
+
+// NewGetStatusCapabilitiesServiceUnavailable creates GetStatusCapabilitiesServiceUnavailable with default headers values
+func NewGetStatusCapabilitiesServiceUnavailable() *GetStatusCapabilitiesServiceUnavailable {
+
+	return &GetStatusCapabilitiesServiceUnavailable{}
+}
+
+// WithPayload adds the payload to the get status capabilities service unavailable response
+func (o *GetStatusCapabilitiesServiceUnavailable) WithPayload(payload *models.Error) *GetStatusCapabilitiesServiceUnavailable {
+	o.Payload = payload
+	return o
+}
+
+// SetPayload sets the payload to the get status capabilities service unavailable response
+func (o *GetStatusCapabilitiesServiceUnavailable) SetPayload(payload *models.Error) {
+	o.Payload = payload
+}
+
+// WriteResponse to the client
+func (o *GetStatusCapabilitiesServiceUnavailable) WriteResponse(rw http.ResponseWriter, producer runtime.Producer) {
+
+	rw.WriteHeader(503)
+	if o.Payload != nil {
+		payload := o.Payload
+		if err := producer.Produce(rw, payload); err != nil {
+			panic(err) // let the recovery middleware deal with this
+		}
+	}
+}

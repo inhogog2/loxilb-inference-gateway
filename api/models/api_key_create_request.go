@@ -22,7 +22,7 @@ type APIKeyCreateRequest struct {
 	// List of model identifiers this key may access
 	AllowedModels []string `json:"allowed_models"`
 
-	// Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length rejection maps to 400; invalid character errors currently fall through to generic 500.
+	// Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length and invalid-character rejections both map to 400 with api_key validation fields.
 	APIKey string `json:"api_key,omitempty"`
 
 	// Total request-bucket capacity, not additional capacity above RPS. Zero uses per-key RPS. Nonpositive RPS skips this limiter; negative-value validation remains incomplete.

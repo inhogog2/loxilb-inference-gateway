@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	tk "github.com/loxilb-io/loxilib"
 	"github.com/patrickmn/go-cache"
 
@@ -507,6 +508,13 @@ func (s *Service) CreateAPIKey(entry cmn.ApiKeyEntry) (string, string, error) {
 		keyID, keyHash, entry.TenantID, entry.Name,
 		allowedModels, entry.RateLimitRPS, entry.BurstSize, entry.TokensPerMin,
 		now, entry.ExpiresAt, entry.Enabled); err != nil {
+		// Only an imported credential colliding with the credential-hash index
+		// is a caller conflict. ID/generated-key collisions remain server errors.
+		// Do not expose the driver Detail: it may contain the credential hash.
+		var unique *pgconn.PgError
+		if entry.ApiKey != "" && errors.As(err, &unique) && unique.Code == "23505" && unique.ConstraintName == "uq_api_keys_key_hash" {
+			return "", "", cmn.NewConflictError("imported API key is already registered")
+		}
 		tk.LogIt(tk.LogError, "[AIKey] Failed to create API key for tenant %s: %v\n", entry.TenantID, err)
 		return "", "", err
 	}

@@ -193,6 +193,51 @@ func (o *PostConfigAiApikeyForbidden) WriteResponse(rw http.ResponseWriter, prod
 	}
 }
 
+// PostConfigAiApikeyConflictCode is the HTTP code returned for type PostConfigAiApikeyConflict
+const PostConfigAiApikeyConflictCode int = 409
+
+/*
+PostConfigAiApikeyConflict Imported API key is already registered
+
+swagger:response postConfigAiApikeyConflict
+*/
+type PostConfigAiApikeyConflict struct {
+
+	/*
+	  In: Body
+	*/
+	Payload *models.Error `json:"body,omitempty"`
+}
+
+// NewPostConfigAiApikeyConflict creates PostConfigAiApikeyConflict with default headers values
+func NewPostConfigAiApikeyConflict() *PostConfigAiApikeyConflict {
+
+	return &PostConfigAiApikeyConflict{}
+}
+
+// WithPayload adds the payload to the post config ai apikey conflict response
+func (o *PostConfigAiApikeyConflict) WithPayload(payload *models.Error) *PostConfigAiApikeyConflict {
+	o.Payload = payload
+	return o
+}
+
+// SetPayload sets the payload to the post config ai apikey conflict response
+func (o *PostConfigAiApikeyConflict) SetPayload(payload *models.Error) {
+	o.Payload = payload
+}
+
+// WriteResponse to the client
+func (o *PostConfigAiApikeyConflict) WriteResponse(rw http.ResponseWriter, producer runtime.Producer) {
+
+	rw.WriteHeader(409)
+	if o.Payload != nil {
+		payload := o.Payload
+		if err := producer.Produce(rw, payload); err != nil {
+			panic(err) // let the recovery middleware deal with this
+		}
+	}
+}
+
 // PostConfigAiApikeyInternalServerErrorCode is the HTTP code returned for type PostConfigAiApikeyInternalServerError
 const PostConfigAiApikeyInternalServerErrorCode int = 500
 

@@ -158,7 +158,7 @@ func init() {
           "type": "array"
         },
         "api_key": {
-          "description": "Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length rejection maps to 400; invalid character errors currently fall through to generic 500.",
+          "description": "Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length and invalid-character rejections both map to 400 with api_key validation fields.",
           "type": "string"
         },
         "burst_size": {
@@ -9041,6 +9041,12 @@ func init() {
           },
           "403": {
             "description": "Authenticated principal is not authorized to create API keys",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "409": {
+            "description": "Imported API key is already registered",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -20490,6 +20496,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "503": {
+            "description": "Management credential store unavailable; optional capability readiness is reported in the 200 response",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         },
         "summary": "Optional capabilities this gateway can serve, and why not"
@@ -21997,6 +22009,12 @@ func init() {
           },
           "403": {
             "description": "Authenticated principal is not authorized to create API keys",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "409": {
+            "description": "Imported API key is already registered",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -34169,6 +34187,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "503": {
+            "description": "Management credential store unavailable; optional capability readiness is reported in the 200 response",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         }
       }
@@ -34496,7 +34520,7 @@ func init() {
           }
         },
         "api_key": {
-          "description": "Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length rejection maps to 400; invalid character errors currently fall through to generic 500.",
+          "description": "Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length and invalid-character rejections both map to 400 with api_key validation fields.",
           "type": "string"
         },
         "burst_size": {
