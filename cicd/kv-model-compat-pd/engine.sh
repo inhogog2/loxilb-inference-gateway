@@ -29,10 +29,16 @@ MODEL=$(profile_field "$PROF" baseModel); REV=$(profile_field "$PROF" tokenizerR
 case $ROLE in prefill) NODE=$PREFILL ;; decode) NODE=$DECODE ;; converged) NODE=${CONVERGED:?set CONVERGED to the converged engine node address} ;;
   *) echo "role must be prefill|decode|converged"; exit 64 ;; esac
 NAME=kvmc-$ENG-$ROLE
+# Keep the engine's own log: a crash after readiness is diagnosable only from it, and rm destroys it. A start
+# replaces a container of the same name, so it keeps that container's log too: a relaunch after a failed attempt
+# (a calibration step, a leg) is otherwise the moment the attempt's evidence is lost.
+keep_log() {
+  $SSH -n root@"$NODE" "docker inspect $NAME >/dev/null 2>&1" || return 0
+  mkdir -p "$EVROOT/engine-logs"; local lf="$EVROOT/engine-logs/$NAME-$PROF-$(date -u +%Y%m%dT%H%M%SZ).log"
+  $SSH -n root@"$NODE" "docker logs $NAME" > "$lf" 2>&1 && echo "$NAME log: $lf" || echo "$NAME log not kept ($lf)"
+}
 if [ "$ACT" = stop ]; then
-  # Keep the engine's own log: a crash after readiness is diagnosable only from it, and rm destroys it.
-  mkdir -p "$EVROOT/engine-logs"; lf="$EVROOT/engine-logs/$NAME-$PROF-$(date -u +%Y%m%dT%H%M%SZ).log"
-  $SSH root@"$NODE" "docker logs $NAME" > "$lf" 2>&1 && echo "$NAME log: $lf"
+  keep_log
   $SSH root@"$NODE" "docker rm -f $NAME >/dev/null 2>&1 || true"; exit 0
 fi
 [ "$ACT" = start ] || { echo "usage: $0 start|stop vllm|sglang prefill|decode|converged <profileId>"; exit 64; }
@@ -84,6 +90,7 @@ if [ "${plan:-}" = mount ]; then
   TOKMNT="-v $dst:$SGL_TOKPATCH_TARGET:ro"
 fi
 $SSH root@"$NODE" "test -f $SNAP/config.json" || { echo "WEIGHTS_MISSING $NODE $SNAP"; exit 1; }
+keep_log
 EVENTS='{"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5557","replay_endpoint":null,"topic":""}'
 case $ENG/$ROLE in
 vllm/prefill) KVT='{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_buffer_device":"cpu","kv_load_failure_policy":"fail"}'; EVX="--kv-events-config '$EVENTS'" ;;

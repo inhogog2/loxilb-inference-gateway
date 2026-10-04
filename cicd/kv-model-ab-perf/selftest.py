@@ -159,6 +159,61 @@ def main():
         check("B7 open loop: every request carries its schedule and its start delay", rc == 1 and
               all(r["scheduled_at_unix"] and r["schedule_delay_ms"] is not None for r in res), rc)
         srv.shutdown()
+    # The endpoint index of the share gate comes from the gateway's listing of the rule, which orders endpoints by
+    # address: prefill engines with the higher addresses are NOT endpoints 0 and 1.
+    import calib
+    import epidx
+    listing = {"lbAttr": [
+        {"serviceArguments": {"externalIP": "10.0.0.12", "port": 8080, "model_name": "other/model"},
+         "endpoints": [{"endpointIP": "10.0.0.10"}, {"endpointIP": "10.0.0.11"}]},
+        {"serviceArguments": {"externalIP": "10.0.0.12", "port": 8080, "model_name": "org/model"},
+         "endpoints": [{"endpointIP": x} for x in ("10.0.0.7", "10.0.0.8", "10.0.0.10", "10.0.0.11")]}]}
+    args = ("10.0.0.12", 8080, "org/model")
+    check("E1 prefill engines with the higher addresses are endpoints 2 and 3",
+          [epidx.endpoint_index(listing, *args, a) for a in ("10.0.0.10", "10.0.0.11")] == [2, 3])
+    check("E2 prefill engines with the lower addresses are endpoints 0 and 1",
+          [epidx.endpoint_index(listing, *args, a) for a in ("10.0.0.7", "10.0.0.8")] == [0, 1])
+    for label, call in (("E3 an address outside the rule is refused", (listing, *args, "10.0.0.9")),
+                        ("E4 a listing without the rule is refused", (listing, "10.0.0.12", 8081, "org/model", "10.0.0.7")),
+                        ("E5 an empty listing is refused", ({}, *args, "10.0.0.7"))):
+        try:
+            got = epidx.endpoint_index(*call)
+        except LookupError:
+            got = None
+        check(label, got is None, got)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = pathlib.Path(tmp)
+        (tmp / "rules.json").write_text(json.dumps(listing))
+        run = subprocess.run([sys.executable, str(HERE / "epidx.py"), str(tmp / "rules.json"), "10.0.0.12", "8080",
+                              "org/model", "10.0.0.9"], capture_output=True, text=True)
+        check("E6 the command exits 1 and names the address", run.returncode == 1 and "10.0.0.9" in run.stdout, run)
+
+        # Calibration: a floored point rate above the measured capacity is refused and nothing is banked.
+        def cal_run(n, seconds):
+            rows_ = [{"started_at_unix": 1000.0 + i * seconds / n, "ended_at_unix": 1000.0 + (i + 1) * seconds / n,
+                      "ttft_ms": 100.0, "prompt_tokens": 3400} for i in range(n)]
+            (tmp / "cal.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows_))
+            (tmp / "conc.txt").write_text("4\n")
+            for f in ("calibration.json", "calibration-refused.json"):
+                (tmp / f).unlink(missing_ok=True)
+            r = subprocess.run([sys.executable, str(HERE / "calib.py"), str(tmp / "cal.jsonl"),
+                                str(tmp / "calibration.json"), str(tmp / "conc.txt")], capture_output=True, text=True)
+            return r, (tmp / "calibration.json").exists(), (tmp / "calibration-refused.json").exists()
+        r, banked, kept = cal_run(24, 110.77)            # 0.22 req/s: both floors are above the capacity
+        check("K1 capacity 0.22 req/s -> CAPACITY_BELOW_RATE_FLOOR, exit 3, no calibration banked, measurement kept",
+              r.returncode == 3 and r.stdout.startswith("CAPACITY_BELOW_RATE_FLOOR") and not banked and kept, r)
+        r, banked, kept = cal_run(120, 113.71)           # 1.06 req/s: rates 0.5 / 1.0, the high one below capacity
+        out = json.loads((tmp / "calibration.json").read_text()) if banked else {}
+        check("K2 capacity 1.06 req/s -> banked with rates 0.5 / 1.0",
+              r.returncode == 0 and (out.get("rate_low"), out.get("rate_high")) == (0.5, 1.0) and not kept, r)
+        r, banked, kept = cal_run(120, 126.4)            # 0.95 req/s: the 1.0 floor is above the capacity
+        check("K3 capacity 0.95 req/s -> refused (the floored 1.0 req/s is above it)", r.returncode == 3 and not banked, r)
+        r, banked, kept = cal_run(120, 25.2)             # 4.76 req/s: no floor in play
+        out = json.loads((tmp / "calibration.json").read_text()) if banked else {}
+        check("K4 capacity 4.76 req/s -> rates 2.0 / 4.0", (out.get("rate_low"), out.get("rate_high")) == (2.0, 4.0), out)
+        check("K5 the refusal is the comparison, not the floor: 1.06 is not refused, 0.95 is",
+              not calib.refused({"rate_high": 1.0, "cold_closed_loop_rps": 1.06})
+              and calib.refused({"rate_high": 1.0, "cold_closed_loop_rps": 0.95}))
     print(f"SELFTEST kv-model-ab-perf: {'PASS' if not failed else f'FAIL ({failed})'}")
     return 1 if failed else 0
 

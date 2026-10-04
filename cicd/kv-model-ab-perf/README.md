@@ -27,7 +27,10 @@ per-model launch argument proven there applies unchanged. Evidence goes to `/var
    belongs to prefill *n* mod N). The long-prefix corpus is sized for this model's tokenizer to `TARGET_TOKENS`
    prompt tokens, from two sizing requests; the short-prefix corpus is the control.
 3. **Calibration**: closed loop, cold (prefixes used nowhere else), through the round-robin rule. Rates do not
-   carry over between models or GPUs, so the offered rates are fractions of this number.
+   carry over between models or GPUs, so the offered rates are fractions of this number. The point rates have
+   floors (0.5 and 1.0 req/s): a fleet measured below the higher point rate is refused
+   (`CAPACITY_BELOW_RATE_FLOOR`, the measurement is kept as `calibration-refused.json`) instead of being offered
+   more than it completes. Every fleet restart keeps the replaced engines' logs under `node-<address>/engine-logs/`.
 4. **Three points**: long prefix at 40 % and at 80 % of the calibrated rate, short prefix at 80 %. Each point is
    `REPS` repetitions of both arms in alternating order (exact-baseline, baseline-exact, exact-baseline). Before
    every arm the engines are restarted, the rule is created fresh, and every family is seeded directly on its
@@ -48,6 +51,7 @@ with the typed line and leaves no summary.
 | exact arm: tier-1.5 hits rise by exactly the number of timed requests | `EXACT_HITS` |
 | exact arm: the fall-through counter does not move | `EXACT_FALLTHROUGH` |
 | exact arm: every prefill engine served the requests the gateway counted as hits on it (the engine's own request counter); spills past a loaded owner are recorded, not refused | `EXACT_PREFILL_SHARE` |
+| exact arm: every prefill engine is an endpoint of the rule as the gateway lists it (its endpoint index is read from that listing: the gateway orders a rule's endpoints by address) | `RULE_READBACK_NO_ENDPOINT` |
 | exact arm: the first round is not slower than the later ones (median TTFT ratio under 2) | `EXACT_ROUND1_COLD`, with the number of cold round-1 requests and the arm's spill count. Two causes: the seeds were not the prefixes hit (a date in the template across 00:00 UTC), or the seeds were hit and the gateway sent requests past a busy owner to an engine that had not seen the family (a request outlives the arrival gap: offer a lower rate or use more engines). The arm's files do not say which engine served a request, so the line does not choose; a spill count below the cold count rules the second out, and seed plus timed prompt sent to one engine directly settles it. |
 | exact arm: no prefill engine is left without a request | `EXACT_ENGINE_IDLE` |
 | no arm is seeded on one UTC day and timed on the next (a chat template may print the date; an arm that would straddle 00:00 UTC waits for it) | `ARM_CROSSED_UTC_MIDNIGHT` |
