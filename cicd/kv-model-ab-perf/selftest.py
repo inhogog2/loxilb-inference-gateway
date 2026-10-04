@@ -37,14 +37,20 @@ def rows(exact_ms, base_ms, families=20):
     return out
 
 
-def analyze(tmp, name, data):
-    """Lay the rows out as point.sh does, run the analyzer, return (exit code, summary or None)."""
+def analyze(tmp, name, data, scrapes=None):
+    """Lay the rows out as point.sh does, run the analyzer, return (exit code, summary or None).
+    scrapes: {arm: (before text, after text)} written as one engine's scrape pair into every repetition."""
     d = pathlib.Path(tmp) / name
     for r in data:
         f = d / f"repetition-{r['repetition']}" / r["arm"] / "requests.jsonl"
         f.parent.mkdir(parents=True, exist_ok=True)
         with f.open("a") as s:
             s.write(json.dumps(r) + "\n")
+    for arm, (before, after) in (scrapes or {}).items():
+        for rep in {r["repetition"] for r in data}:
+            if before is not None:
+                (d / f"repetition-{rep}" / arm / "before-engine-10.0.0.7.prom").write_text(before)
+            (d / f"repetition-{rep}" / arm / "after-engine-10.0.0.7.prom").write_text(after)
     p = subprocess.run([sys.executable, str(HERE / "analyze.py"), "--input-dir", str(d), "--summary", str(d / "s.json"),
                         "--self-test"], capture_output=True, text=True)
     return p.returncode, json.loads((d / "s.json").read_text()) if (d / "s.json").exists() else None
@@ -87,6 +93,25 @@ def main():
         check("A1 slow share: every baseline request is at least twice the exact median, no exact one is; no scrapes -> no computed share",
               rc == 0 and s and s["arms"]["baseline"]["slow_request_percent"] == 100.0 and
               s["arms"]["exact"]["slow_request_percent"] == 0.0 and
+              s["arms"]["exact"]["computed_prompt_token_percent"] is None, (rc, s and s["arms"]["exact"]))
+        # The computed-token share comes from the engines' own counters: 20 requests of 3400 prompt tokens per
+        # repetition and arm = 68000 prompt tokens.
+        # The other source and a metric whose name only starts the same move by the same amount: counting either
+        # doubles the share.
+        vl = ('vllm:prompt_tokens_by_source_total{{source="local_compute"}} {0}\n'
+              'vllm:prompt_tokens_by_source_total{{source="local_cache_hit"}} {0}\n'
+              'vllm:prompt_tokens_by_source_total_created{{source="local_compute"}} {0}\n')
+        sg = ('sglang:uncached_prompt_tokens_histogram_sum{{model_name="m"}} {0}\n'
+              'sglang:uncached_prompt_tokens_histogram_sum_other{{model_name="m"}} {0}\n'
+              'sglang:uncached_prompt_tokens_histogram_bucket{{le="100.0",model_name="m"}} 777\n')
+        for label, text in (("C1 vLLM", vl), ("C2 SGLang", sg)):
+            rc, s = analyze(tmp, label[:2].lower(), rows([100, 110, 105], [300, 320, 310]),
+                            {"exact": (text.format(1000), text.format(7800)), "baseline": (text.format(0), text.format(34000))})
+            check(f"{label} scrapes: 6800 of 68000 prompt tokens computed in the exact arm -> 10.0 %, 34000 in the baseline -> 50.0 %",
+                  rc == 0 and s and s["arms"]["exact"]["computed_prompt_token_percent"] == 10.0 and
+                  s["arms"]["baseline"]["computed_prompt_token_percent"] == 50.0, (rc, s and s["arms"]["exact"]))
+        rc, s = analyze(tmp, "c3", rows([100, 110, 105], [300, 320, 310]), {"exact": (None, sg.format(7800))})
+        check("C3 an after scrape without its before scrape -> no computed share", rc == 0 and s and
               s["arms"]["exact"]["computed_prompt_token_percent"] is None, (rc, s and s["arms"]["exact"]))
         rc, s = analyze(tmp, "a2", rows([100, 330, 105], [300, 320, 310]))
         check("A2 one exact repetition above a baseline one -> overlap, no claim", rc == 0 and s and

@@ -8,8 +8,8 @@ else is reported as "overlap" — the measured numbers stand, the claim does not
 
 Two shares are reported next to the percentiles, because a percentile says nothing when the slow requests of
 both arms sit on the same side of its rank: the share of slow requests (TTFT at least twice the lower arm's
-median) and, when the arm directories hold vLLM engine scrapes, the share of prompt tokens the engines computed
-instead of taking from their cache.
+median) and, when the arm directories hold vLLM or SGLang engine scrapes, the share of prompt tokens the engines
+computed instead of taking from their cache.
 """
 import argparse
 import json
@@ -49,15 +49,21 @@ def validate(rows):
         raise ValueError("at least three repetitions are required")
 
 
-COMPUTED = 'vllm:prompt_tokens_by_source_total'
+# Prompt tokens an engine computed, per engine family. vLLM counts prompt tokens by source; SGLang observes
+# prompt_tokens - cached_tokens of every finished request into a histogram, whose sum is the same quantity.
+COMPUTED = (("vllm:prompt_tokens_by_source_total", 'source="local_compute"'),
+            ("sglang:uncached_prompt_tokens_histogram_sum", ""))
 
 
 def computed_tokens(arm_dir):
     """Prompt tokens the engines computed during one arm (after - before, all engines), or None without scrapes."""
     def total(path):
-        v = [float(line.rsplit(" ", 1)[1]) for line in path.read_text().splitlines()
-             if line.startswith(COMPUTED) and 'source="local_compute"' in line]
-        return sum(v) if v else None
+        for metric, label in COMPUTED:
+            v = [float(line.rsplit(" ", 1)[1]) for line in path.read_text().splitlines()
+                 if line.startswith(metric) and line[len(metric):len(metric) + 1] in ("{", " ") and label in line]
+            if v:
+                return sum(v)
+        return None
     out, after = 0.0, sorted(arm_dir.glob("after-engine-*.prom"))
     for a in after:
         before = a.with_name(a.name.replace("after-", "before-", 1))
