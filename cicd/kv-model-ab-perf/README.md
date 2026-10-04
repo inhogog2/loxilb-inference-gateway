@@ -65,7 +65,7 @@ with the typed line and leaves no summary.
 repetition. It also has two shares, because p50 and p95 say nothing when the slow requests of both arms fall on
 the same side of the rank: `slow_request_percent` (TTFT at least twice the lower arm's median) and
 `computed_prompt_token_percent` (prompt tokens the engines computed instead of reading from their cache, from
-the vLLM scrapes of the arm; absent for other engines). A difference is **claimed** only when the arms' per-repetition values do not overlap
+the engine scrapes of the arm: vLLM's prompt tokens by source, SGLang's uncached prompt-token sum). A difference is **claimed** only when the arms' per-repetition values do not overlap
 (`ttft_p95_separation`: `exact_lower`, `baseline_lower`); `overlap` means the numbers stand and the claim does
 not. The short-prefix control has no cache benefit to win: it bounds the routing overhead and the noise, and a
 long-prefix result is read against it.
