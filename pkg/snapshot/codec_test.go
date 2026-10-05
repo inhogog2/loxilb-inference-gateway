@@ -46,7 +46,7 @@ func sampleDocument() *Document {
 			ModelAuthz:      "claims-required",
 			ForwardIdentity: true,
 		}},
-		HalfClose: &cmn.HalfCloseConfig{Allow: false, CapSeconds: 600},
+		HalfClose: &cmn.HalfCloseConfig{Allow: false, CapSeconds: 600, DefaultMode: cmn.HalfCloseModeHold},
 		AuditSink: []cmn.AuditSinkConfig{
 			{
 				Name: cmn.AuditSinkCompliance, Address: "siem.example.net:6514",

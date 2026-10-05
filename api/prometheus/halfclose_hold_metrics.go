@@ -53,6 +53,7 @@ type holdSnapshot struct {
 	reentry        uint64
 	emptyOut       uint64
 	accelSkipped   uint64
+	defaultMode    uint64 // gauge, enum sp_hold_mode: the mode of a rule that leaves its own unset
 }
 
 // mergeHold takes the gauges as read and keeps the counters from going
@@ -113,6 +114,15 @@ var halfCloseHoldCapDesc = prometheus.NewDesc(
 	nil, nil,
 )
 
+var halfCloseHoldDefaultModeDesc = prometheus.NewDesc(
+	"loxilb_proxy_halfclose_hold_default_mode",
+	"1 while the default half-close mode is hold, 0 while it is off (/config/halfclose defaultMode): the mode of the fullproxy services that leave their own half_close_mode unset and could take hold. A change applies to half-closes from then on.",
+	nil, nil,
+)
+
+// spHoldModeHold is enum sp_hold_mode's hold.
+const spHoldModeHold = 2
+
 var halfCloseHoldDesc = prometheus.NewDesc(
 	"loxilb_proxy_halfclose_hold_total",
 	"Clients held after a half-close instead of being cut at their FIN: an answer was owed, the connection was plaintext and the kernel had never been given a direction of it, on a service whose half_close_mode is hold, while holds were allowed.",
@@ -159,6 +169,7 @@ func (halfCloseHoldCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- halfCloseHeldOldestDesc
 	ch <- halfCloseHoldAllowedDesc
 	ch <- halfCloseHoldCapDesc
+	ch <- halfCloseHoldDefaultModeDesc
 	ch <- halfCloseHoldDesc
 	ch <- halfCloseHoldEndedDesc
 	ch <- halfCloseHoldExpiredDesc
@@ -178,6 +189,11 @@ func (halfCloseHoldCollector) Collect(ch chan<- prometheus.Metric) {
 		float64(s.oldestMs)/1000)
 	ch <- prometheus.MustNewConstMetric(halfCloseHoldAllowedDesc, prometheus.GaugeValue, float64(s.allowed))
 	ch <- prometheus.MustNewConstMetric(halfCloseHoldCapDesc, prometheus.GaugeValue, float64(s.capSec))
+	defaultHold := 0.0
+	if s.defaultMode == spHoldModeHold {
+		defaultHold = 1
+	}
+	ch <- prometheus.MustNewConstMetric(halfCloseHoldDefaultModeDesc, prometheus.GaugeValue, defaultHold)
 	ch <- prometheus.MustNewConstMetric(halfCloseHoldDesc, prometheus.CounterValue, float64(s.begun))
 	for r := 1; r < holdEndReasons; r++ {
 		ch <- prometheus.MustNewConstMetric(halfCloseHoldEndedDesc, prometheus.CounterValue,

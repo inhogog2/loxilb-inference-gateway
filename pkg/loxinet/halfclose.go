@@ -15,8 +15,9 @@
  */
 
 // halfclose.go — NetHookInterface surface over the process-wide half-close
-// hold settings (cmn.HalfCloseConfig): whether new holds may be taken and the
-// idle bound on a hold, both handed to the data path, and the one-shot
+// hold settings (cmn.HalfCloseConfig): whether new holds may be taken, the
+// idle bound on a hold and the default mode of the services that leave their
+// own unset, all handed to the data path, and the one-shot
 // release of every held client. The settings are desired state, captured and
 // replayed by the config snapshot like any other domain; the defaults are
 // not configuration and are captured as absent. No BgpPeerMode guard: the
@@ -47,7 +48,17 @@ func halfCloseApply(c cmn.HalfCloseConfig) {
 	if mh.dpEbpf == nil {
 		return
 	}
-	mh.dpEbpf.DpHalfCloseConfig(c.Allow, c.CapSeconds)
+	mh.dpEbpf.DpHalfCloseConfig(c.Allow, c.CapSeconds, c.DefaultRule())
+}
+
+// halfCloseInForce - the settings in force: as set, else the defaults.
+func halfCloseInForce() cmn.HalfCloseConfig {
+	halfClose.mtx.Lock()
+	defer halfClose.mtx.Unlock()
+	if halfClose.cfg == nil {
+		return cmn.DefaultHalfCloseConfig()
+	}
+	return *halfClose.cfg
 }
 
 // NetHalfCloseGet - the settings as set; nil while the defaults are in force.
@@ -67,10 +78,11 @@ func halfCloseStoreLocked(c cmn.HalfCloseConfig) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
+	c = c.Normalized()
 	halfCloseApply(c)
 	halfClose.cfg = &c
-	tk.LogIt(tk.LogInfo, "half-close holds %s, bound %d s\n",
-		map[bool]string{true: "allowed", false: "blocked"}[c.Allow], c.CapSeconds)
+	tk.LogIt(tk.LogInfo, "half-close holds %s, bound %d s, default mode %s\n",
+		map[bool]string{true: "allowed", false: "blocked"}[c.Allow], c.CapSeconds, c.DefaultMode)
 	return nil
 }
 
@@ -93,8 +105,14 @@ func (na *NetAPIStruct) NetHalfCloseSet(cfg *cmn.HalfCloseConfig) (int, error) {
 // operator blocking holds while another changes the bound - cannot undo each
 // other, and each answer is what that update left in force.
 func (na *NetAPIStruct) NetHalfCloseUpdate(u *cmn.HalfCloseUpdate) (cmn.HalfCloseConfig, error) {
-	if u == nil || (u.Allow == nil && u.CapSeconds == nil) {
-		return cmn.HalfCloseConfig{}, cmn.NewValidationError("", "give allow, capSeconds or both")
+	if u == nil || (u.Allow == nil && u.CapSeconds == nil && u.DefaultMode == nil) {
+		return cmn.HalfCloseConfig{}, cmn.NewValidationError("",
+			"give at least one of allow, capSeconds and defaultMode")
+	}
+	if u.DefaultMode != nil {
+		if err := cmn.HalfCloseDefaultModeCheck(*u.DefaultMode); err != nil {
+			return cmn.HalfCloseConfig{}, err
+		}
 	}
 	halfClose.mtx.Lock()
 	defer halfClose.mtx.Unlock()
@@ -108,13 +126,16 @@ func (na *NetAPIStruct) NetHalfCloseUpdate(u *cmn.HalfCloseUpdate) (cmn.HalfClos
 	if u.CapSeconds != nil {
 		c.CapSeconds = *u.CapSeconds
 	}
+	if u.DefaultMode != nil {
+		c.DefaultMode = *u.DefaultMode
+	}
 	if halfCloseMergedHook != nil {
 		halfCloseMergedHook()
 	}
 	if err := halfCloseStoreLocked(c); err != nil {
 		return cmn.HalfCloseConfig{}, err
 	}
-	return c, nil
+	return *halfClose.cfg, nil
 }
 
 // NetHalfCloseReset - back to the defaults.

@@ -626,6 +626,13 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 		}
 		tmpSvc.SockMapMode = &sockMapMode
 		tmpSvc.HalfCloseMode = lb.Serv.HalfCloseMode
+		if eff := lb.Serv.HalfCloseEffective; eff != nil {
+			tmpSvc.HalfCloseEffective = &models.LoadbalanceEntryServiceArgumentsHalfCloseEffective{
+				Mode:       eff.Mode,
+				Source:     eff.Source,
+				NotApplied: eff.NotApplied,
+			}
+		}
 	}
 
 	// AI model name for pool selection
