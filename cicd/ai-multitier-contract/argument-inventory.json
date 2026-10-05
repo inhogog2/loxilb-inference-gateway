@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "8a7fb783efaf17393cf77f527af5d2ed81454bffb145302cf48f09db6bbd9a9c"
+    "swagger.yml": "1b39ef451e69672755124b15f5e3f07ab0a81dfbf9931b1665e3aada46929c46"
   },
   "fields": [
     {
@@ -1559,6 +1559,19 @@
         "default": false,
         "description": "Enable Gateway prefill/decode orchestration. Requires mode=4 and at least one endpoint with ep_role=1 (prefill) and one with ep_role=2 (decode). kvEngineType selects the dialect: vllm and trtllm use sequential prefill-then-decode flows; sglang uses a concurrent bootstrap-based pair. llamacpp is not supported on this path. If KV Exact is also enabled, use kvExactMode=1, not 3. Engine transport, tokenizer, and deployment prerequisites remain necessary; this flag alone does not qualify an engine/model tuple.",
         "type": "boolean",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/pd_prefill_timeout_sec",
+      "required": false,
+      "contract": {
+        "default": 0,
+        "description": "Longest time in seconds the Gateway waits for the prefill stage of a P/D request before it answers 504 with the pd_prefill_timeout error. On the sglang dialect the same bound covers the wait for the first decode byte of the pair. Omitted or 0 uses the process default: 30 seconds, or LLB_PD_PREFILL_TIMEOUT_SEC when the Gateway was started with it. A positive value overrides the default for this service only and may be changed by a replace POST on a live rule; requests already waiting are judged against the new value. Explicit JSON null is rejected. PATCH does not support this field. A nonzero declaration requires pd_disagg_mode=true and is rejected on other shapes. This is a Gateway wait bound, not an engine KV-transfer timeout or a stream duration limit.",
+        "format": "int32",
+        "maximum": 3600,
+        "minimum": 0,
+        "type": "integer",
         "x-nullable": false
       }
     },

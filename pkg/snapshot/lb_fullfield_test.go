@@ -97,6 +97,7 @@ func fullFieldLbRule() cmn.LbRuleMod {
 			PDDisaggMode:                true,
 			PDCacheAwareMode:            true,
 			PDSessionTTLSec:             120,
+			PDPrefillTimeoutSec:         45,
 			PDCacheThreshold:            60,
 			PDBalanceAbsThreshold:       4,
 			CbEnable:                    true,

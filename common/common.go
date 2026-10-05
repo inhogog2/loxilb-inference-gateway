@@ -901,6 +901,12 @@ type CertArg struct {
 // contract and bounds every later int conversion and fixed CBOR work buffer.
 const KVBlockSizeMax uint32 = 4096
 
+// PDPrefillTimeoutSecMax is the largest per-rule P/D prefill wait bound a rule
+// may declare, in seconds. The data plane carries the value in 16 bits; the
+// bound itself is a guard against a typo that would park client connections
+// for hours.
+const PDPrefillTimeoutSecMax uint16 = 3600
+
 // LbServiceArg - Information related to load-balancer service
 type LbServiceArg struct {
 	// ServIP - the service ip or vip  of the load-balancer rule
@@ -1178,6 +1184,11 @@ type LbServiceArg struct {
 	// PDSessionTTLSec - Tier-0 P/D sliding idle TTL in seconds; omitted/0 uses 300s.
 	// Positive values override the default. Independent of PDCacheAwareMode and engine KV lifetime.
 	PDSessionTTLSec uint32 `json:"pd_session_ttl_sec,omitempty"`
+	// PDPrefillTimeoutSec - longest wait for the prefill stage of a P/D request
+	// in seconds before the gateway answers 504 pd_prefill_timeout; omitted/0
+	// uses the process default (30s or LLB_PD_PREFILL_TIMEOUT_SEC). Only
+	// meaningful with PDDisaggMode=true; rejected on any other rule shape.
+	PDPrefillTimeoutSec uint16 `json:"pd_prefill_timeout_sec,omitempty"`
 	// PDCacheThreshold - Cache match threshold (0-100, default 20)
 	PDCacheThreshold uint8 `json:"pd_cache_threshold,omitempty"`
 	// PDCacheThresholdPresent records request presence without changing the

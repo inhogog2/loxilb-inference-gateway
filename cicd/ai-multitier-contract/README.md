@@ -16,6 +16,11 @@ silently ignoring them. Positive block sizes are limited to 1..4096, and exact
 subscriber rank ports must satisfy `kvZmqPort + kvDpRankCount - 1 <= 65535`
 after defaults are resolved.
 
+`pd_prefill_timeout_sec` follows the same declaration rules: omission or zero
+is the default declaration, JSON null is rejected, a positive value is accepted
+only on a P/D rule and only up to 3600, a value that would wrap in the 16-bit
+data-plane field is rejected instead of truncated, and PATCH rejects the field.
+
 ## Local checks
 
 Run the harness unit tests without deploying a Gateway:
