@@ -363,7 +363,7 @@ else
   sockmap_result "api_key_auth=required + off accepted" "FAILED" "$out"
 fi
 
-# R-6..R-8 (issue 1, PR-A). ANY non-empty api_key_auth declaration gives the data
+# R-6 and R-8 (issue 1, PR-A). ANY non-empty api_key_auth declaration gives the data
 # plane a non-zero apikey_auth wire value, and it then strips X-Api-Key from
 # EVERY request — an explicit "disabled" included, because that value claims the
 # header's namespace for the gateway without enforcing a credential. An
@@ -373,8 +373,21 @@ fi
 # which is the defect. "jwt" and "apikey-or-jwt" belong to the unit tests: those
 # modes also require a configured JWT profile, and that check answers first.
 aigw_expect_refused "R-6 api_key_auth=disabled + request"  ',"api_key_auth":"disabled"' request
-aigw_expect_refused "R-7 api_key_auth=disabled + response" ',"api_key_auth":"disabled"' response
 aigw_expect_refused "R-8 api_key_auth=disabled + both"     ',"api_key_auth":"disabled"' both
+
+# R-7: the response direction alone is accepted. The gate is per direction
+# (6f5cbf3a): the strip runs on every request in userspace, which a
+# response-only rule never hands to the kernel, so a declared api_key_auth -
+# "disabled" included - blocks the request direction only. Deleted first and
+# after, as R-16: a POST against an existing rule is a replace.
+sockmap_delete_lb_via_api llb1 10.10.10.254 "$AIGW_PORT" >/dev/null 2>&1 || true
+out=$(aigw_post ',"api_key_auth":"disabled"' response)
+if [[ "$out" == 200\ * ]]; then
+  sockmap_result "R-7 api_key_auth=disabled + response accepted" "OK"
+else
+  sockmap_result "R-7 api_key_auth=disabled + response accepted" "FAILED" "$out"
+fi
+sockmap_delete_lb_via_api llb1 10.10.10.254 "$AIGW_PORT" >/dev/null 2>&1 || true
 
 # R-16: the mirror image of R-6..R-8, guarding against over-refusal. An OMITTED
 # api_key_auth declares nothing, the data plane touches no header, and the rule
