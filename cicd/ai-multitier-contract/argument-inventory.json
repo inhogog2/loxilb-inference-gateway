@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "da62fd2dfd81d8f8d668dd2371dc39451783399f139462f9b5301042d868d46b"
+    "swagger.yml": "8a7fb783efaf17393cf77f527af5d2ed81454bffb145302cf48f09db6bbd9a9c"
   },
   "fields": [
     {
@@ -1052,10 +1052,49 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/half_close_effective",
+      "required": false,
+      "contract": {
+        "description": "The half-close mode in force for new holds on this service, and where it came from. Present on GET for fullproxy services; ignored on input. mode is off or hold. source is blocked when new holds are blocked process-wide (/config/halfclose allow false), rule when the service declares its own half_close_mode, and default when it leaves it unset and runs on the process default. not_applied, with source default, says why the default does not reach this service: the same reasons hold is refused on it (not fullproxy, TLS clients, P/D). A change to the default applies to half-closes from then on.",
+        "readOnly": true,
+        "type": "object"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/half_close_effective/mode",
+      "required": false,
+      "contract": {
+        "enum": [
+          "off",
+          "hold"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/half_close_effective/not_applied",
+      "required": false,
+      "contract": {
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/half_close_effective/source",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "default",
+          "blocked"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/half_close_mode",
       "required": false,
       "contract": {
-        "description": "What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default, which is off. hold+parked is refused (400) until it is available. hold is refused (400) on a service whose mode is not fullproxy, whose clients use TLS (security 1 or 2: TLS connections are never held), or that runs P/D (pd_disagg_mode, not yet measured) - judged on the service as a replace leaves it, so switching pd_disagg_mode on under a stored hold is refused as well. A snapshot restore of such a rule drops the hold with a warning. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.",
+        "description": "What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default (/config/halfclose defaultMode, off unless set) - where the service could take hold itself; a service that hold is refused on runs off whatever the default, and half_close_effective says what is in force and why. hold+parked is refused (400) until it is available. hold is refused (400) on a service whose mode is not fullproxy, whose clients use TLS (security 1 or 2: TLS connections are never held), or that runs P/D (pd_disagg_mode, not yet measured) - judged on the service as a replace leaves it, so switching pd_disagg_mode on under a stored hold is refused as well. A snapshot restore of such a rule drops the hold with a warning. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.",
         "enum": [
           "off",
           "hold",

@@ -1204,6 +1204,9 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.ProxyProtocolV2 = data.ppv2En
 		ret.Serv.SockMapMode = cmn.SockMapCodeToMode(data.sockMapMode)
 		ret.Serv.HalfCloseMode = cmn.HalfCloseModeFromRule(data.halfCloseMode)
+		if ret.Serv.Mode == cmn.LBModeFullProxy {
+			ret.Serv.HalfCloseEffective = data.halfCloseEffective(halfCloseInForce())
+		}
 		ret.Serv.Egress = data.egress
 		ret.Serv.TraceType = data.traceType                 // Tracing catalog
 		ret.Serv.BackendProtocol = data.backendProtocol     // Backend protocol capability
@@ -6668,7 +6671,7 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.FcTtftTargetMs = r.fcCfg.ttftTargetMs
 	nWork.FcTenantSharePct = uint8(r.fcCfg.tenantSharePct)
 	nWork.FcExposeHeaders = r.fcCfg.exposeHeaders
-	nWork.HalfCloseMode = r.halfCloseMode
+	nWork.HalfCloseMode = r.halfCloseDpMode()
 	nWork.CbEnable = r.cbEnable
 	nWork.KvExactMode = r.kvExactMode // KV-cache exact routing
 	nWork.KvBlockSize = r.kvBlockSize

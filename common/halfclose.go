@@ -35,7 +35,8 @@ const (
 )
 
 // The data plane's encoding of a rule's mode (enum sp_hold_mode). Unset runs
-// on the process default, which is off.
+// on the process default (HalfCloseConfig.DefaultMode); a rule that cannot
+// take hold is sent off instead, so the default never reaches it.
 const (
 	HalfCloseRuleUnset uint8 = 0
 	HalfCloseRuleOff   uint8 = 1
@@ -82,7 +83,8 @@ const (
 )
 
 // HalfCloseConfig - the process-wide half-close hold settings
-// (/config/halfclose). They apply to the services whose mode is hold.
+// (/config/halfclose). They apply to the services whose mode is hold, and
+// the default mode to the ones that leave theirs unset.
 type HalfCloseConfig struct {
 	// Allow - whether new holds may be taken. Blocking stops new holds and
 	// leaves the clients already held to finish; a release closes those.
@@ -90,25 +92,94 @@ type HalfCloseConfig struct {
 	// CapSeconds - the idle bound on a hold: a held client to which no
 	// answer byte has been written for this long is closed.
 	CapSeconds uint32 `json:"capSeconds"`
+	// DefaultMode - the mode of a service that leaves its half_close_mode
+	// unset: off or hold. It reaches only the services that could take hold
+	// themselves - the check that refuses hold on a service decides it.
+	// Empty, as a document written before the field existed carries it, is
+	// off.
+	DefaultMode string `json:"defaultMode,omitempty"`
 }
 
 // HalfCloseUpdate - a partial change of the settings: a nil field keeps the
 // value in force.
 type HalfCloseUpdate struct {
-	Allow      *bool
-	CapSeconds *uint32
+	Allow       *bool
+	CapSeconds  *uint32
+	DefaultMode *string
 }
 
 // DefaultHalfCloseConfig - the settings in force until they are set.
 func DefaultHalfCloseConfig() HalfCloseConfig {
-	return HalfCloseConfig{Allow: true, CapSeconds: HalfCloseCapDefaultSec}
+	return HalfCloseConfig{Allow: true, CapSeconds: HalfCloseCapDefaultSec,
+		DefaultMode: HalfCloseModeOff}
 }
 
-// Validate refuses a bound outside its limits.
+// HalfCloseDefaultModeCheck refuses a default mode other than off or hold.
+// inherit has nowhere to inherit from, and hold+parked is not available yet.
+func HalfCloseDefaultModeCheck(v string) error {
+	switch v {
+	case HalfCloseModeOff, HalfCloseModeHold:
+		return nil
+	case HalfCloseModeInherit:
+		return NewValidationError("defaultMode",
+			"defaultMode inherit has nothing to inherit from: use off or hold")
+	case HalfCloseModeHoldParked:
+		return NewValidationError("defaultMode",
+			"defaultMode hold+parked is not available yet; use hold")
+	}
+	return NewValidationError("defaultMode", "defaultMode must be off or hold")
+}
+
+// Normalized - the settings with an empty default mode read as off.
+func (c HalfCloseConfig) Normalized() HalfCloseConfig {
+	if c.DefaultMode == "" {
+		c.DefaultMode = HalfCloseModeOff
+	}
+	return c
+}
+
+// DefaultRule - the default mode in the data plane's encoding.
+func (c HalfCloseConfig) DefaultRule() uint8 {
+	if c.DefaultMode == HalfCloseModeHold {
+		return HalfCloseRuleHold
+	}
+	return HalfCloseRuleOff
+}
+
+// Validate refuses a bound outside its limits and a default mode other than
+// off or hold (empty reads as off).
 func (c HalfCloseConfig) Validate() error {
 	if c.CapSeconds < HalfCloseCapMinSec || c.CapSeconds > HalfCloseCapMaxSec {
 		return NewValidationError("capSeconds", "capSeconds must be within %d..%d",
 			HalfCloseCapMinSec, HalfCloseCapMaxSec)
 	}
+	if c.DefaultMode != "" {
+		return HalfCloseDefaultModeCheck(c.DefaultMode)
+	}
 	return nil
+}
+
+// Where a service's half-close mode in force comes from
+// (HalfCloseEffectiveArg.Source).
+const (
+	// HalfCloseSourceRule - the service's own half_close_mode.
+	HalfCloseSourceRule = "rule"
+	// HalfCloseSourceDefault - the process-wide default mode, for a service
+	// that leaves its own unset.
+	HalfCloseSourceDefault = "default"
+	// HalfCloseSourceBlocked - new holds are blocked process-wide.
+	HalfCloseSourceBlocked = "blocked"
+)
+
+// HalfCloseEffectiveArg - a FullProxy service's half-close mode in force
+// for new holds, and where it came from. A read model for GET, never
+// replayed into a POST.
+type HalfCloseEffectiveArg struct {
+	// Mode - off or hold.
+	Mode string `json:"mode"`
+	// Source - rule, default or blocked.
+	Source string `json:"source"`
+	// NotApplied - why the default mode does not reach this service, when
+	// it leaves its own mode unset and could not take hold.
+	NotApplied string `json:"not_applied,omitempty"`
 }

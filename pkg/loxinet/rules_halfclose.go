@@ -50,15 +50,8 @@ func halfCloseResolve(eRule *ruleEnt, serv *cmn.LbServiceArg, mode cmn.LBMode) (
 	if eRule != nil {
 		sec = eRule.secMode
 	}
-	why := ""
-	switch {
-	case mode != cmn.LBModeFullProxy:
-		why = "available on fullproxy services only"
-	case sec != cmn.LBServPlain:
-		why = "not available on a service whose clients use TLS: TLS connections are never held"
-	case serv.PDDisaggMode:
-		why = "not available on a P/D (pd_disagg_mode) service yet"
-	default:
+	why := halfCloseHoldRefusal(mode, sec, serv.PDDisaggMode)
+	if why == "" {
 		return next, nil
 	}
 	if serv.RestoreReplay {
@@ -67,4 +60,64 @@ func halfCloseResolve(eRule *ruleEnt, serv *cmn.LbServiceArg, mode cmn.LBMode) (
 		return cmn.HalfCloseRuleUnset, nil
 	}
 	return 0, cmn.NewValidationError("half_close_mode", "half_close_mode hold is %s", why)
+}
+
+// halfCloseHoldRefusal says why a service cannot take hold, or "" when it
+// can. One answer for every place that asks: refusing a service's own hold,
+// the mode the data plane gets for a service that leaves its own unset, and
+// the read-back of where a service's mode in force comes from. Were they
+// to ask different questions, the mode sent and the mode shown could part.
+func halfCloseHoldRefusal(mode cmn.LBMode, sec cmn.LBSec, pd bool) string {
+	switch {
+	case mode != cmn.LBModeFullProxy:
+		return "available on fullproxy services only"
+	case sec != cmn.LBServPlain:
+		return "not available on a service whose clients use TLS: TLS connections are never held"
+	case pd:
+		return "not available on a P/D (pd_disagg_mode) service yet"
+	}
+	return ""
+}
+
+// halfCloseRefusal - halfCloseHoldRefusal for a stored rule.
+func (r *ruleEnt) halfCloseRefusal() string {
+	mode := cmn.LBModeDefault
+	if lba, ok := r.act.action.(*ruleLBActs); ok {
+		mode = lba.mode
+	}
+	return halfCloseHoldRefusal(mode, r.secMode, r.pdDisaggMode)
+}
+
+// halfCloseDpMode - the mode the data plane gets for a rule: its own, or
+// for a rule that leaves it unset, unset (the process default) where the
+// rule could take hold and off where it could not, so that the default never
+// reaches a rule that hold is refused on.
+func (r *ruleEnt) halfCloseDpMode() uint8 {
+	if r.halfCloseMode != cmn.HalfCloseRuleUnset {
+		return r.halfCloseMode
+	}
+	if r.halfCloseRefusal() != "" {
+		return cmn.HalfCloseRuleOff
+	}
+	return cmn.HalfCloseRuleUnset
+}
+
+// halfCloseEffective - the mode in force for new holds on a rule, and where
+// it came from, given the process-wide settings: blocked over the rule's own
+// mode, the rule's own over the default. The same check as halfCloseDpMode
+// says whether the default reaches the rule.
+func (r *ruleEnt) halfCloseEffective(cfg cmn.HalfCloseConfig) *cmn.HalfCloseEffectiveArg {
+	cfg = cfg.Normalized()
+	switch {
+	case !cfg.Allow:
+		return &cmn.HalfCloseEffectiveArg{Mode: cmn.HalfCloseModeOff, Source: cmn.HalfCloseSourceBlocked}
+	case r.halfCloseMode != cmn.HalfCloseRuleUnset:
+		return &cmn.HalfCloseEffectiveArg{Mode: cmn.HalfCloseModeFromRule(r.halfCloseMode),
+			Source: cmn.HalfCloseSourceRule}
+	}
+	if why := r.halfCloseRefusal(); why != "" {
+		return &cmn.HalfCloseEffectiveArg{Mode: cmn.HalfCloseModeOff,
+			Source: cmn.HalfCloseSourceDefault, NotApplied: why}
+	}
+	return &cmn.HalfCloseEffectiveArg{Mode: cfg.DefaultMode, Source: cmn.HalfCloseSourceDefault}
 }

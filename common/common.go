@@ -1101,6 +1101,10 @@ type LbServiceArg struct {
 	// read from the data plane for GET only. Never persisted, never read
 	// on input.
 	FcEffective *FcEffectiveArg `json:"-"`
+	// HalfCloseEffective - the half-close mode in force for new holds and
+	// where it came from, for a FullProxy service: GET only. Never
+	// persisted, never read on input.
+	HalfCloseEffective *HalfCloseEffectiveArg `json:"-"`
 	// MustExist - Octavia PATCH must-exist semantics. When true, AddLbRule
 	// refuses to CREATE an absent rule and returns the RuleNotExistsErr sentinel so the
 	// PATCH handler can map it to 404. POST callers leave this false (default), preserving

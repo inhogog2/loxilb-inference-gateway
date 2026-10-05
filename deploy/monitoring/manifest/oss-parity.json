@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-02T12:18:21+00:00",
-  "source_revision": "4e5712b4f3b9b89b1a618bc1d26d88c5cec4c9a1",
+  "generated_at": "2026-10-05T02:58:23+00:00",
+  "source_revision": "c966955f29eba57cc379d5d1852f3d1733da90d3",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 313,
+  "gateway_families": 314,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 278,
+  "absent": 279,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -3300,6 +3300,17 @@
   },
   {
    "name": "loxilb_proxy_halfclose_hold_cap_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_proxy_halfclose_hold_default_mode",
    "owner": "loxilb",
    "class": "default",
    "parity": "absent",

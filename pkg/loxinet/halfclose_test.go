@@ -59,6 +59,22 @@ func TestHalfCloseSettingsHolder(t *testing.T) {
 		t.Fatal("a nil set was accepted")
 	}
 
+	// The default mode is off or hold; empty, as an older snapshot carries
+	// it, is stored as off.
+	for _, mode := range []string{"inherit", "hold+parked", "on"} {
+		_, err := na.NetHalfCloseSet(&cmn.HalfCloseConfig{Allow: true, CapSeconds: 30, DefaultMode: mode})
+		var invalid *cmn.ValidationError
+		if !errors.As(err, &invalid) {
+			t.Fatalf("default mode %q: err=%v, want a validation refusal", mode, err)
+		}
+	}
+	if _, err := na.NetHalfCloseSet(&cmn.HalfCloseConfig{Allow: false, CapSeconds: 30}); err != nil {
+		t.Fatalf("a set without a default mode refused: %v", err)
+	}
+	if cfg, _ := na.NetHalfCloseGet(); cfg == nil || cfg.DefaultMode != cmn.HalfCloseModeOff {
+		t.Fatalf("an absent default mode stored as %+v, want off", cfg)
+	}
+
 	if _, err := na.NetHalfCloseReset(); err != nil {
 		t.Fatal(err)
 	}
@@ -159,5 +175,42 @@ func TestHalfCloseUpdateWindow(t *testing.T) {
 	}
 	if cfg, _ := na.NetHalfCloseGet(); cfg == nil || cfg.Allow || cfg.CapSeconds != 30 {
 		t.Fatalf("the settings are %+v, want blocked with a 30 s bound", cfg)
+	}
+}
+
+// A partial update of the default mode keeps the switch and the bound, and a
+// mode the default cannot take is refused before anything is stored.
+func TestHalfCloseUpdateDefaultMode(t *testing.T) {
+	na := &NetAPIStruct{}
+	if _, err := na.NetHalfCloseReset(); err != nil {
+		t.Fatal(err)
+	}
+	defer na.NetHalfCloseReset()
+
+	allow, capSec := false, uint32(45)
+	if _, err := na.NetHalfCloseUpdate(&cmn.HalfCloseUpdate{Allow: &allow, CapSeconds: &capSec}); err != nil {
+		t.Fatal(err)
+	}
+	hold := cmn.HalfCloseModeHold
+	got, err := na.NetHalfCloseUpdate(&cmn.HalfCloseUpdate{DefaultMode: &hold})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Allow || got.CapSeconds != 45 || got.DefaultMode != cmn.HalfCloseModeHold {
+		t.Fatalf("answered %+v, want allow=false cap=45 default=hold", got)
+	}
+	if in := halfCloseInForce(); in != got {
+		t.Fatalf("in force %+v, answered %+v", in, got)
+	}
+	for _, mode := range []string{"inherit", "hold+parked", "", "on"} {
+		m := mode
+		_, err := na.NetHalfCloseUpdate(&cmn.HalfCloseUpdate{DefaultMode: &m})
+		var invalid *cmn.ValidationError
+		if !errors.As(err, &invalid) {
+			t.Fatalf("default mode %q: err=%v, want a validation refusal", mode, err)
+		}
+	}
+	if in := halfCloseInForce(); in.DefaultMode != cmn.HalfCloseModeHold {
+		t.Fatalf("a refused update changed the default mode: %+v", in)
 	}
 }

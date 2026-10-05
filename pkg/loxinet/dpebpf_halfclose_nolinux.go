@@ -21,7 +21,7 @@ package loxinet
 // No sockproxy off Linux: nothing to hold, nothing to release.
 
 // DpHalfCloseConfig - not available off Linux.
-func (e *DpEbpfH) DpHalfCloseConfig(allow bool, capSec uint32) {}
+func (e *DpEbpfH) DpHalfCloseConfig(allow bool, capSec uint32, defaultMode uint8) {}
 
 // DpHalfCloseRelease - not available off Linux.
 func (e *DpEbpfH) DpHalfCloseRelease() {}
