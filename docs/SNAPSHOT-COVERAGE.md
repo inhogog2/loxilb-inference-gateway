@@ -171,6 +171,7 @@ forward on read.
 | 1.6 | `jwtauthprofile` domain |
 | 1.7 | `halfclose` domain |
 | 1.8 | `auditsink` domain |
+| 1.9 | `halfclose` gains `defaultMode` |
 
 The resulting compatibility matrix, enforced by the version-gate and
 golden-document test suites (a golden document of every prior schema must
