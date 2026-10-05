@@ -36,11 +36,13 @@ fleet_down() {
   for n in "${PNODES[@]}"; do PREFILL=$n CONVERGED=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" stop "$ENG" "$ROLE1" "$PROF"; done
   for n in "${DNODES[@]}"; do DECODE=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" stop "$ENG" decode "$PROF"; done
 }
+# An SGLang prefill engine serves a request only when it is paired with a decode engine (seed.py --pair-decode).
+pair_decode() { [ "$ENG" = sglang ] && [ "$TOPOLOGY" = pd ] && [ -n "$1" ] && echo "--pair-decode http://$1:$EPORT"; return 0; }
 # prompt tokens of one long-prefix chat prompt with <reps> paragraph repetitions, as the first prefill counts them
 ptok() {
   python3 "$AB_DIR/gen_corpus.py" --output "$BASE/size-$1.jsonl" --families "${#PNODES[@]}" --owners "${#PNODES[@]}" --prefix-repetitions "$1" --salt "size$1-"
   head -1 "$BASE/size-$1.jsonl" > "$BASE/size-one.jsonl"
-  python3 "$AB_DIR/seed.py" --corpus "$BASE/size-one.jsonl" --output "$BASE/size-$1.receipt.jsonl" --model "$MODEL" --target "http://${PNODES[0]}:$EPORT" >/dev/null
+  python3 "$AB_DIR/seed.py" --corpus "$BASE/size-one.jsonl" --output "$BASE/size-$1.receipt.jsonl" --model "$MODEL" --target "http://${PNODES[0]}:$EPORT" $(pair_decode "${DNODES[0]:-}") >/dev/null
   python3 -c "import json,sys; print(json.loads(open(sys.argv[1]).readline())['usage']['prompt_tokens'])" "$BASE/size-$1.receipt.jsonl"
 }
 corpora() {
@@ -56,27 +58,25 @@ corpora() {
 calibrate() {
   [ -s "$BASE/calibration.json" ] && { echo "  calibration already banked"; return 0; }
   local enc; enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MODEL")
-  python3 - "$VIP" "$PORT" "$MODEL" "$EPORT" "$PREFILLS" "$DECODES" "$TOPOLOGY" > "$BASE/cal-rule.json" <<'PY'
-import json, sys
-vip, port, model, eport, pre, dec, topo = sys.argv[1:]
-sa = {"externalIP": vip, "port": int(port), "protocol": "tcp", "sel": 0, "mode": 4, "host": vip,
-      "probeRetries": 1, "sse_mode": True, "model_name": model, "kvExactMode": 0}
-if topo == "pd":
-    sa["pd_disagg_mode"] = True
-    eps = [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 1} for n in pre.split()]
-    eps += [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 2} for n in dec.split()]
-else:
-    eps = [{"endpointIP": n, "targetPort": int(eport), "weight": 1} for n in pre.split()]
-print(json.dumps({"serviceArguments": sa, "endpoints": eps}))
-PY
+  python3 "$AB_DIR/rule.py" calibration "$VIP" "$PORT" "$ENG" "$MODEL" "$PROF" "$EPORT" "$PREFILLS" "$DECODES" "$TOPOLOGY" > "$BASE/cal-rule.json"
   # Closed loop at falling concurrency until every request completes. Too many cold prefills at once is not a
   # capacity number: the decode engines pull each prefix late, the prefill engine's KV lease runs out, and the
   # engine ends those streams with no token. Every attempt gets a fleet with nothing queued and prefixes used
   # nowhere else.
-  local http c rc=1
+  local http c n rc=1
   for c in ${CAL_CONCURRENCY:-32 16 8 4}; do
     python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-cal.jsonl" --families $((FAMILIES * 2)) --owners "${#PNODES[@]}" \
       --prefix-repetitions "$(cat "$BASE/prefix-repetitions.txt")" --salt "cal$c-$(date +%s)-"
+    # CAL_WARMUP=1: one long prompt with its own prefix on every prefill engine before the timed run. A freshly
+    # started SGLang engine takes seconds for its first long prefill; inside the window that stall is counted as
+    # capacity the fleet does not have, and the point rates come out too low.
+    if [ "${CAL_WARMUP:-0}" = 1 ]; then
+      local w=(); for n in "${PNODES[@]}"; do w+=(--target "http://$n:$EPORT"); done
+      python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-cal-warmup.jsonl" --families "${#PNODES[@]}" --owners "${#PNODES[@]}" \
+        --prefix-repetitions "$(cat "$BASE/prefix-repetitions.txt")" --salt "warm$c-$(date +%s)-"
+      python3 "$AB_DIR/seed.py" --corpus "$BASE/corpus-cal-warmup.jsonl" --output "$BASE/cal-warmup-c$c.receipt.jsonl" --model "$MODEL" \
+        "${w[@]}" $(pair_decode "${DNODES[0]:-}") || { echo "CAL_WARMUP_FAILED"; return 1; }
+    fi
     http=$(curl -s -m 10 -o "$BASE/cal-rule-create.json" -w "%{http_code}" -X POST "${LB}" -H 'Content-Type: application/json' --data-binary "@$BASE/cal-rule.json")
     [ "$http" = 200 ] || { echo "CAL_RULE_CREATE_FAILED $http"; return 1; }
     sleep 5

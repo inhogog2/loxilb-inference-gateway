@@ -42,22 +42,7 @@ state() { curl -s -m 5 "${LB}/externalipaddress/${VIP}/port/${PORT}/protocol/tcp
 msum() { awk -v m="$2" '$1 ~ ("^" m "({|$)") {s += $NF} END {printf "%d", s + 0}' "$1"; }
 scrape() { curl -fsS -m 10 "${MET}" > "$1" && grep -q "^loxilb_" "$1" || { echo "GATEWAY_SCRAPE_FAILED $1"; return 1; }; }
 rule() { # rule exact|baseline <dir>
-  python3 - "$1" "$VIP" "$PORT" "$ENG" "$MODEL" "$PROF" "$EPORT" "$PREFILLS" "$DECODES" "$TOPOLOGY" > "$2/rule.json" <<'PY'
-import json, sys
-arm, vip, port, eng, model, prof, eport, pre, dec, topo = sys.argv[1:]
-sa = {"externalIP": vip, "port": int(port), "protocol": "tcp", "sel": 0, "mode": 4, "host": vip, "probeRetries": 1,
-      "sse_mode": True, "model_name": model, "kvExactMode": 0}
-if topo == "pd":
-    sa["pd_disagg_mode"] = True
-if arm == "exact":   # exact mode 1 = prefill/decode rule, 3 = converged (role-less endpoints)
-    sa.update(kvExactMode=1 if topo == "pd" else 3, kvBlockSize=16, kvEngineType=eng, kvExactApiMode="both", kvModelProfile=prof)
-if topo == "pd":
-    eps = [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 1} for n in pre.split()]
-    eps += [{"endpointIP": n, "targetPort": int(eport), "weight": 1, "ep_role": 2} for n in dec.split()]
-else:
-    eps = [{"endpointIP": n, "targetPort": int(eport), "weight": 1} for n in pre.split()]
-print(json.dumps({"serviceArguments": sa, "endpoints": eps}, indent=1))
-PY
+  python3 "$AB_DIR/rule.py" "$1" "$VIP" "$PORT" "$ENG" "$MODEL" "$PROF" "$EPORT" "$PREFILLS" "$DECODES" "$TOPOLOGY" > "$2/rule.json"
   curl -s -m 10 -o "$2/rule-create.json" -w "%{http_code}" -X POST "${LB}" -H 'Content-Type: application/json' --data-binary "@$2/rule.json"
 }
 restart_fleet() {
@@ -110,13 +95,22 @@ arm() { # arm <repetition> exact|baseline
   fi
   local day0; day0=$(date -u +%F)
   t=(); for n in "${PNODES[@]}"; do t+=(--target "http://$n:$EPORT"); done
-  python3 "$AB_DIR/seed.py" --corpus "$CORPUS" --output "$d/seed-receipts.jsonl" --model "$MODEL" --api "$API" "${t[@]}" \
+  # An SGLang prefill engine serves a request only when it is paired with a decode engine, and an SGLang decode
+  # engine only one that a prefill engine feeds: there every seed is a prefill + decode pair, once per decode engine.
+  local pair=(); [ "$ENG" = sglang ] && [ "$TOPOLOGY" = pd ] && pair=(--pair-decode "http://${DNODES[0]}:$EPORT")
+  python3 "$AB_DIR/seed.py" --corpus "$CORPUS" --output "$d/seed-receipts.jsonl" --model "$MODEL" --api "$API" "${t[@]}" "${pair[@]}" \
     || { echo "SEED_FAILED $a"; return 1; }
   # The decode engines get every family too, in both arms. A decode engine that has never seen a prefix pulls it
   # whole from the prefill engine, and that first pull costs more than the prefill either arm can save; with it
   # in the timed window the tail measures decode warm-up, not routing. Seeded, the arms differ only in which
   # prefill engine is asked.
   for n in "${DNODES[@]}"; do
+    if [ ${#pair[@]} -gt 0 ]; then
+      [ "$n" = "${DNODES[0]}" ] && continue
+      python3 "$AB_DIR/seed.py" --corpus "$CORPUS" --output "$d/seed-receipts-decode-$n.jsonl" --model "$MODEL" --api "$API" "${t[@]}" \
+        --pair-decode "http://$n:$EPORT" || { echo "SEED_FAILED $a decode $n"; return 1; }
+      continue
+    fi
     t=(); for _ in "${PNODES[@]}"; do t+=(--target "http://$n:$EPORT"); done
     python3 "$AB_DIR/seed.py" --corpus "$CORPUS" --output "$d/seed-receipts-decode-$n.jsonl" --model "$MODEL" --api "$API" "${t[@]}" \
       || { echo "SEED_FAILED $a decode $n"; return 1; }

@@ -5,7 +5,7 @@ round-robin over the same prefill engines. The two arms differ in the rule only:
 same offered rate.
 
 ```bash
-python3 selftest.py                                   # no GPU, no gateway: analyzer verdicts and load generator
+python3 selftest.py                                   # no GPU, no gateway: analyzer, load generator, rules, seeding
 
 export PREFILLS="<node> <node>" DECODES="<node> <node>" VIP=<gateway address> LOGD=<gateway log dir>
 ./validation.sh model vllm <profileId>                # fleet up, corpus, calibration, three points, fleet down
@@ -31,12 +31,23 @@ per-model launch argument proven there applies unchanged. Evidence goes to `/var
    floors (0.5 and 1.0 req/s): a fleet measured below the higher point rate is refused
    (`CAPACITY_BELOW_RATE_FLOOR`, the measurement is kept as `calibration-refused.json`) instead of being offered
    more than it completes. Every fleet restart keeps the replaced engines' logs under `node-<address>/engine-logs/`.
+   `CAL_WARMUP=1` sends one long prompt with its own prefix to every prefill engine before each timed attempt.
+   A freshly started SGLang engine takes seconds for its first long prefill; inside the timed window that
+   stall lowers the measured capacity and with it every point rate. Off by default: rates measured with and
+   without it are not comparable (`CAL_WARMUP_FAILED` when a warm-up request is refused).
 4. **Three points**: long prefix at 40 % and at 80 % of the calibrated rate, short prefix at 80 %. Each point is
    `REPS` repetitions of both arms in alternating order (exact-baseline, baseline-exact, exact-baseline). Before
    every arm the engines are restarted, the rule is created fresh, and every family is seeded directly on its
    owner prefill engine and on every decode engine (a decode engine's first pull of a prefix would otherwise
-   dominate the tail of both arms). Then every family is requested `repeat` times, open loop, in a seeded shuffled order that is the same
+   dominate the tail of both arms). On an SGLang prefill/decode fleet a seed is a prefill + decode pair, the way
+   SGLang's own router sends a request (`seed.py --pair-decode`): a prefill engine refuses a request that
+   names no bootstrap room and keeps no prefix for one sent alone. Then every family is requested `repeat` times, open loop, in a seeded shuffled order that is the same
    for both arms of a repetition.
+
+The rule of every arm comes from `rule.py`. The baseline and calibration rules have exact routing off; on a
+prefill/decode fleet of SGLang engines they still name the engine type, because the gateway picks the
+prefill/decode dialect from it and an SGLang fleet driven the vLLM way answers every request with an empty
+stream.
 
 ## When a point counts
 
@@ -65,7 +76,8 @@ with the typed line and leaves no summary.
 repetition. It also has two shares, because p50 and p95 say nothing when the slow requests of both arms fall on
 the same side of the rank: `slow_request_percent` (TTFT at least twice the lower arm's median) and
 `computed_prompt_token_percent` (prompt tokens the engines computed instead of reading from their cache, from
-the engine scrapes of the arm: vLLM's prompt tokens by source, SGLang's uncached prompt-token sum). A difference is **claimed** only when the arms' per-repetition values do not overlap
+the engine scrapes of the arm: vLLM's prompt tokens by source, SGLang's uncached prompt-token sum without the
+decode engines, which repeat what their prefill engine reported). A difference is **claimed** only when the arms' per-repetition values do not overlap
 (`ttft_p95_separation`: `exact_lower`, `baseline_lower`); `overlap` means the numbers stand and the claim does
 not. The short-prefix control has no cache benefit to win: it bounds the routing overhead and the noise, and a
 long-prefix result is read against it.

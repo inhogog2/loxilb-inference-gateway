@@ -110,6 +110,18 @@ def main():
             check(f"{label} scrapes: 6800 of 68000 prompt tokens computed in the exact arm -> 10.0 %, 34000 in the baseline -> 50.0 %",
                   rc == 0 and s and s["arms"]["exact"]["computed_prompt_token_percent"] == 10.0 and
                   s["arms"]["baseline"]["computed_prompt_token_percent"] == 50.0, (rc, s and s["arms"]["exact"]))
+        # A prefill/decode fleet: the decode engine's series moves by the same tokens as its prefill engine's.
+        pd = ('sglang:uncached_prompt_tokens_histogram_sum{{engine_type="prefill",model_name="m"}} {0}\n'
+              'sglang:uncached_prompt_tokens_histogram_sum{{engine_type="decode",model_name="m"}} {0}\n')
+        rc, s = analyze(tmp, "c4", rows([100, 110, 105], [300, 320, 310]),
+                        {"exact": (pd.format(1000), pd.format(7800)), "baseline": (pd.format(0), pd.format(34000))})
+        check("C4 SGLang prefill/decode scrapes: the decode engine repeats the prefill engine's tokens -> still 10.0 % and 50.0 %",
+              rc == 0 and s and s["arms"]["exact"]["computed_prompt_token_percent"] == 10.0 and
+              s["arms"]["baseline"]["computed_prompt_token_percent"] == 50.0, (rc, s and s["arms"]["exact"]))
+        dec = 'sglang:uncached_prompt_tokens_histogram_sum{{engine_type="decode",model_name="m"}} {0}\n'
+        rc, s = analyze(tmp, "c5", rows([100, 110, 105], [300, 320, 310]), {"exact": (dec.format(1000), dec.format(7800))})
+        check("C5 a decode engine's scrape alone counts as scraped, with no computed tokens -> 0.0 %", rc == 0 and s and
+              s["arms"]["exact"]["computed_prompt_token_percent"] == 0.0, (rc, s and s["arms"]["exact"]))
         rc, s = analyze(tmp, "c3", rows([100, 110, 105], [300, 320, 310]), {"exact": (None, sg.format(7800))})
         check("C3 an after scrape without its before scrape -> no computed share", rc == 0 and s and
               s["arms"]["exact"]["computed_prompt_token_percent"] is None, (rc, s and s["arms"]["exact"]))
@@ -239,6 +251,79 @@ def main():
         check("K5 the refusal is the comparison, not the floor: 1.06 is not refused, 0.95 is",
               not calib.refused({"rate_high": 1.0, "cold_closed_loop_rps": 1.06})
               and calib.refused({"rate_high": 1.0, "cold_closed_loop_rps": 0.95}))
+    # The rule of an arm. A baseline or calibration rule routes without the cache, but on a prefill/decode fleet
+    # the gateway still needs the engine type to speak that engine's prefill/decode dialect.
+    import rule
+    print("gateway rules")
+    fleet = ("10.0.0.12", "8080", None, "org/model", "prof-v1", "8000", "10.0.0.7 10.0.0.8", "10.0.0.10 10.0.0.11")
+    def sa(arm, eng, topo):
+        return rule.build(arm, *fleet[:2], eng, *fleet[3:], topo)["serviceArguments"]
+    check("G1 SGLang prefill/decode: the baseline and the calibration rule name the engine type, exact routing off",
+          all(sa(a, "sglang", "pd").get("kvEngineType") == "sglang" and sa(a, "sglang", "pd")["kvExactMode"] == 0
+              for a in ("baseline", "calibration")), sa("baseline", "sglang", "pd"))
+    check("G2 vLLM prefill/decode: the baseline and the calibration rule carry no engine type",
+          all("kvEngineType" not in sa(a, "vllm", "pd") and sa(a, "vllm", "pd")["pd_disagg_mode"] is True
+              for a in ("baseline", "calibration")), sa("baseline", "vllm", "pd"))
+    check("G3 converged: no engine type and no prefill/decode mode on the baseline rule, either engine",
+          all("kvEngineType" not in sa("baseline", e, "converged") and "pd_disagg_mode" not in sa("baseline", e, "converged")
+              for e in ("sglang", "vllm")), sa("baseline", "sglang", "converged"))
+    check("G4 exact rule: mode 1 on prefill/decode, 3 converged, engine type and profile on both",
+          [(sa("exact", "sglang", t)["kvExactMode"], sa("exact", "sglang", t)["kvEngineType"], sa("exact", "sglang", t)["kvModelProfile"])
+           for t in ("pd", "converged")] == [(1, "sglang", "prof-v1"), (3, "sglang", "prof-v1")])
+    eps = rule.build("baseline", *fleet[:2], "sglang", *fleet[3:], "pd")["endpoints"]
+    check("G5 prefill/decode endpoints: prefill engines role 1, decode engines role 2",
+          [(e["endpointIP"], e["ep_role"]) for e in eps] == [("10.0.0.7", 1), ("10.0.0.8", 1), ("10.0.0.10", 2), ("10.0.0.11", 2)], eps)
+
+    # Seeding. An SGLang prefill engine keeps a prefix only for a request it serves together with a decode
+    # engine: the same body, with the prefill engine as bootstrap host and one room, goes to both.
+    print("seeding")
+    class Engine(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.server.bodies.append(body)
+            self.send_response(self.server.status); self.send_header("Content-Type", "application/json"); self.end_headers()
+            self.wfile.write(json.dumps({"usage": {"prompt_tokens": 9}}).encode())
+    def engine(status=200):
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Engine)
+        srv.bodies, srv.status = [], status
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = pathlib.Path(tmp)
+        (tmp / "c.jsonl").write_text("".join(json.dumps(
+            {"prompt_id": f"family-{n:03d}", "owner": n % 2, "seed_messages": [{"role": "user", "content": f"p{n}"}]}) + "\n"
+            for n in range(4)))
+        def seed(*extra):
+            r = subprocess.run([sys.executable, str(HERE / "seed.py"), "--corpus", str(tmp / "c.jsonl"), "--output",
+                                str(tmp / "r.jsonl"), "--model", "m", *extra], capture_output=True, text=True)
+            return r.returncode, [json.loads(x) for x in (tmp / "r.jsonl").read_text().splitlines()]
+        (p0, u0), (p1, u1), (d, ud) = engine(), engine(), engine()
+        rc, rec = seed("--target", u0, "--target", u1)
+        check("S1 plain seeding: each family once on its owner engine, no bootstrap field, nothing to the decode engine",
+              rc == 0 and len(p0.bodies) == len(p1.bodies) == 2 and not d.bodies and all(r["completed"] for r in rec)
+              and not any(k.startswith("bootstrap") for b in p0.bodies + p1.bodies for k in b), (rc, rec[:1]))
+        for srv in (p0, p1, d):
+            srv.bodies.clear()
+        rc, rec = seed("--target", u0, "--target", u1, "--pair-decode", ud)
+        rooms = [b.get("bootstrap_room") for b in d.bodies]
+        check("S2 paired seeding: every family goes to its owner and to the decode engine with the same body",
+              rc == 0 and len(d.bodies) == 4 and len(p0.bodies) == len(p1.bodies) == 2
+              and sorted(json.dumps(b, sort_keys=True) for b in p0.bodies + p1.bodies) == sorted(json.dumps(b, sort_keys=True) for b in d.bodies),
+              (rc, len(d.bodies)))
+        check("S3 paired seeding: bootstrap host = the prefill engine's host, port 8998, one room per family",
+              all(b.get("bootstrap_host") == "127.0.0.1" and b.get("bootstrap_port") == 8998 for b in d.bodies)
+              and len(set(rooms)) == 4 and None not in rooms, d.bodies[:1])
+        check("S4 paired seeding: the receipt names the decode engine and both answers",
+              all(r["completed"] and r["pair_decode"] == ud and r["prefill_http_status"] == 200 for r in rec), rec[:1])
+        bad, ub = engine(400)
+        rc, rec = seed("--target", ub, "--target", u1, "--pair-decode", ud)
+        check("S5 a prefill engine that refuses its half -> exit 1, those families not seeded",
+              rc == 1 and [r["completed"] for r in rec].count(False) == 2, (rc, rec))
+        for srv in (p0, p1, d, bad):
+            srv.shutdown()
     print(f"SELFTEST kv-model-ab-perf: {'PASS' if not failed else f'FAIL ({failed})'}")
     return 1 if failed else 0
 
