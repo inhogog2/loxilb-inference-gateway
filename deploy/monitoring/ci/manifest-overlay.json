@@ -3065,7 +3065,7 @@
     "evidence": "runtime evidence 2026-10-01/2026-10-02, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): a harness drives known half-close shapes through hold rules on the off/request/response/both arms with a 10 s bound, five times each, and reads /metrics before and after, asserting the cells that move and that no other cell does (20 shapes, all pass); a second probe reads the gauges while a client is held. the bound as set through /config/halfclose: 10, 30, then 240."
    },
    "loxilb_proxy_halfclose_hold_default_mode": {
-    "status": "verified-static",
+    "status": "verified-runtime",
     "writer_sources": [
      { "symbol": "Collect", "kind": "method", "receiver": "halfCloseHoldCollector", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 182, "writes": "halfCloseHoldDefaultModeDesc" },
      { "symbol": "init", "kind": "func", "file": "api/prometheus/halfclose_hold_metrics.go", "def_line": 218, "call_line": 219, "calls": "halfCloseHoldCollector", "entry_point": "registry-collector" }
@@ -3075,7 +3075,7 @@
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1090, "call_line": 1188, "calls": "updateHoldStore" },
      { "tail": "prom-init-sockproxy-main" }
     ],
-    "evidence": "source verification 2026-10-05: api/prometheus/halfclose_hold_metrics.go emits the gauge from holdStore at scrape time - 1 while the datapath snapshot's hold_default_mode is enum sp_hold_mode hold, 0 otherwise; halfclose_hold_metrics_test.go drives the collector and the merge and pins the hold value against loxilb-ebpf's sp_hold_mode. Not yet seen on a bed."
+    "evidence": "runtime evidence 2026-10-05, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): the harness sets /config/halfclose defaultMode hold, holds a client on a fullproxy rule that leaves its half_close_mode unset, switches the default to off three seconds into the hold and reads /metrics before and after - the gauge goes from 1 to 0 while the client already held runs to the bound (two holds, the only other cells that move are the hold's own); with the default left at hold for five half-closes on the same rule it stays at 1 and every client is answered."
    },
    "loxilb_proxy_halfclose_hold_ended_total": {
     "status": "verified-runtime",

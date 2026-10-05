@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-05T02:58:13+00:00",
-  "source_revision": "c966955f29eba57cc379d5d1852f3d1733da90d3"
+  "generated_at": "2026-10-05T03:48:49+00:00",
+  "source_revision": "5eda602f461e5ad93dcdb91aaaf0f59c65102da5"
  },
  "contract": {
   "total": 314,
@@ -12967,7 +12967,7 @@
    "source": "api/prometheus/halfclose_hold_metrics.go:117",
    "release_scope": "release",
    "runtime_scope": "gateway-default",
-   "implementation_status": "verified-static",
+   "implementation_status": "verified-runtime",
    "activation_precondition": "",
    "writer_sources": [
     {
@@ -12988,7 +12988,7 @@
      "entry_point": "registry-collector"
     }
    ],
-   "verification_evidence": "source verification 2026-10-05: api/prometheus/halfclose_hold_metrics.go emits the gauge from holdStore at scrape time - 1 while the datapath snapshot's hold_default_mode is enum sp_hold_mode hold, 0 otherwise; halfclose_hold_metrics_test.go drives the collector and the merge and pins the hold value against loxilb-ebpf's sp_hold_mode. Not yet seen on a bed."
+   "verification_evidence": "runtime evidence 2026-10-05, sockmap-fullproxy bed (kernel 6.11, HAVE_SOCKOPS image built from this branch): the harness sets /config/halfclose defaultMode hold, holds a client on a fullproxy rule that leaves its half_close_mode unset, switches the default to off three seconds into the hold and reads /metrics before and after - the gauge goes from 1 to 0 while the client already held runs to the bound (two holds, the only other cells that move are the hold's own); with the default left at hold for five half-closes on the same rule it stays at 1 and every client is answered."
   },
   {
    "name": "loxilb_proxy_halfclose_hold_ended_total",
