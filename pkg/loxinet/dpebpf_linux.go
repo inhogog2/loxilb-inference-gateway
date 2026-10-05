@@ -1834,6 +1834,9 @@ func DpLBRuleMod(w *LBDpWorkQ) int {
 		dat.pd_cache_aware_mode = 1
 	}
 	dat.pd_session_ttl_sec = C.uint32_t(w.PDSessionTTLSec)
+	// Per-rule prefill wait bound. 0 rides through unchanged — the reaper
+	// resolves it to the process default on every tick.
+	dat.pd_prefill_timeout_sec = C.uint16_t(w.PDPrefillTimeoutSec)
 	cacheThreshold := pdCacheThresholdEffective(w.PDCacheThreshold)
 	balanceThreshold := pdBalanceAbsThresholdEffective(w.PDBalanceAbsThreshold)
 	dat.pd_cache_threshold = C.uint8_t(cacheThreshold)

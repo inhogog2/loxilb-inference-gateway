@@ -383,6 +383,7 @@ type LBDpWorkQ struct {
 	PDDisaggMode                bool                    // P/D disaggregation mode: orchestrate prefill→decode flow
 	PDCacheAwareMode            bool                    // P/D cache-aware routing (US-PD801)
 	PDSessionTTLSec             uint32                  // Session stickiness TTL in seconds
+	PDPrefillTimeoutSec         uint16                  // P/D prefill wait bound in seconds (0 ⇒ process default at the reaper)
 	PDCacheThreshold            uint8                   // Cache match threshold (0-100)
 	PDBalanceAbsThreshold       uint8                   // Load imbalance threshold
 	FcMaxQueueDepth             uint32                  // capacity admission queue depth (0 = process default)

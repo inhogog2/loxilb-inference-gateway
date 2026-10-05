@@ -173,6 +173,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	// P/D cache-aware routing (US-PD801)
 	lbRules.Serv.PDCacheAwareMode = params.Attr.ServiceArguments.PdCacheAwareMode
 	lbRules.Serv.PDSessionTTLSec = uint32(params.Attr.ServiceArguments.PdSessionTTLSec)
+	lbRules.Serv.PDPrefillTimeoutSec = uint16(params.Attr.ServiceArguments.PdPrefillTimeoutSec)
 	pres.applyPDThresholds(&lbRules.Serv, params.Attr.ServiceArguments)
 	// The capacity admission queue of the service's pool, with presence so a
 	// replace can reset a depth to the process default with an explicit 0.
@@ -677,6 +678,9 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	}
 	if lb.Serv.PDSessionTTLSec != 0 {
 		tmpSvc.PdSessionTTLSec = int32(lb.Serv.PDSessionTTLSec)
+	}
+	if lb.Serv.PDPrefillTimeoutSec != 0 {
+		tmpSvc.PdPrefillTimeoutSec = int32(lb.Serv.PDPrefillTimeoutSec)
 	}
 	if lb.Serv.PDCacheThreshold != 0 {
 		tmpSvc.PdCacheThreshold = int32(lb.Serv.PDCacheThreshold)

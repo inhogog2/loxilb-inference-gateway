@@ -913,6 +913,11 @@ type LoadbalanceEntryServiceArguments struct {
 	// Enable Gateway prefill/decode orchestration. Requires mode=4 and at least one endpoint with ep_role=1 (prefill) and one with ep_role=2 (decode). kvEngineType selects the dialect: vllm and trtllm use sequential prefill-then-decode flows; sglang uses a concurrent bootstrap-based pair. llamacpp is not supported on this path. If KV Exact is also enabled, use kvExactMode=1, not 3. Engine transport, tokenizer, and deployment prerequisites remain necessary; this flag alone does not qualify an engine/model tuple.
 	PdDisaggMode bool `json:"pd_disagg_mode,omitempty"`
 
+	// Longest time in seconds the Gateway waits for the prefill stage of a P/D request before it answers 504 with the pd_prefill_timeout error. On the sglang dialect the same bound covers the wait for the first decode byte of the pair. Omitted or 0 uses the process default: 30 seconds, or LLB_PD_PREFILL_TIMEOUT_SEC when the Gateway was started with it. A positive value overrides the default for this service only and may be changed by a replace POST on a live rule; requests already waiting are judged against the new value. Explicit JSON null is rejected. PATCH does not support this field. A nonzero declaration requires pd_disagg_mode=true and is rejected on other shapes. This is a Gateway wait bound, not an engine KV-transfer timeout or a stream duration limit.
+	// Maximum: 3600
+	// Minimum: 0
+	PdPrefillTimeoutSec int32 `json:"pd_prefill_timeout_sec,omitempty"`
+
 	// Tier-0 P/D session-stickiness idle TTL in seconds. Omitted or 0 uses the Gateway default of 300 seconds; a positive value overrides the default for this service. Successful session lookup or store refreshes the last-access time. A mapping expires when elapsed idle time exceeds the effective TTL; periodic cleanup may reclaim it later. Applies to P/D routing when a client session key is present, independently of pd_cache_aware_mode. This is a Gateway endpoint-affinity policy, not an engine KV-cache retention, KV-transfer timeout, or active-request timeout. Zero does not disable expiry or stickiness. Capacity eviction and endpoint-health checks still apply. No no-expiry mode is exposed.
 	// Minimum: 0
 	PdSessionTTLSec int32 `json:"pd_session_ttl_sec,omitempty"`
@@ -1163,6 +1168,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	}
 
 	if err := m.validatePdCacheThreshold(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validatePdPrefillTimeoutSec(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -2202,6 +2211,22 @@ func (m *LoadbalanceEntryServiceArguments) validatePdCacheThreshold(formats strf
 	}
 
 	if err := validate.MaximumInt("serviceArguments"+"."+"pd_cache_threshold", "body", int64(m.PdCacheThreshold), 100, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validatePdPrefillTimeoutSec(formats strfmt.Registry) error {
+	if swag.IsZero(m.PdPrefillTimeoutSec) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"pd_prefill_timeout_sec", "body", int64(m.PdPrefillTimeoutSec), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"pd_prefill_timeout_sec", "body", int64(m.PdPrefillTimeoutSec), 3600, false); err != nil {
 		return err
 	}
 

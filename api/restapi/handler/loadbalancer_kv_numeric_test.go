@@ -16,6 +16,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -43,6 +44,10 @@ func TestKVNumericArgumentsBoundaries(t *testing.T) {
 		{name: "rank port overflow by one", args: models.LoadbalanceEntryServiceArguments{KvExactMode: 3, KvZmqPort: 65529, KvDpRankCount: 8}, wantErr: "kvZmqPort + kvDpRankCount - 1"},
 		{name: "bootstrap maximum", args: models.LoadbalanceEntryServiceArguments{PdBootstrapPort: 65535}},
 		{name: "bootstrap overflow before cast", args: models.LoadbalanceEntryServiceArguments{PdBootstrapPort: 65536}, wantErr: "pdBootstrapPort"},
+		{name: "prefill timeout maximum", args: models.LoadbalanceEntryServiceArguments{PdPrefillTimeoutSec: int32(cmn.PDPrefillTimeoutSecMax)}},
+		{name: "prefill timeout over maximum", args: models.LoadbalanceEntryServiceArguments{PdPrefillTimeoutSec: int32(cmn.PDPrefillTimeoutSecMax) + 1}, wantErr: "pd_prefill_timeout_sec"},
+		{name: "prefill timeout wraps to a small uint16", args: models.LoadbalanceEntryServiceArguments{PdPrefillTimeoutSec: 65536 + 5}, wantErr: "pd_prefill_timeout_sec"},
+		{name: "prefill timeout negative", args: models.LoadbalanceEntryServiceArguments{PdPrefillTimeoutSec: -1}, wantErr: "pd_prefill_timeout_sec"},
 	}
 
 	pres, err := parseLoadbalancerRequestPresence([]byte(`{"serviceArguments":{}}`))
@@ -66,7 +71,7 @@ func TestKVNumericArgumentsBoundaries(t *testing.T) {
 }
 
 func TestKVNumericNullRejectedBeforeRuleHook(t *testing.T) {
-	for _, field := range []string{"kvBlockSize", "kvZmqPort", "kvDpRankCount", "pdBootstrapPort"} {
+	for _, field := range []string{"kvBlockSize", "kvZmqPort", "kvDpRankCount", "pdBootstrapPort", "pd_prefill_timeout_sec"} {
 		t.Run(field, func(t *testing.T) {
 			params := newCreateParams("")
 			raw := []byte(`{"serviceArguments":{"` + field + `":null}}`)
@@ -101,6 +106,12 @@ func TestKVNumericNarrowingRejectedBeforeRuleHook(t *testing.T) {
 		{name: "port over uint16", mutate: func(a *models.LoadbalanceEntryServiceArguments) { a.KvZmqPort = 65536 }, wantErr: "kvZmqPort"},
 		{name: "rank over contract", mutate: func(a *models.LoadbalanceEntryServiceArguments) { a.KvDpRankCount = 9 }, wantErr: "kvDpRankCount"},
 		{name: "bootstrap over uint16", mutate: func(a *models.LoadbalanceEntryServiceArguments) { a.PdBootstrapPort = 65536 }, wantErr: "pdBootstrapPort"},
+		{name: "prefill timeout over the bound", mutate: func(a *models.LoadbalanceEntryServiceArguments) {
+			a.PdDisaggMode, a.PdPrefillTimeoutSec = true, int32(cmn.PDPrefillTimeoutSecMax)+1
+		}, wantErr: "pd_prefill_timeout_sec"},
+		{name: "prefill timeout that would wrap", mutate: func(a *models.LoadbalanceEntryServiceArguments) {
+			a.PdDisaggMode, a.PdPrefillTimeoutSec = true, 65536+5
+		}, wantErr: "pd_prefill_timeout_sec"},
 		{name: "aggregate overflow", mutate: func(a *models.LoadbalanceEntryServiceArguments) {
 			a.KvExactMode, a.KvZmqPort, a.KvDpRankCount = 3, 65529, 8
 		}, wantErr: "kvZmqPort + kvDpRankCount - 1"},
@@ -130,7 +141,7 @@ func TestKVNumericNarrowingRejectedBeforeRuleHook(t *testing.T) {
 }
 
 func TestKVNumericPatchIsRejectedInsteadOfIgnored(t *testing.T) {
-	for _, field := range []string{"kvBlockSize", "kvZmqPort", "kvDpRankCount", "pdBootstrapPort"} {
+	for _, field := range []string{"kvBlockSize", "kvZmqPort", "kvDpRankCount", "pdBootstrapPort", "pd_prefill_timeout_sec"} {
 		t.Run(field, func(t *testing.T) {
 			params := newPDThresholdPatchParams(`{"serviceArguments":{"` + field + `":0}}`)
 			current := cmn.LbRuleMod{}
@@ -153,5 +164,49 @@ func TestKVNumericPatchIsRejectedInsteadOfIgnored(t *testing.T) {
 				t.Fatal("unsupported PATCH field reached NetLbRuleAdd")
 			}
 		})
+	}
+}
+
+// The per-rule prefill wait bound travels both ways through the handler: a
+// POST declaration reaches the rule layer as given, an omitted one reaches it
+// as zero (the process default downstream), and GET prints a stored value and
+// leaves an unset one out.
+func TestPDPrefillTimeoutCreateAndReadBack(t *testing.T) {
+	for _, want := range []uint16{0, 5, cmn.PDPrefillTimeoutSecMax} {
+		params := newCreateParams("")
+		params.Attr.ServiceArguments.PdDisaggMode = true
+		params.Attr.ServiceArguments.PdPrefillTimeoutSec = int32(want)
+
+		prev := ApiHooks
+		stub := &stubLbAddHook{}
+		ApiHooks = stub
+		res := ConfigPostLoadbalancer(params, nil)
+		ApiHooks = prev
+
+		if stub.captured == nil {
+			t.Fatalf("timeout %d never reached the rule layer: %T %#v", want, res, res)
+		}
+		if got := stub.captured.Serv.PDPrefillTimeoutSec; got != want {
+			t.Fatalf("reached the rule layer as %d, want %d", got, want)
+		}
+
+		wire, err := json.Marshal(serializeLBRule(*stub.captured).ServiceArguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := map[string]any{}
+		if err := json.Unmarshal(wire, &m); err != nil {
+			t.Fatal(err)
+		}
+		got, present := m["pd_prefill_timeout_sec"]
+		if want == 0 {
+			if present {
+				t.Fatalf("an unset timeout is printed as %v", got)
+			}
+			continue
+		}
+		if !present || got != float64(want) {
+			t.Fatalf("read-back prints %v (present=%v), want %d", got, present, want)
+		}
 	}
 }

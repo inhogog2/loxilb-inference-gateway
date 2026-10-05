@@ -631,6 +631,7 @@ type ruleEnt struct {
 	pdDisaggMode                bool                    // P/D disaggregation mode: orchestrate prefill→decode flow
 	pdCacheAwareMode            bool                    // P/D cache-aware routing: session + trie + min-load (US-PD801)
 	pdSessionTTLSec             uint32                  // Session stickiness TTL in seconds (0 = no expiry)
+	pdPrefillTimeoutSec         uint16                  // P/D prefill wait bound in seconds (0 ⇒ process default downstream)
 	pdCacheThreshold            uint8                   // Cache match threshold (0-100, default 20)
 	pdBalanceAbsThreshold       uint8                   // Load imbalance threshold (default 3)
 	fcMaxQueueDepth             uint32                  // capacity admission queue depth (0 = process default)
@@ -1234,6 +1235,7 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.PDDisaggMode = data.pdDisaggMode         // P/D disaggregation mode
 		ret.Serv.PDCacheAwareMode = data.pdCacheAwareMode // P/D cache-aware routing (US-PD801)
 		ret.Serv.PDSessionTTLSec = data.pdSessionTTLSec
+		ret.Serv.PDPrefillTimeoutSec = data.pdPrefillTimeoutSec // zero value ⇒ omitempty ⇒ absent unless declared
 		ret.Serv.PDCacheThreshold = data.pdCacheThreshold
 		ret.Serv.PDBalanceAbsThreshold = data.pdBalanceAbsThreshold
 		ret.Serv.FcMaxQueueDepth = data.fcMaxQueueDepth
@@ -3607,6 +3609,24 @@ func pdBootstrapPortValidate(port uint16, pdDisagg bool, engine string) error {
 	return nil
 }
 
+// pdPrefillTimeoutValidate bounds the per-rule prefill wait: it is read only
+// by the P/D reaper, so on a rule without P/D orchestration a nonzero value
+// would be silently dead config — reject it at create time. The upper bound
+// keeps a typo from parking client connections for hours. Absent (0) always
+// passes and resolves to the process default downstream.
+//
+// Pure function: unit-testable without a rule fixture (the
+// pdBootstrapPortValidate precedent).
+func pdPrefillTimeoutValidate(sec uint16, pdDisagg bool) error {
+	if sec > cmn.PDPrefillTimeoutSecMax {
+		return fmt.Errorf("pd_prefill_timeout_sec must be within 0..%d", cmn.PDPrefillTimeoutSecMax)
+	}
+	if sec != 0 && !pdDisagg {
+		return errors.New("pd_prefill_timeout_sec requires pd_disagg_mode=true")
+	}
+	return nil
+}
+
 // kvEngineImmutabilityCheck is guard: kvEngineType on an existing
 // rule is IMMUTABLE — delete+recreate is the sanctioned path (a live engine
 // flip would silently re-key the whole Tier-1.5 hash space).
@@ -4154,6 +4174,11 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		return RuleUnknownServiceErr, kvAdmissionRefuse(err)
 	}
 
+	// The prefill wait bound is read only by the P/D reaper — same reasoning.
+	if err := pdPrefillTimeoutValidate(serv.PDPrefillTimeoutSec, serv.PDDisaggMode); err != nil {
+		return RuleUnknownServiceErr, kvAdmissionRefuse(err)
+	}
+
 	sort.SliceStable(lBActs.endPoints, func(i, j int) bool {
 		a := tk.IPtonl(lBActs.endPoints[i].xIP)
 		b := tk.IPtonl(lBActs.endPoints[j].xIP)
@@ -4292,6 +4317,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.pdDisaggMode != serv.PDDisaggMode ||
 			eRule.pdCacheAwareMode != serv.PDCacheAwareMode ||
 			eRule.pdSessionTTLSec != serv.PDSessionTTLSec ||
+			eRule.pdPrefillTimeoutSec != serv.PDPrefillTimeoutSec ||
 			eRule.pdCacheThreshold != nextPDCacheThreshold ||
 			eRule.pdBalanceAbsThreshold != nextPDBalanceAbsThreshold ||
 			eRule.cbEnable != serv.CbEnable ||
@@ -4504,6 +4530,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		eRule.pdDisaggMode = serv.PDDisaggMode
 		eRule.pdCacheAwareMode = serv.PDCacheAwareMode
 		eRule.pdSessionTTLSec = serv.PDSessionTTLSec
+		eRule.pdPrefillTimeoutSec = serv.PDPrefillTimeoutSec
 		eRule.pdCacheThreshold = nextPDCacheThreshold
 		eRule.pdBalanceAbsThreshold = nextPDBalanceAbsThreshold
 		eRule.fcMaxQueueDepth = nextFcMaxQueueDepth
@@ -4826,6 +4853,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	// Store P/D cache-aware routing configuration (US-PD801)
 	r.pdCacheAwareMode = serv.PDCacheAwareMode
 	r.pdSessionTTLSec = serv.PDSessionTTLSec
+	r.pdPrefillTimeoutSec = serv.PDPrefillTimeoutSec
 	r.pdCacheThreshold = serv.PDCacheThreshold
 	r.pdBalanceAbsThreshold = serv.PDBalanceAbsThreshold
 
@@ -6656,6 +6684,7 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.PDDisaggMode = r.pdDisaggMode         // P/D disaggregation mode
 	nWork.PDCacheAwareMode = r.pdCacheAwareMode // P/D cache-aware routing (US-PD801)
 	nWork.PDSessionTTLSec = r.pdSessionTTLSec
+	nWork.PDPrefillTimeoutSec = r.pdPrefillTimeoutSec
 	nWork.PDCacheThreshold = r.pdCacheThreshold
 	nWork.PDBalanceAbsThreshold = r.pdBalanceAbsThreshold
 	nWork.FcMaxQueueDepth = r.fcMaxQueueDepth

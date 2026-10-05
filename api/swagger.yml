@@ -111,6 +111,14 @@ x-loxilb-contract-relations:
       enforcement: server-static
       message: A nonzero bootstrap port requires SGLang P/D.
       evidence: pkg/loxinet/rules.go:pdBootstrapPortValidate
+    - id: LB-PD-PREFILL-TIMEOUT
+      kind: requires
+      when: {field: /serviceArguments/pd_prefill_timeout_sec, operator: greater-than, value: 0}
+      require:
+        - {field: /serviceArguments/pd_disagg_mode, operator: in, values: [true], missing: false}
+      enforcement: server-static
+      message: A nonzero prefill timeout requires P/D orchestration.
+      evidence: pkg/loxinet/rules.go:pdPrefillTimeoutValidate
     - id: LB-EXACT-MODEL-NAME
       kind: requires
       when: {field: /serviceArguments/kvExactMode, operator: in, values: [1, 3]}
@@ -10635,6 +10643,26 @@ definitions:
               an engine KV-cache retention, KV-transfer timeout, or active-request
               timeout. Zero does not disable expiry or stickiness. Capacity eviction
               and endpoint-health checks still apply. No no-expiry mode is exposed.
+          pd_prefill_timeout_sec:
+            type: integer
+            format: int32
+            x-nullable: false
+            minimum: 0
+            maximum: 3600
+            default: 0
+            description: >-
+              Longest time in seconds the Gateway waits for the prefill stage of
+              a P/D request before it answers 504 with the pd_prefill_timeout
+              error. On the sglang dialect the same bound covers the wait for the
+              first decode byte of the pair. Omitted or 0 uses the process
+              default: 30 seconds, or LLB_PD_PREFILL_TIMEOUT_SEC when the Gateway
+              was started with it. A positive value overrides the default for
+              this service only and may be changed by a replace POST on a live
+              rule; requests already waiting are judged against the new value.
+              Explicit JSON null is rejected. PATCH does not support this field.
+              A nonzero declaration requires pd_disagg_mode=true and is rejected
+              on other shapes. This is a Gateway wait bound, not an engine
+              KV-transfer timeout or a stream duration limit.
           pd_cache_threshold:
             type: integer
             format: int32
