@@ -51,18 +51,20 @@ def validate(rows):
 
 # Prompt tokens an engine computed, per engine family. vLLM counts prompt tokens by source; SGLang observes
 # prompt_tokens - cached_tokens of every finished request into a histogram, whose sum is the same quantity.
-COMPUTED = (("vllm:prompt_tokens_by_source_total", 'source="local_compute"'),
-            ("sglang:uncached_prompt_tokens_histogram_sum", ""))
+# An SGLang decode engine observes the split its prefill engine reported for the same request, so its series
+# repeats tokens already counted there and is left out.
+COMPUTED = (("vllm:prompt_tokens_by_source_total", 'source="local_compute"', None),
+            ("sglang:uncached_prompt_tokens_histogram_sum", "", 'engine_type="decode"'))
 
 
 def computed_tokens(arm_dir):
     """Prompt tokens the engines computed during one arm (after - before, all engines), or None without scrapes."""
     def total(path):
-        for metric, label in COMPUTED:
-            v = [float(line.rsplit(" ", 1)[1]) for line in path.read_text().splitlines()
-                 if line.startswith(metric) and line[len(metric):len(metric) + 1] in ("{", " ") and label in line]
-            if v:
-                return sum(v)
+        for metric, label, repeated in COMPUTED:
+            lines = [line for line in path.read_text().splitlines()
+                     if line.startswith(metric) and line[len(metric):len(metric) + 1] in ("{", " ") and label in line]
+            if lines:
+                return sum(float(line.rsplit(" ", 1)[1]) for line in lines if not (repeated and repeated in line))
         return None
     out, after = 0.0, sorted(arm_dir.glob("after-engine-*.prom"))
     for a in after:

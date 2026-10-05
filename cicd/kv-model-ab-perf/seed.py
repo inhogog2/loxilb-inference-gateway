@@ -1,11 +1,27 @@
 #!/usr/bin/env python3
-"""Seed each prompt family directly on its owner prefill engine and write one receipt per family."""
+"""Seed each prompt family directly on its owner prefill engine and write one receipt per family.
+
+--pair-decode is for an SGLang prefill/decode fleet. An SGLang prefill engine refuses a request that carries no
+bootstrap room, and does not keep the prefix of one sent with its warm-up bootstrap host, so a family can only be
+seeded the way SGLang's own router serves a request: the same body, with bootstrap_host / bootstrap_port /
+bootstrap_room, sent to the owner prefill engine and to a decode engine at the same time.
+"""
 import argparse
+import concurrent.futures
 import json
+import random
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+
+
+def post(url, payload, timeout):
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.status, json.loads(r.read())
 
 
 def main():
@@ -16,6 +32,8 @@ def main():
     ap.add_argument("--api", choices=("chat", "completions"), default="chat")
     ap.add_argument("--target", action="append", required=True, help="owner engine base URL, in owner order")
     ap.add_argument("--timeout", type=float, default=180)
+    ap.add_argument("--pair-decode", help="SGLang prefill/decode: decode engine base URL paired with every seed")
+    ap.add_argument("--bootstrap-port", type=int, default=8998)
     a = ap.parse_args()
     rows = [json.loads(line) for line in open(a.corpus, encoding="utf-8") if line.strip()]
     failures = 0
@@ -28,13 +46,21 @@ def main():
             else:
                 payload["prompt"] = row["seed_prompt"]
             receipt = {"prompt_id": row["prompt_id"], "owner": row["owner"], "target": target, "started_at_unix": time.time()}
+            path = "/v1/chat/completions" if a.api == "chat" else "/v1/completions"
             try:
-                req = urllib.request.Request(
-                    target + ("/v1/chat/completions" if a.api == "chat" else "/v1/completions"),
-                    data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
-                with urllib.request.urlopen(req, timeout=a.timeout) as r:
-                    body = json.loads(r.read())
-                    receipt.update(http_status=r.status, completed=r.status == 200, usage=body.get("usage"))
+                if a.pair_decode:
+                    payload.update(bootstrap_host=urllib.parse.urlsplit(target).hostname,
+                                   bootstrap_port=a.bootstrap_port, bootstrap_room=random.getrandbits(62))
+                    receipt["pair_decode"] = a.pair_decode
+                    with concurrent.futures.ThreadPoolExecutor(2) as pool:
+                        pre = pool.submit(post, target + path, payload, a.timeout)
+                        dec = pool.submit(post, a.pair_decode + path, payload, a.timeout)
+                        (pstatus, _), (status, body) = pre.result(), dec.result()
+                    receipt.update(prefill_http_status=pstatus)
+                    status = status if pstatus == 200 else pstatus
+                else:
+                    status, body = post(target + path, payload, a.timeout)
+                receipt.update(http_status=status, completed=status == 200, usage=body.get("usage"))
             except (OSError, ValueError, urllib.error.HTTPError) as e:
                 failures += 1
                 receipt.update(completed=False, error=f"{type(e).__name__}: {e}")
