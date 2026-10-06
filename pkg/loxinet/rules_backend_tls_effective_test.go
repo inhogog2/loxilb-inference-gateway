@@ -38,6 +38,11 @@ func TestBackendTLSEffective(t *testing.T) {
 	if eff := terminated.backendTLSEffective(installed, true, true); eff != nil {
 		t.Errorf("a rule with a plain backend leg reports %+v", eff)
 	}
+	// The data plane is asked for the rules that can report, and no other.
+	if listenerTestRule(tuples, cmn.LBModeDefault, asked).hasBackendTLSLeg() || terminated.hasBackendTLSLeg() || !rule().hasBackendTLSLeg() {
+		t.Errorf("which rules have a TLS backend leg: not a proxy %v, plain leg %v, TLS leg %v",
+			listenerTestRule(tuples, cmn.LBModeDefault, asked).hasBackendTLSLeg(), terminated.hasBackendTLSLeg(), rule().hasBackendTLSLeg())
+	}
 
 	// What the listener runs is what is reported, member for member.
 	eff := rule().backendTLSEffective(installed, true, true)

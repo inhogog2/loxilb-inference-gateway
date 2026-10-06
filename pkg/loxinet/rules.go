@@ -1235,7 +1235,7 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.BackendCaCertId = data.backendCaCertId
 		ret.Serv.BackendClientCertId = data.backendClientCertId
 		ret.Serv.BackendTLSServerName = data.backendTLSServerName
-		if mh.dpEbpf != nil {
+		if mh.dpEbpf != nil && data.hasBackendTLSLeg() {
 			st, listening := mh.dpEbpf.DpBackendTLSStateGet(data.tuples.l3Dst.addr.IP,
 				data.tuples.l4Dst.valMin, uint8(data.tuples.l4Prot.val))
 			ret.Serv.BackendTLSEffective = data.backendTLSEffective(st, listening, cmn.MTLSBuild)

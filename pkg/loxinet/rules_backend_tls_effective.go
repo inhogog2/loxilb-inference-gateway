@@ -31,6 +31,14 @@ type backendTLSInstalled struct {
 	serverName   string
 }
 
+// hasBackendTLSLeg reports whether the rule's backend leg is TLS. Only such a
+// rule has a backend TLS policy to report, so only for such a rule is the
+// data plane asked.
+func (r *ruleEnt) hasBackendTLSLeg() bool {
+	at, ok := r.act.action.(*ruleLBActs)
+	return ok && at.mode == cmn.LBModeFullProxy && r.secMode == cmn.LBServE2EHTTPS
+}
+
 // backendTLSEffective sets what a listener has installed beside what the rule
 // asks for. It returns nil for a rule whose backend leg is not TLS, where
 // there is nothing to report. listening says whether the data plane has a
@@ -42,8 +50,7 @@ type backendTLSInstalled struct {
 // could not load a certificate that was replaced under the same ID, read
 // failed, with the policy the listener does run.
 func (r *ruleEnt) backendTLSEffective(st backendTLSInstalled, listening, build bool) *cmn.BackendTLSEffectiveArg {
-	at, ok := r.act.action.(*ruleLBActs)
-	if !ok || at.mode != cmn.LBModeFullProxy || r.secMode != cmn.LBServE2EHTTPS {
+	if !r.hasBackendTLSLeg() {
 		return nil
 	}
 	if !build {
