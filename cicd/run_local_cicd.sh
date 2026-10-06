@@ -71,6 +71,8 @@ run_scenario e2ehttpsproxy -- './config.sh' './validation-http1.sh' './validatio
 
 run_scenario e2ehttpsproxy-prefix -- './config.sh' './validation-http1.sh' './validation-http2.sh'
 
+run_scenario e2ehttpsproxy-betls -- './config.sh' './validation.sh'
+
 run_scenario e2ehttpsproxy-grpc -- './config.sh' './validation.sh'
 
 run_scenario httpproxy -- './config.sh' './validation.sh' './validation-http2.sh'
