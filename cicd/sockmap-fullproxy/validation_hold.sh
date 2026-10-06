@@ -12,11 +12,13 @@
 #        POLLHUP at once and lose it.
 #   H-2  reset while waiting. The answer is held back 8 s; the client resets
 #        200 ms after its FIN. Nothing has been written to it, so no write can
-#        fail: the only way out is the reset reported on the fd, which is
-#        disarmed while held (POLLERR/POLLHUP come without being asked for,
-#        and the dispatch passes them on for a held client). The backend must
-#        see its leg closed within a second of the reset - not when its answer
-#        is written 8 s in (a write would fail then), not at the 10 s bound.
+#        fail: the only way out is the reset reported on the fd. It is
+#        disarmed while held but stays in the poll set, and POLLERR/POLLHUP
+#        come without being asked for; the notifier then drops the fd's
+#        registration on them, which tears the connection down. The backend
+#        must see its leg closed within a second of the reset - not when its
+#        answer is written 8 s in (a write would fail then), not at the 10 s
+#        bound.
 #   H-3  reset while the answer drains. The backend sends 32 MiB at once to a
 #        client with a 64 KiB receive buffer reading 64 KiB a second, which
 #        resets after a second. The proxy is still writing to it, and its next
@@ -61,7 +63,7 @@ BLOG="$SOCKMAP_ARTIFACTS_DIR/hold_backend.jsonl"
 api() { _sm_dexec "$LLB" curl -sS -o /dev/null -w '%{http_code}' "$@"; }
 hc_set() { api -X POST -H 'Content-Type: application/json' -d "$1" "$API/halfclose"; }
 
-metrics() { $hexec $CLIENT_NS curl -s --max-time 8 "http://$VIP:11111/netlox/v1/metrics"; }
+metrics() { _sm_dexec "$LLB" curl -s --max-time 8 "http://localhost:11111/netlox/v1/metrics"; }
 # One sample's value from a /metrics dump (0 when absent).
 mval() {   # <dump> <exact series, labels included>
   printf '%s\n' "$1" | awk -v s="$2" '$1 == s {v = $2} END {print v + 0}'
