@@ -35,6 +35,9 @@ per-model launch argument proven there applies unchanged. Evidence goes to `/var
    A freshly started SGLang engine takes seconds for its first long prefill; inside the timed window that
    stall lowers the measured capacity and with it every point rate. Off by default: rates measured with and
    without it are not comparable (`CAL_WARMUP_FAILED` when a warm-up request is refused).
+   On a prefill/decode fleet the warm-up prompt is sent once per decode engine, so no decode engine meets its
+   first long request inside the window. The engines' metrics around every timed attempt are kept as
+   `cal-c<concurrency>-{before,after}-engine-<address>.prom`; no check reads them.
 4. **Three points**: long prefix at 40 % and at 80 % of the calibrated rate, short prefix at 80 %. Each point is
    `REPS` repetitions of both arms in alternating order (exact-baseline, baseline-exact, exact-baseline). Before
    every arm the engines are restarted, the rule is created fresh, and every family is seeded directly on its
@@ -43,6 +46,16 @@ per-model launch argument proven there applies unchanged. Evidence goes to `/var
    SGLang's own router sends a request (`seed.py --pair-decode`): a prefill engine refuses a request that
    names no bootstrap room and keeps no prefix for one sent alone. Then every family is requested `repeat` times, open loop, in a seeded shuffled order that is the same
    for both arms of a repetition.
+
+`SGL_EXTRA_DECODE` holds SGLang arguments for the decode engines only. `--disaggregation-decode-enable-radix-cache`
+lets a decode engine keep the prefixes it received, so a later request of the same family transfers only what
+is missing. Off by default: points measured with and without it are not comparable. SGLang refuses the option
+for some model architectures (sliding-window attention, state-space layers); the decode engines of such a model
+exit at start and the fleet does not come up.
+
+On a prefill/decode fleet the report prints the KV transfers of each arm from the engines' own counters: how
+many, MB each, ms each, failed. vLLM counts them on the decode engines, SGLang on the prefill engines. SGLang's
+time is its latency metric, which also holds the wait for the prefill scheduler's next pass: an upper bound.
 
 The rule of every arm comes from `rule.py`. The baseline and calibration rules have exact routing off; on a
 prefill/decode fleet of SGLang engines they still name the engine type, because the gateway picks the

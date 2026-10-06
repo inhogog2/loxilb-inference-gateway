@@ -27,7 +27,8 @@ code=0
 fleet_up() {
   local n pids=() rc=0
   for n in "${PNODES[@]}"; do PREFILL=$n CONVERGED=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" start "$ENG" "$ROLE1" "$PROF" & pids+=($!); done
-  for n in "${DNODES[@]}"; do DECODE=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" start "$ENG" decode "$PROF" & pids+=($!); done
+  # SGL_EXTRA_DECODE: SGLang arguments for the decode engines only (e.g. its decode-side prefix cache).
+  for n in "${DNODES[@]}"; do DECODE=$n EVROOT=$BASE/node-$n SGL_EXTRA="${SGL_EXTRA:-} ${SGL_EXTRA_DECODE:-}" "$COMPAT/engine.sh" start "$ENG" decode "$PROF" & pids+=($!); done
   for p in "${pids[@]}"; do wait "$p" || rc=1; done
   return $rc
 }
@@ -55,6 +56,7 @@ corpora() {
   python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-long.jsonl" --families "$FAMILIES" --owners "${#PNODES[@]}" --prefix-repetitions "$reps"
   python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-short.jsonl" --families "$FAMILIES" --owners "${#PNODES[@]}" --shape short
 }
+cal_snapshot() { local n; for n in "${PNODES[@]}" "${DNODES[@]}"; do curl -s -m 10 "http://$n:$EPORT/metrics" > "$BASE/$1-engine-$n.prom"; done; }
 calibrate() {
   [ -s "$BASE/calibration.json" ] && { echo "  calibration already banked"; return 0; }
   local enc; enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MODEL")
@@ -76,13 +78,22 @@ calibrate() {
         --prefix-repetitions "$(cat "$BASE/prefix-repetitions.txt")" --salt "warm$c-$(date +%s)-"
       python3 "$AB_DIR/seed.py" --corpus "$BASE/corpus-cal-warmup.jsonl" --output "$BASE/cal-warmup-c$c.receipt.jsonl" --model "$MODEL" \
         "${w[@]}" $(pair_decode "${DNODES[0]:-}") || { echo "CAL_WARMUP_FAILED"; return 1; }
+      # A decode engine that keeps its own prefix cache has a first long request of its own: warm the others too.
+      for n in "${DNODES[@]:1}"; do
+        python3 "$AB_DIR/seed.py" --corpus "$BASE/corpus-cal-warmup.jsonl" --output "$BASE/cal-warmup-c$c-decode-$n.receipt.jsonl" --model "$MODEL" \
+          "${w[@]}" $(pair_decode "$n") || { echo "CAL_WARMUP_FAILED decode $n"; return 1; }
+      done
     fi
     http=$(curl -s -m 10 -o "$BASE/cal-rule-create.json" -w "%{http_code}" -X POST "${LB}" -H 'Content-Type: application/json' --data-binary "@$BASE/cal-rule.json")
     [ "$http" = 200 ] || { echo "CAL_RULE_CREATE_FAILED $http"; return 1; }
     sleep 5
+    # The engines' counters around the calibration run are kept: a rate that came out low is read from them
+    # (transfers, queue, computed tokens), not guessed. No gate reads them.
+    cal_snapshot "cal-c$c-before"
     python3 "$AB_DIR/bench.py" --corpus "$BASE/corpus-cal.jsonl" --output "$BASE/cal-requests.jsonl" --url "http://${VIP}:${PORT}" \
       --model "$MODEL" --arm baseline --repetition 0 --max-tokens "$MAX_TOKENS" --concurrency "$c" --timeout 120
     rc=$?
+    cal_snapshot "cal-c$c-after"
     curl -s -m 10 -o /dev/null -X DELETE "${LB}/hosturl/${VIP}/externalipaddress/${VIP}/port/${PORT}/protocol/tcp?model_name=${enc}"
     [ $rc = 0 ] && { echo "$c" > "$BASE/cal-concurrency.txt"; break; }
     cp "$BASE/cal-requests.jsonl" "$BASE/cal-requests-c$c-incomplete.jsonl"
@@ -112,6 +123,9 @@ for f in sorted(glob.glob(base + "/*/ab-summary.json")):
         na = lambda v: "n/a" if v is None else f"{v}%"
         print(f"#   slow requests (TTFT >= {s['slow_request_ttft_ms']} ms) {na(e['slow_request_percent'])} exact vs {na(b['slow_request_percent'])} baseline; "
               f"prompt tokens computed {na(e['computed_prompt_token_percent'])} exact vs {na(b['computed_prompt_token_percent'])} baseline")
+    if e.get("kv_transfers") is not None and b.get("kv_transfers") is not None:
+        kv = lambda a: f"{a['kv_transfers']} of {a['kv_transfer_mb_each']} MB and {a['kv_transfer_ms_each']} ms each, {a['kv_transfer_failed']} failed"
+        print(f"#   KV transfers: exact {kv(e)}; baseline {kv(b)}")
     print(f"- {{topology: {topo}, surface: {meta['api']}, corpus: {os.path.basename(d).split('-')[0]}, rateRps: {meta['rate']}, "
           f"requestsPerArm: {e['requests']}, exactTtftP95Ms: {e['ttft_p95_ms']}, baselineTtftP95Ms: {b['ttft_p95_ms']}, "
           f"exactTtftP50Ms: {e['ttft_p50_ms']}, baselineTtftP50Ms: {b['ttft_p50_ms']}, date: \"{os.popen('date -r ' + f + ' +%F').read().strip()}\"}}")

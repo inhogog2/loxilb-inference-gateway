@@ -125,6 +125,37 @@ def main():
         rc, s = analyze(tmp, "c3", rows([100, 110, 105], [300, 320, 310]), {"exact": (None, sg.format(7800))})
         check("C3 an after scrape without its before scrape -> no computed share", rc == 0 and s and
               s["arms"]["exact"]["computed_prompt_token_percent"] is None, (rc, s and s["arms"]["exact"]))
+        # KV transfers of a prefill/decode fleet, from the same scrapes. The helper writes one engine's pair into
+        # each of the three repetitions, so an arm's totals are three times one pair's difference. A series whose
+        # name only starts the same moves too: counting it doubles the count.
+        nx = ('vllm:nixl_bytes_transferred_count{{engine="0"}} {0}\n'
+              'vllm:nixl_bytes_transferred_count_other{{engine="0"}} {0}\n'
+              'vllm:nixl_bytes_transferred_sum{{engine="0"}} {1}\n'
+              'vllm:nixl_xfer_time_seconds_sum{{engine="0"}} {2}\n'
+              'vllm:nixl_num_failed_transfers_total{{engine="0"}} {3}\n')
+        mk = ('sglang:kv_transfer_total_mb_count{{engine_type="prefill"}} {0}\n'
+              'sglang:kv_transfer_total_mb_count_other{{engine_type="prefill"}} {0}\n'
+              'sglang:kv_transfer_total_mb_sum{{engine_type="prefill"}} {1}\n'
+              'sglang:kv_transfer_latency_ms_sum{{engine_type="prefill"}} {2}\n'
+              'sglang:num_transfer_failed_reqs_total{{engine_type="prefill"}} {3}\n')
+        mib = 2 ** 20
+        for label, before, after in (("T1 vLLM", nx.format(10, 930 * mib, 1.0, 1), nx.format(30, 2790 * mib, 3.0, 2)),
+                                     ("T2 SGLang", mk.format(10, 930, 1000, 1), mk.format(30, 2790, 3000, 2))):
+            rc, s = analyze(tmp, label[:2].lower(), rows([100, 110, 105], [300, 320, 310]),
+                            {"exact": (before, after), "baseline": (before, before)})
+            e, b = (s["arms"][x] for x in ("exact", "baseline")) if s else ({}, {})
+            check(f"{label} transfer counters: 20 transfers a repetition of 93.0 MB and 100.0 ms each, 1 failed -> 60, 5580.0 MB, 3 failed",
+                  rc == 0 and (e.get("kv_transfers"), e.get("kv_transfer_mb"), e.get("kv_transfer_mb_each"),
+                               e.get("kv_transfer_ms_each"), e.get("kv_transfer_failed")) == (60, 5580.0, 93.0, 100.0, 3) and
+                  e["per_run"][0]["kv_transfers"] == 20, (rc, e))
+            check(f"{label} counters that did not move -> 0 transfers, no size or time each (not 0.0)",
+                  rc == 0 and (b.get("kv_transfers"), b.get("kv_transfer_mb_each"), b.get("kv_transfer_ms_each")) == (0, None, None), (rc, b))
+        rc, s = analyze(tmp, "t3", rows([100, 110, 105], [300, 320, 310]), {"exact": (None, mk.format(30, 2790, 3000, 2))})
+        check("T3 transfer counters in an after scrape without its before scrape -> no transfer reading", rc == 0 and s and
+              s["arms"]["exact"]["kv_transfers"] is None and s["arms"]["exact"]["kv_transfer_mb"] is None, (rc, s and s["arms"]["exact"]))
+        rc, s = analyze(tmp, "t4", rows([100, 110, 105], [300, 320, 310]), {"exact": (sg.format(1000), sg.format(7800))})
+        check("T4 engine scrapes with no transfer counter (one pool of engines) -> no transfer reading", rc == 0 and s and
+              s["arms"]["exact"]["kv_transfers"] is None and s["arms"]["baseline"]["kv_transfers"] is None, (rc, s and s["arms"]["exact"]))
         rc, s = analyze(tmp, "a2", rows([100, 330, 105], [300, 320, 310]))
         check("A2 one exact repetition above a baseline one -> overlap, no claim", rc == 0 and s and
               s["effects"]["ttft_p95_separation"] == "overlap", (rc, s))

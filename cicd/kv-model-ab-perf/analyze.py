@@ -9,7 +9,8 @@ else is reported as "overlap" — the measured numbers stand, the claim does not
 Two shares are reported next to the percentiles, because a percentile says nothing when the slow requests of
 both arms sit on the same side of its rank: the share of slow requests (TTFT at least twice the lower arm's
 median) and, when the arm directories hold vLLM or SGLang engine scrapes, the share of prompt tokens the engines
-computed instead of taking from their cache.
+computed instead of taking from their cache. On a prefill/decode fleet the same scrapes give the KV transfers of
+each arm: how many, how large, how long.
 """
 import argparse
 import json
@@ -76,11 +77,56 @@ def computed_tokens(arm_dir):
     return out if after else None
 
 
+# KV transfers from a prefill to a decode engine, per engine family: count, payload and its factor to MB, time
+# and its factor to ms, failed transfers. vLLM counts on the pulling (decode) engine, SGLang on the sending
+# (prefill) engine; the engines of the other role read 0. SGLang's time is its own latency metric, which runs
+# until the prefill scheduler next looks at the request: an upper bound of the transfer, not the transfer.
+TRANSFER = (("vllm:nixl_bytes_transferred_count", "vllm:nixl_bytes_transferred_sum", 1 / 2 ** 20,
+             "vllm:nixl_xfer_time_seconds_sum", 1000.0, "vllm:nixl_num_failed_transfers_total"),
+            ("sglang:kv_transfer_total_mb_count", "sglang:kv_transfer_total_mb_sum", 1.0,
+             "sglang:kv_transfer_latency_ms_sum", 1.0, "sglang:num_transfer_failed_reqs_total"))
+
+
+def series_sum(text, metric):
+    """Sum over the label children of exactly this metric name, or None when the scrape has no such series."""
+    v = [float(line.rsplit(" ", 1)[1]) for line in text.splitlines()
+         if line.startswith(metric) and line[len(metric):len(metric) + 1] in ("{", " ")]
+    return sum(v) if v else None
+
+
+def kv_transfers(arm_dir):
+    """KV transfers during one arm (after - before, all engines), or None when no engine scrape counts them."""
+    out, seen = {"count": 0.0, "mb": 0.0, "ms": 0.0, "failed": 0.0}, False
+    for a in sorted(arm_dir.glob("after-engine-*.prom")):
+        before = a.with_name(a.name.replace("after-", "before-", 1))
+        hi, lo = a.read_text(), before.read_text() if before.exists() else ""
+        for count, size, to_mb, time, to_ms, failed in TRANSFER:
+            if series_sum(hi, count) is None:
+                continue
+            if series_sum(lo, count) is None:
+                return None
+            seen = True
+            for key, metric, factor in (("count", count, 1), ("mb", size, to_mb), ("ms", time, to_ms), ("failed", failed, 1)):
+                out[key] += ((series_sum(hi, metric) or 0.0) - (series_sum(lo, metric) or 0.0)) * factor
+    return out if seen else None
+
+
+def transfer_fields(known):
+    """Summary fields from the per-repetition transfer readings; all None unless every repetition has one."""
+    if not known or None in known:
+        return {"kv_transfers": None, "kv_transfer_mb": None, "kv_transfer_mb_each": None,
+                "kv_transfer_ms_each": None, "kv_transfer_failed": None}
+    n = sum(x["count"] for x in known)
+    each = lambda key: round(sum(x[key] for x in known) / n, 1) if n else None
+    return {"kv_transfers": round(n), "kv_transfer_mb": round(sum(x["mb"] for x in known), 1), "kv_transfer_mb_each": each("mb"),
+            "kv_transfer_ms_each": each("ms"), "kv_transfer_failed": round(sum(x["failed"] for x in known))}
+
+
 def share(part, whole):
     return None if part is None else round(part / whole * 100, 1)
 
 
-def arm_summary(rows, slow_ms, computed):
+def arm_summary(rows, slow_ms, computed, transfers):
     per_run = []
     for rep in sorted({r["repetition"] for r in rows}):
         run = [r for r in rows if r["repetition"] == rep]
@@ -95,12 +141,14 @@ def arm_summary(rows, slow_ms, computed):
             "schedule_delay_p95_ms": round(percentile([r.get("schedule_delay_ms") or 0 for r in run], 0.95), 1),
             "slow_request_percent": share(sum(r["ttft_ms"] >= slow_ms for r in run), len(run)),
             "computed_prompt_token_percent": share(computed.get(rep), sum(int(r["prompt_tokens"]) for r in run)),
+            **transfer_fields([transfers.get(rep)]),
         })
     known = [computed.get(x["repetition"]) for x in per_run]
     return {
         "slow_request_percent": share(sum(r["ttft_ms"] >= slow_ms for r in rows), len(rows)),
         "computed_prompt_token_percent": share(None if None in known else sum(known),
                                                sum(int(r["prompt_tokens"]) for r in rows)),
+        **transfer_fields([transfers.get(x["repetition"]) for x in per_run]),
         "requests": len(rows), "success_rate": sum(bool(r["completed"]) for r in rows) / len(rows),
         "ttft_p50_ms": round(statistics.median(r["ttft_ms"] for r in rows), 1),
         "ttft_p95_ms": round(percentile([r["ttft_ms"] for r in rows], 0.95), 1),
@@ -151,17 +199,18 @@ def main():
                 continue
             raise RuntimeError("the validator accepted a mutated row set")
     slow_ms = 2 * min(statistics.median(r["ttft_ms"] for r in rows if r["arm"] == x) for x in ("exact", "baseline"))
-    computed = {x: {} for x in ("exact", "baseline")}
+    computed, transfers = ({x: {} for x in ("exact", "baseline")} for _ in range(2))
     for d in pathlib.Path(a.input_dir).glob("repetition-*/*"):
         if d.name in computed and d.parent.name.split("-")[1].isdigit():
             computed[d.name][int(d.parent.name.split("-")[1])] = computed_tokens(d)
-    arm = {x: arm_summary([r for r in rows if r["arm"] == x], slow_ms, computed[x]) for x in ("exact", "baseline")}
+            transfers[d.name][int(d.parent.name.split("-")[1])] = kv_transfers(d)
+    arm = {x: arm_summary([r for r in rows if r["arm"] == x], slow_ms, computed[x], transfers[x]) for x in ("exact", "baseline")}
     base = {(r["repetition"], r["prompt_id"]): r["ttft_ms"] for r in rows if r["arm"] == "baseline"}
     pairs = [(r["ttft_ms"], base[(r["repetition"], r["prompt_id"])]) for r in rows if r["arm"] == "exact"]
     e, b = arm["exact"], arm["baseline"]
     pct = lambda x, y: round((x - y) / y * 100, 1)
     summary = {
-        "schema_version": 3, "arms": arm, "slow_request_ttft_ms": round(slow_ms, 1),
+        "schema_version": 4, "arms": arm, "slow_request_ttft_ms": round(slow_ms, 1),
         "effects": {
             "ttft_p95_delta_percent": pct(e["ttft_p95_ms"], b["ttft_p95_ms"]),
             "ttft_p95_delta_95ci_percent": bootstrap(pairs, lambda v: percentile(v, 0.95)),

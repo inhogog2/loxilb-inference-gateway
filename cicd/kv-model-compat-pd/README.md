@@ -70,6 +70,12 @@ fails closed on the 500, so a strict rule on these models never reaches READY. U
 runs with `0` and must fail at the probe with the engine's 500: the fix's red twin. The mounted file's
 sha256 is checked on the node before launch and inside the running container after readiness.
 
+An SGLang engine is ready when it serves the model id and its log says `The server is fired up`: it answers
+`/v1/models` seconds before its own start-up request has run. At the first prompt longer than one page it
+builds a hashing extension once (about 8 s on an L4); `engine.sh` keeps the build in a node directory per
+image (`SGL_EXT_CACHE`, default `/root/.cache/sglang-torch-extensions/<image digest>`), so a node builds it
+once, not once per container.
+
 Supporting another SGLang release takes three pinned pieces: an image whose file has a row in the table
 above, a `manifests-sglang` set carrying its `engineVersion` (the identity probe compares it exactly), and
 the per-version launch arguments in `engine.sh`, re-measured with one live leg per model.
