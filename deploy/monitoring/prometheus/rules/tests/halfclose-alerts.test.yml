@@ -1,0 +1,114 @@
+# promtool unit tests for the loxilb-halfclose group of loxilb-alerts.yml.
+#
+# One firing case and one must-stay-silent case per alert. The silent cases
+# pin the guards: every family is emitted from start at zero (allowed 1,
+# bound 240 s), and the neighbouring label values (an expiry after the answer
+# began, an empty_out wake-up, a long hold under a raised bound) never fire.
+#
+# Run: promtool test rules tests/halfclose-alerts.test.yml
+
+rule_files:
+  - ../loxilb-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ── silence: a gateway with nothing held ─────────────────────────────────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_proxy_halfclose_hold_expired_total{instance="gw",answer_started="false",stream="true"}'
+        values: '0x60'
+      - series: 'loxilb_proxy_halfclose_hold_expired_total{instance="gw",answer_started="true",stream="true"}'
+        values: '0x60'
+      - series: 'loxilb_proxy_halfclose_hold_spurious_wakeups_total{instance="gw",kind="eof_reentry"}'
+        values: '0x60'
+      - series: 'loxilb_proxy_halfclose_hold_spurious_wakeups_total{instance="gw",kind="empty_out"}'
+        values: '0x60'
+      - series: 'loxilb_proxy_halfclose_held_oldest_seconds{instance="gw"}'
+        values: '0x60'
+      - series: 'loxilb_proxy_halfclose_hold_cap_seconds{instance="gw"}'
+        values: '240x60'
+    alert_rule_test:
+      - alertname: LoxilbHalfCloseHoldExpiredBeforeAnswer
+        eval_time: 30m
+        exp_alerts: []
+      - alertname: LoxilbHalfCloseHoldEofReentry
+        eval_time: 30m
+        exp_alerts: []
+      - alertname: LoxilbHalfCloseHoldLongLived
+        eval_time: 30m
+        exp_alerts: []
+
+  # ── silence: the neighbouring values ─────────────────────────────────────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_proxy_halfclose_hold_expired_total{instance="gw",answer_started="false",stream="true"}'
+        values: '0x60'
+      - series: 'loxilb_proxy_halfclose_hold_expired_total{instance="gw",answer_started="true",stream="true"}'
+        values: '0+1x60'            # cut after the answer began: not this alert
+      - series: 'loxilb_proxy_halfclose_hold_spurious_wakeups_total{instance="gw",kind="eof_reentry"}'
+        values: '0x60'
+      - series: 'loxilb_proxy_halfclose_hold_spurious_wakeups_total{instance="gw",kind="empty_out"}'
+        values: '0+5x60'            # expected while answers queue and drain
+      - series: 'loxilb_proxy_halfclose_held_oldest_seconds{instance="gw"}'
+        values: '3000+30x60'        # past the bound, under an hour until 10m
+      - series: 'loxilb_proxy_halfclose_hold_cap_seconds{instance="gw"}'
+        values: '240x60'
+      - series: 'loxilb_proxy_halfclose_held_oldest_seconds{instance="gw2"}'
+        values: '3600+30x60'        # over an hour, under twice a raised bound
+      - series: 'loxilb_proxy_halfclose_hold_cap_seconds{instance="gw2"}'
+        values: '3600x60'
+    alert_rule_test:
+      - alertname: LoxilbHalfCloseHoldExpiredBeforeAnswer
+        eval_time: 30m
+        exp_alerts: []
+      - alertname: LoxilbHalfCloseHoldEofReentry
+        eval_time: 30m
+        exp_alerts: []
+      - alertname: LoxilbHalfCloseHoldLongLived
+        eval_time: 15m              # gw over an hour for 4.5m: still pending
+        exp_alerts: []
+      - alertname: LoxilbHalfCloseHoldLongLived
+        eval_time: 30m              # gw fires here; gw2 (5400 s < 7200 s) must not
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: gw }
+            exp_annotations:
+              summary: "A half-closed client held for over an hour on gw"
+              description: "The oldest held client has been held longer than an hour and twice the idle bound. The bound restarts with every byte written, so the client is being answered very slowly, or its hold is not ending. If the held count keeps rising too, block new holds (POST /netlox/v1/config/halfclose with allow false) and close the held ones (POST /netlox/v1/config/halfclose/release)."
+              dashboard: "LoxiLB / L7 Proxy"
+              panel: "Oldest hold vs idle bound"
+
+  # ── expired before the answer began: fires, then clears ──────────────────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_proxy_halfclose_hold_expired_total{instance="gw",answer_started="false",stream="true"}'
+        values: '0x10 1x50'
+    alert_rule_test:
+      - alertname: LoxilbHalfCloseHoldExpiredBeforeAnswer
+        eval_time: 10m
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: gw }
+            exp_annotations:
+              summary: "Half-closed client cut by the idle bound before its answer began on gw"
+              description: "A client held after its half-close got no byte of its answer for the whole idle bound (loxilb_proxy_halfclose_hold_cap_seconds) and was closed without it. Either the backend's first byte is slower than the bound (raise capSeconds on /config/halfclose) or the client's FIN was a cancel that was waited on as a half-close. Do not set defaultMode to hold while this happens (runbook: docs/load-balancing/05-rest-api-reference.md, Half-close holds)."
+              dashboard: "LoxiLB / L7 Proxy"
+              panel: "Hold expiries by answer and stream"
+      - alertname: LoxilbHalfCloseHoldExpiredBeforeAnswer
+        eval_time: 25m
+        exp_alerts: []
+
+  # ── EOF handled again ────────────────────────────────────────────────────
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_proxy_halfclose_hold_spurious_wakeups_total{instance="gw",kind="eof_reentry"}'
+        values: '0x10 1x50'
+    alert_rule_test:
+      - alertname: LoxilbHalfCloseHoldEofReentry
+        eval_time: 10m
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: gw }
+            exp_annotations:
+              summary: "Held client's EOF handled again on gw"
+              description: "A client held after its half-close was woken for its EOF a second time: some path armed it for reads again. This is a defect, not load: report it with the gateway log. Block new holds (POST /netlox/v1/config/halfclose with allow false) and close the held ones (POST /netlox/v1/config/halfclose/release) if it repeats."
+              dashboard: "LoxiLB / L7 Proxy"
+              panel: "Held-client wake-ups, refusals, acceleration skipped"
