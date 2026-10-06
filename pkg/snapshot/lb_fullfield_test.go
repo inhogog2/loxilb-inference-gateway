@@ -141,11 +141,6 @@ func fullFieldLbRule() cmn.LbRuleMod {
 			},
 			MTLSBackend: &cmn.MTLSBackendConfig{
 				VerifyServerCert: true,
-				BackendCAPath:    "/etc/loxilb/certs/backend-ca.pem",
-				ClientCertPath:   "/etc/loxilb/certs/backend-client.pem",
-				ClientKeyPath:    "/etc/loxilb/certs/backend-client.key",
-				ClientCertData:   "-----BEGIN CERTIFICATE-----fixture-----END CERTIFICATE-----",
-				ClientKeyData:    "-----BEGIN PRIVATE KEY-----fixture-----END PRIVATE KEY-----",
 			},
 			TimeoutMemberConnect:  7,
 			TimeoutMemberData:     50,

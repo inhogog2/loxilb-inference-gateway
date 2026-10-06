@@ -4742,11 +4742,11 @@ func init() {
               "type": "string"
             },
             "backend_ca_cert_id": {
-              "description": "Reference used by the backend TLS material resolver for a managed CA bundle. It does not enable verification by itself; mtls_backend has missing verification-flag wiring. The C copy limits IDs to 63 bytes without admission rejection. Missing material can resolve to an empty path and select system CA paths if verification is otherwise enabled. Requested-security fail-closed semantics and material precedence are unresolved; this fallback is not an authenticated-backend guarantee.",
+              "description": "Certificate ID of the CA bundle the backend server certificate is verified against. Not available in this release: POST refuses a nonempty value with 400.",
               "type": "string"
             },
             "backend_client_cert_id": {
-              "description": "Reference for backend client certificate/key material. The resolver consults this ID when it did not obtain client material from the CA-ID directory. Missing material can leave no client certificate; the ID alone does not establish mTLS or server verification. IDs are copied into 63-byte payload capacity without admission rejection. Strict missing-material handling and precedence remain unresolved.",
+              "description": "Certificate ID of the client certificate and key the gateway presents to backends. Not available in this release: POST refuses a nonempty value with 400.",
               "type": "string"
             },
             "backend_keepalive_interval_sec": {
@@ -5373,31 +5373,31 @@ func init() {
               "type": "boolean"
             },
             "mtls_backend": {
-              "description": "Requested backend verification and client-certificate settings for FullProxy re-encryption (mode=4, security=2) with mTLS support. Implementation warning: REST stores and returns this object, but the active create encoder does not wire its verification flag or legacy path/inline material into the backend TLS configuration. The separate configuration bridge has no caller in the reviewed path. These fields therefore do not establish backend authentication, even after a successful POST. Backend cert-ID fields have separate C consumers; their existence does not repair this missing verification wiring. Requested-security fail-closed behavior and material precedence remain pending policy decisions, not supported fallback guarantees.",
+              "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. In this release backend certificate verification is not available: a POST that sets verify_server_cert to true is refused with 400. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
               "properties": {
                 "backend_ca_path": {
-                  "description": "Requested gateway-local backend PEM CA bundle path. Stored/read back, but not wired into the active backend TLS material path; see mtls_backend. Omitting it does not by itself establish system-CA verification.",
+                  "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
                   "type": "string"
                 },
                 "client_cert_data": {
-                  "description": "Requested inline client certificate declared as base64-encoded PEM. Stored/read back but not an effective substitute for a backend client certificate through the current active path.",
+                  "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
                   "type": "string"
                 },
                 "client_cert_path": {
-                  "description": "Requested gateway-local client certificate path for backend mTLS, paired with client_key_path. Stored/read back but not wired into the active backend TLS material path.",
+                  "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
                   "type": "string"
                 },
                 "client_key_data": {
-                  "description": "Requested inline client private key declared as base64-encoded PEM. Stored/read back with the object; active backend material wiring is missing. Treat the input and readback as sensitive key material.",
+                  "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
                   "type": "string"
                 },
                 "client_key_path": {
-                  "description": "Requested gateway-local client private-key path paired with client_cert_path. Stored/read back but not wired into the active backend TLS material path.",
+                  "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
                   "type": "string"
                 },
                 "verify_server_cert": {
                   "default": false,
-                  "description": "Requests backend server-certificate verification. False leaves verification unrequested. Implementation gap - true is stored but does not reach the active backend_verify_cert flag through this intake; it must not be displayed as effective verification.",
+                  "description": "Requests backend server-certificate verification. Not available in this release - POST refuses true with 400. A configuration written by an earlier release that carries true is loaded with the value reset to false and a warning.",
                   "type": "boolean"
                 }
               },
@@ -39645,11 +39645,11 @@ func init() {
               ]
             },
             "backend_ca_cert_id": {
-              "description": "Reference used by the backend TLS material resolver for a managed CA bundle. It does not enable verification by itself; mtls_backend has missing verification-flag wiring. The C copy limits IDs to 63 bytes without admission rejection. Missing material can resolve to an empty path and select system CA paths if verification is otherwise enabled. Requested-security fail-closed semantics and material precedence are unresolved; this fallback is not an authenticated-backend guarantee.",
+              "description": "Certificate ID of the CA bundle the backend server certificate is verified against. Not available in this release: POST refuses a nonempty value with 400.",
               "type": "string"
             },
             "backend_client_cert_id": {
-              "description": "Reference for backend client certificate/key material. The resolver consults this ID when it did not obtain client material from the CA-ID directory. Missing material can leave no client certificate; the ID alone does not establish mTLS or server verification. IDs are copied into 63-byte payload capacity without admission rejection. Strict missing-material handling and precedence remain unresolved.",
+              "description": "Certificate ID of the client certificate and key the gateway presents to backends. Not available in this release: POST refuses a nonempty value with 400.",
               "type": "string"
             },
             "backend_keepalive_interval_sec": {
@@ -40276,31 +40276,31 @@ func init() {
               "type": "boolean"
             },
             "mtls_backend": {
-              "description": "Requested backend verification and client-certificate settings for FullProxy re-encryption (mode=4, security=2) with mTLS support. Implementation warning: REST stores and returns this object, but the active create encoder does not wire its verification flag or legacy path/inline material into the backend TLS configuration. The separate configuration bridge has no caller in the reviewed path. These fields therefore do not establish backend authentication, even after a successful POST. Backend cert-ID fields have separate C consumers; their existence does not repair this missing verification wiring. Requested-security fail-closed behavior and material precedence remain pending policy decisions, not supported fallback guarantees.",
+              "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. In this release backend certificate verification is not available: a POST that sets verify_server_cert to true is refused with 400. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
               "type": "object",
               "properties": {
                 "backend_ca_path": {
-                  "description": "Requested gateway-local backend PEM CA bundle path. Stored/read back, but not wired into the active backend TLS material path; see mtls_backend. Omitting it does not by itself establish system-CA verification.",
+                  "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
                   "type": "string"
                 },
                 "client_cert_data": {
-                  "description": "Requested inline client certificate declared as base64-encoded PEM. Stored/read back but not an effective substitute for a backend client certificate through the current active path.",
+                  "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
                   "type": "string"
                 },
                 "client_cert_path": {
-                  "description": "Requested gateway-local client certificate path for backend mTLS, paired with client_key_path. Stored/read back but not wired into the active backend TLS material path.",
+                  "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
                   "type": "string"
                 },
                 "client_key_data": {
-                  "description": "Requested inline client private key declared as base64-encoded PEM. Stored/read back with the object; active backend material wiring is missing. Treat the input and readback as sensitive key material.",
+                  "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
                   "type": "string"
                 },
                 "client_key_path": {
-                  "description": "Requested gateway-local client private-key path paired with client_cert_path. Stored/read back but not wired into the active backend TLS material path.",
+                  "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
                   "type": "string"
                 },
                 "verify_server_cert": {
-                  "description": "Requests backend server-certificate verification. False leaves verification unrequested. Implementation gap - true is stored but does not reach the active backend_verify_cert flag through this intake; it must not be displayed as effective verification.",
+                  "description": "Requests backend server-certificate verification. Not available in this release - POST refuses true with 400. A configuration written by an earlier release that carries true is loaded with the value reset to false and a warning.",
                   "type": "boolean",
                   "default": false
                 }
@@ -40737,11 +40737,11 @@ func init() {
           ]
         },
         "backend_ca_cert_id": {
-          "description": "Reference used by the backend TLS material resolver for a managed CA bundle. It does not enable verification by itself; mtls_backend has missing verification-flag wiring. The C copy limits IDs to 63 bytes without admission rejection. Missing material can resolve to an empty path and select system CA paths if verification is otherwise enabled. Requested-security fail-closed semantics and material precedence are unresolved; this fallback is not an authenticated-backend guarantee.",
+          "description": "Certificate ID of the CA bundle the backend server certificate is verified against. Not available in this release: POST refuses a nonempty value with 400.",
           "type": "string"
         },
         "backend_client_cert_id": {
-          "description": "Reference for backend client certificate/key material. The resolver consults this ID when it did not obtain client material from the CA-ID directory. Missing material can leave no client certificate; the ID alone does not establish mTLS or server verification. IDs are copied into 63-byte payload capacity without admission rejection. Strict missing-material handling and precedence remain unresolved.",
+          "description": "Certificate ID of the client certificate and key the gateway presents to backends. Not available in this release: POST refuses a nonempty value with 400.",
           "type": "string"
         },
         "backend_keepalive_interval_sec": {
@@ -41368,31 +41368,31 @@ func init() {
           "type": "boolean"
         },
         "mtls_backend": {
-          "description": "Requested backend verification and client-certificate settings for FullProxy re-encryption (mode=4, security=2) with mTLS support. Implementation warning: REST stores and returns this object, but the active create encoder does not wire its verification flag or legacy path/inline material into the backend TLS configuration. The separate configuration bridge has no caller in the reviewed path. These fields therefore do not establish backend authentication, even after a successful POST. Backend cert-ID fields have separate C consumers; their existence does not repair this missing verification wiring. Requested-security fail-closed behavior and material precedence remain pending policy decisions, not supported fallback guarantees.",
+          "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. In this release backend certificate verification is not available: a POST that sets verify_server_cert to true is refused with 400. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
           "type": "object",
           "properties": {
             "backend_ca_path": {
-              "description": "Requested gateway-local backend PEM CA bundle path. Stored/read back, but not wired into the active backend TLS material path; see mtls_backend. Omitting it does not by itself establish system-CA verification.",
+              "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
               "type": "string"
             },
             "client_cert_data": {
-              "description": "Requested inline client certificate declared as base64-encoded PEM. Stored/read back but not an effective substitute for a backend client certificate through the current active path.",
+              "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
               "type": "string"
             },
             "client_cert_path": {
-              "description": "Requested gateway-local client certificate path for backend mTLS, paired with client_key_path. Stored/read back but not wired into the active backend TLS material path.",
+              "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
               "type": "string"
             },
             "client_key_data": {
-              "description": "Requested inline client private key declared as base64-encoded PEM. Stored/read back with the object; active backend material wiring is missing. Treat the input and readback as sensitive key material.",
+              "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
               "type": "string"
             },
             "client_key_path": {
-              "description": "Requested gateway-local client private-key path paired with client_cert_path. Stored/read back but not wired into the active backend TLS material path.",
+              "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
               "type": "string"
             },
             "verify_server_cert": {
-              "description": "Requests backend server-certificate verification. False leaves verification unrequested. Implementation gap - true is stored but does not reach the active backend_verify_cert flag through this intake; it must not be displayed as effective verification.",
+              "description": "Requests backend server-certificate verification. Not available in this release - POST refuses true with 400. A configuration written by an earlier release that carries true is loaded with the value reset to false and a warning.",
               "type": "boolean",
               "default": false
             }
@@ -42047,31 +42047,31 @@ func init() {
       "readOnly": true
     },
     "LoadbalanceEntryServiceArgumentsMtlsBackend": {
-      "description": "Requested backend verification and client-certificate settings for FullProxy re-encryption (mode=4, security=2) with mTLS support. Implementation warning: REST stores and returns this object, but the active create encoder does not wire its verification flag or legacy path/inline material into the backend TLS configuration. The separate configuration bridge has no caller in the reviewed path. These fields therefore do not establish backend authentication, even after a successful POST. Backend cert-ID fields have separate C consumers; their existence does not repair this missing verification wiring. Requested-security fail-closed behavior and material precedence remain pending policy decisions, not supported fallback guarantees.",
+      "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. In this release backend certificate verification is not available: a POST that sets verify_server_cert to true is refused with 400. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
       "type": "object",
       "properties": {
         "backend_ca_path": {
-          "description": "Requested gateway-local backend PEM CA bundle path. Stored/read back, but not wired into the active backend TLS material path; see mtls_backend. Omitting it does not by itself establish system-CA verification.",
+          "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
           "type": "string"
         },
         "client_cert_data": {
-          "description": "Requested inline client certificate declared as base64-encoded PEM. Stored/read back but not an effective substitute for a backend client certificate through the current active path.",
+          "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
           "type": "string"
         },
         "client_cert_path": {
-          "description": "Requested gateway-local client certificate path for backend mTLS, paired with client_key_path. Stored/read back but not wired into the active backend TLS material path.",
+          "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
           "type": "string"
         },
         "client_key_data": {
-          "description": "Requested inline client private key declared as base64-encoded PEM. Stored/read back with the object; active backend material wiring is missing. Treat the input and readback as sensitive key material.",
+          "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
           "type": "string"
         },
         "client_key_path": {
-          "description": "Requested gateway-local client private-key path paired with client_cert_path. Stored/read back but not wired into the active backend TLS material path.",
+          "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
           "type": "string"
         },
         "verify_server_cert": {
-          "description": "Requests backend server-certificate verification. False leaves verification unrequested. Implementation gap - true is stored but does not reach the active backend_verify_cert flag through this intake; it must not be displayed as effective verification.",
+          "description": "Requests backend server-certificate verification. Not available in this release - POST refuses true with 400. A configuration written by an earlier release that carries true is loaded with the value reset to false and a warning.",
           "type": "boolean",
           "default": false
         }
