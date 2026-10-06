@@ -144,6 +144,14 @@ func validateCert(c *cmn.CertArg) error {
 	return nil
 }
 
+// certRefusal is the body of a request this handler refuses for a reason the
+// caller can act on: the material does not validate, the ID is taken or in
+// use, a rotation was stored and not taken up. The sentence is written here
+// for the caller, so it is the answer, whatever its wording.
+func certRefusal(err error) *models.Error {
+	return ResultErrorResponseError(&cmn.ValidationError{Err: err})
+}
+
 // certUsageOf returns the usage of an entry, "server" when none is given.
 func certUsageOf(c *cmn.CertArg) (string, error) {
 	switch c.Usage {
@@ -389,7 +397,7 @@ func ConfigPostCert(params operations.PostConfigCertParams, principal interface{
 	tk.LogIt(tk.LogTrace, "api: Cert %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
 
 	if params.Attr == nil {
-		return operations.NewPostConfigCertBadRequest().WithPayload(ResultErrorResponseErrorMessage("cert: empty body"))
+		return operations.NewPostConfigCertBadRequest().WithPayload(certRefusal(fmt.Errorf("cert: empty body")))
 	}
 	cert := certFromModel(params.Attr)
 	if cert.CertId == "" {
@@ -401,19 +409,19 @@ func ConfigPostCert(params operations.PostConfigCertParams, principal interface{
 
 	if err := validateCert(cert); err != nil {
 		tk.LogIt(tk.LogDebug, "api: cert validation failed: %v\n", err)
-		return operations.NewPostConfigCertBadRequest().WithPayload(ResultErrorResponseErrorMessage(err.Error()))
+		return operations.NewPostConfigCertBadRequest().WithPayload(certRefusal(err))
 	}
 
 	cert.Usage, _ = certUsageOf(cert)
 	// An ID is one entry; writing a second kind of material under it would
 	// make it ambiguous which one a rule means.
 	if have := cmn.CertDiskUsage(cert.CertId); have != "" && have != cert.Usage {
-		return operations.NewPostConfigCertBadRequest().WithPayload(ResultErrorResponseErrorMessage(
-			fmt.Sprintf("cert: certId %q already holds a certificate with usage %q", cert.CertId, have)))
+		return operations.NewPostConfigCertBadRequest().WithPayload(certRefusal(
+			fmt.Errorf("cert: certId %q already holds a certificate with usage %q", cert.CertId, have)))
 	}
 	if cert.Usage != cmn.CertUsageServer && cmn.CertDiskUsage(cert.CertId) != "" {
-		return operations.NewPostConfigCertBadRequest().WithPayload(ResultErrorResponseErrorMessage(
-			fmt.Sprintf("cert: certId %q already exists; rotate it with PUT", cert.CertId)))
+		return operations.NewPostConfigCertBadRequest().WithPayload(certRefusal(
+			fmt.Errorf("cert: certId %q already exists; rotate it with PUT", cert.CertId)))
 	}
 
 	if _, err := certPersist(cert); err != nil {
@@ -460,7 +468,7 @@ func ConfigPutCert(params operations.PutConfigCertCertIDParams, principal interf
 		return operations.NewPutConfigCertCertIDNotFound()
 	}
 	if params.Attr == nil {
-		return operations.NewPutConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage("cert: empty body"))
+		return operations.NewPutConfigCertCertIDBadRequest().WithPayload(certRefusal(fmt.Errorf("cert: empty body")))
 	}
 
 	cert := certFromModel(params.Attr)
@@ -469,12 +477,12 @@ func ConfigPutCert(params operations.PutConfigCertCertIDParams, principal interf
 	// The usage of an ID is fixed when it is created: rules refer to it as a
 	// CA or as a client certificate, and a rotation must not change which.
 	if cert.Usage != "" && cert.Usage != certUsageStored(prev) {
-		return operations.NewPutConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage(
-			fmt.Sprintf("cert: certId %q has usage %q, a rotation cannot change it", params.CertID, certUsageStored(prev))))
+		return operations.NewPutConfigCertCertIDBadRequest().WithPayload(certRefusal(
+			fmt.Errorf("cert: certId %q has usage %q, a rotation cannot change it", params.CertID, certUsageStored(prev))))
 	}
 	cert.Usage = certUsageStored(prev)
 	if err := validateCert(cert); err != nil {
-		return operations.NewPutConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage(err.Error()))
+		return operations.NewPutConfigCertCertIDBadRequest().WithPayload(certRefusal(err))
 	}
 	if _, err := certPersist(cert); err != nil {
 		return operations.NewPutConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage(err.Error()))
@@ -490,7 +498,7 @@ func ConfigPutCert(params operations.PutConfigCertCertIDParams, principal interf
 		tk.LogIt(tk.LogInfo, "api: Cert %s rotated (usage %s, %d rule(s) pushed, %d kept the previous context)\n",
 			cert.CertId, cert.Usage, pushed, len(kept))
 		if len(kept) != 0 {
-			return operations.NewPutConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage(fmt.Sprintf(
+			return operations.NewPutConfigCertCertIDBadRequest().WithPayload(certRefusal(fmt.Errorf(
 				"cert: certId %q is stored, but the data plane could not load it for %s; "+
 					"those rules keep the previous material until the certificate is written again",
 				cert.CertId, strings.Join(kept, ", "))))
@@ -524,7 +532,7 @@ func ConfigDeleteCert(params operations.DeleteConfigCertCertIDParams, principal 
 	// The certId reaches filesystem paths below -- hold it to the same
 	// traversal rules as upload before touching anything.
 	if err := validateCertID(params.CertID); err != nil {
-		return operations.NewDeleteConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage(err.Error()))
+		return operations.NewDeleteConfigCertCertIDBadRequest().WithPayload(certRefusal(err))
 	}
 
 	certStoreMu.RLock()
@@ -538,8 +546,8 @@ func ConfigDeleteCert(params operations.DeleteConfigCertCertIDParams, principal 
 		return operations.NewDeleteConfigCertCertIDNotFound()
 	}
 	if rule := certInUse(params.CertID); rule != "" {
-		return operations.NewDeleteConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage(
-			fmt.Sprintf("cert: certId %q is used by load-balancer rule %s for its backend leg; remove it from the rule first", params.CertID, rule)))
+		return operations.NewDeleteConfigCertCertIDBadRequest().WithPayload(certRefusal(
+			fmt.Errorf("cert: certId %q is used by load-balancer rule %s for its backend leg; remove it from the rule first", params.CertID, rule)))
 	}
 
 	// Unregister from the SNI store; a registry that never heard of the
