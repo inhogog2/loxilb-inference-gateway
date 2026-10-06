@@ -117,11 +117,11 @@ jobs:
           exit $rc
 
       # --- End-to-end HTTPS (security:2) ---
-      - name: End-to-end HTTPS proxy (h1 + h2)
+      - name: End-to-end HTTPS proxy (h1 + h2, refused TLS context)
         run: |
           cd cicd/e2ehttpsproxy/
           rc=0
-          ./config.sh && ./validation-http1.sh && ./validation-http2.sh || rc=$?
+          ./config.sh && ./validation-http1.sh && ./validation-http2.sh && ./validation-tlsctx.sh || rc=$?
           ./rmconfig.sh || true
           exit $rc
       - name: End-to-end HTTPS — mTLS
