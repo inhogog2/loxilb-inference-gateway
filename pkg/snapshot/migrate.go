@@ -152,6 +152,14 @@ var Migrations = []Migration{
 		ToVersion:   "1.8",
 		Apply:       func(doc *Document) error { return nil },
 	},
+	// 1.8 -> 1.9: the halfclose domain gained defaultMode. A document
+	// without it ran its services on off, and an absent defaultMode reads
+	// as off, so there is nothing to normalize: re-stamp only.
+	{
+		FromVersion: "1.8",
+		ToVersion:   "1.9",
+		Apply:       func(doc *Document) error { return nil },
+	},
 }
 
 // ApplyMigrations runs every registered Migration whose FromVersion matches

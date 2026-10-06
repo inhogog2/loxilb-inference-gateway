@@ -146,6 +146,7 @@ typedef struct proxy_metrics_snapshot {
     uint64_t hold_reentry;
     uint64_t hold_empty_out;
     uint64_t hold_accel_skipped;
+    uint64_t hold_default_mode;
 } proxy_metrics_snapshot_t;
 
 __attribute__((weak))

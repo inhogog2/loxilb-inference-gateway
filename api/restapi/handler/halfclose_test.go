@@ -65,10 +65,13 @@ func (s *stubHalfCloseHook) NetHalfCloseUpdate(u *cmn.HalfCloseUpdate) (cmn.Half
 	if u.CapSeconds != nil {
 		c.CapSeconds = *u.CapSeconds
 	}
+	if u.DefaultMode != nil {
+		c.DefaultMode = *u.DefaultMode
+	}
 	if _, err := s.NetHalfCloseSet(&c); err != nil {
 		return cmn.HalfCloseConfig{}, err
 	}
-	return c, nil
+	return c.Normalized(), nil
 }
 
 func (s *stubHalfCloseHook) NetHalfCloseRelease() (int, error) {
@@ -139,6 +142,52 @@ func TestHalfCloseSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+// The default mode reads off until it is set, and setting it alone keeps the
+// switch and the bound; the answer carries it.
+func TestHalfCloseDefaultModeRoundTrip(t *testing.T) {
+	prev := ApiHooks
+	defer func() { ApiHooks = prev }()
+	stub := &stubHalfCloseHook{}
+	ApiHooks = stub
+
+	get := func() *models.HalfCloseConfig {
+		t.Helper()
+		res := ConfigGetHalfClose(operations.GetConfigHalfcloseParams{
+			HTTPRequest: httptest.NewRequest(http.MethodGet, "/netlox/v1/config/halfclose", nil),
+		}, nil)
+		ok, isOK := res.(*operations.GetConfigHalfcloseOK)
+		if !isOK {
+			t.Fatalf("GET answered %T", res)
+		}
+		return ok.Payload
+	}
+	if p := get(); p.DefaultMode == nil || *p.DefaultMode != "off" {
+		t.Fatalf("default mode read back as %v, want off", p.DefaultMode)
+	}
+
+	res := halfClosePostRaw(&models.HalfCloseConfig{CapSeconds: swag.Int32(60)}, `{"capSeconds":60}`)
+	if _, isOK := res.(*operations.PostConfigHalfcloseOK); !isOK {
+		t.Fatalf("a bound answered %T", res)
+	}
+	res = halfClosePostRaw(&models.HalfCloseConfig{DefaultMode: swag.String("hold")}, `{"defaultMode":"hold"}`)
+	ok, isOK := res.(*operations.PostConfigHalfcloseOK)
+	if !isOK {
+		t.Fatalf("default mode hold answered %T", res)
+	}
+	if p := ok.Payload; !*p.Allow || *p.CapSeconds != 60 || *p.DefaultMode != "hold" {
+		t.Fatalf("default mode hold answered allow=%v cap=%d default=%s, want true 60 hold",
+			*p.Allow, *p.CapSeconds, *p.DefaultMode)
+	}
+	if p := get(); !*p.Allow || *p.CapSeconds != 60 || *p.DefaultMode != "hold" {
+		t.Fatalf("after default mode hold: allow=%v cap=%d default=%s", *p.Allow, *p.CapSeconds, *p.DefaultMode)
+	}
+	// Blocking keeps the default mode.
+	res = halfClosePostRaw(&models.HalfCloseConfig{Allow: swag.Bool(false)}, `{"allow":false}`)
+	if ok, isOK := res.(*operations.PostConfigHalfcloseOK); !isOK || *ok.Payload.DefaultMode != "hold" {
+		t.Fatalf("blocking answered %T, want the default mode kept", res)
+	}
+}
+
 func TestHalfCloseSettingsRefused(t *testing.T) {
 	prev := ApiHooks
 	defer func() { ApiHooks = prev }()
@@ -160,6 +209,19 @@ func TestHalfCloseSettingsRefused(t *testing.T) {
 			`{"alow":false,"capSeconds":240}`},
 		{"a field from another API", &models.HalfCloseConfig{Allow: swag.Bool(false)},
 			`{"allow":false,"max_idle_sec":240}`},
+		// The default mode is off or hold. null would pass for "omitted",
+		// inherit has nothing to inherit from, hold+parked is not there yet.
+		{"a null default mode", &models.HalfCloseConfig{}, `{"defaultMode":null}`},
+		{"a null default mode beside a known field", &models.HalfCloseConfig{Allow: swag.Bool(true)},
+			`{"allow":true,"defaultMode":null}`},
+		{"default mode inherit", &models.HalfCloseConfig{DefaultMode: swag.String("inherit")},
+			`{"defaultMode":"inherit"}`},
+		{"default mode hold+parked", &models.HalfCloseConfig{DefaultMode: swag.String("hold+parked")},
+			`{"defaultMode":"hold+parked"}`},
+		{"an unknown default mode", &models.HalfCloseConfig{DefaultMode: swag.String("on")},
+			`{"defaultMode":"on"}`},
+		{"an empty default mode", &models.HalfCloseConfig{DefaultMode: swag.String("")},
+			`{"defaultMode":""}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			stub := &stubHalfCloseHook{}

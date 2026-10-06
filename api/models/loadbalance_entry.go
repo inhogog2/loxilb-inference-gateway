@@ -786,7 +786,10 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	FcWarmupMs int32 `json:"fc_warmup_ms,omitempty"`
 
-	// What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default, which is off. hold+parked is refused (400) until it is available. hold is refused (400) on a service whose mode is not fullproxy, whose clients use TLS (security 1 or 2: TLS connections are never held), or that runs P/D (pd_disagg_mode, not yet measured) - judged on the service as a replace leaves it, so switching pd_disagg_mode on under a stored hold is refused as well. A snapshot restore of such a rule drops the hold with a warning. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.
+	// half close effective
+	HalfCloseEffective *LoadbalanceEntryServiceArgumentsHalfCloseEffective `json:"half_close_effective,omitempty"`
+
+	// What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default (/config/halfclose defaultMode, off unless set) - where the service could take hold itself; a service that hold is refused on runs off whatever the default, and half_close_effective says what is in force and why. hold+parked is refused (400) until it is available. hold is refused (400) on a service whose mode is not fullproxy, whose clients use TLS (security 1 or 2: TLS connections are never held), or that runs P/D (pd_disagg_mode, not yet measured) - judged on the service as a replace leaves it, so switching pd_disagg_mode on under a stored hold is refused as well. A snapshot restore of such a rule drops the hold with a warning. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.
 	// Enum: [off hold hold+parked inherit]
 	HalfCloseMode string `json:"half_close_mode,omitempty"`
 
@@ -909,6 +912,11 @@ type LoadbalanceEntryServiceArguments struct {
 
 	// Enable Gateway prefill/decode orchestration. Requires mode=4 and at least one endpoint with ep_role=1 (prefill) and one with ep_role=2 (decode). kvEngineType selects the dialect: vllm and trtllm use sequential prefill-then-decode flows; sglang uses a concurrent bootstrap-based pair. llamacpp is not supported on this path. If KV Exact is also enabled, use kvExactMode=1, not 3. Engine transport, tokenizer, and deployment prerequisites remain necessary; this flag alone does not qualify an engine/model tuple.
 	PdDisaggMode bool `json:"pd_disagg_mode,omitempty"`
+
+	// Longest time in seconds the Gateway waits for the prefill stage of a P/D request before it answers 504 with the pd_prefill_timeout error. On the sglang dialect the same bound covers the wait for the first decode byte of the pair. Omitted or 0 uses the process default: 30 seconds, or LLB_PD_PREFILL_TIMEOUT_SEC when the Gateway was started with it. A positive value overrides the default for this service only and may be changed by a replace POST on a live rule; requests already waiting are judged against the new value. Explicit JSON null is rejected. PATCH does not support this field. A nonzero declaration requires pd_disagg_mode=true and is rejected on other shapes. This is a Gateway wait bound, not an engine KV-transfer timeout or a stream duration limit.
+	// Maximum: 3600
+	// Minimum: 0
+	PdPrefillTimeoutSec int32 `json:"pd_prefill_timeout_sec,omitempty"`
 
 	// Tier-0 P/D session-stickiness idle TTL in seconds. Omitted or 0 uses the Gateway default of 300 seconds; a positive value overrides the default for this service. Successful session lookup or store refreshes the last-access time. A mapping expires when elapsed idle time exceeds the effective TTL; periodic cleanup may reclaim it later. Applies to P/D routing when a client session key is present, independently of pd_cache_aware_mode. This is a Gateway endpoint-affinity policy, not an engine KV-cache retention, KV-transfer timeout, or active-request timeout. Zero does not disable expiry or stickiness. Capacity eviction and endpoint-health checks still apply. No no-expiry mode is exposed.
 	// Minimum: 0
@@ -1083,6 +1091,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 		res = append(res, err)
 	}
 
+	if err := m.validateHalfCloseEffective(formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.validateHalfCloseMode(formats); err != nil {
 		res = append(res, err)
 	}
@@ -1156,6 +1168,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	}
 
 	if err := m.validatePdCacheThreshold(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validatePdPrefillTimeoutSec(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -1692,6 +1708,25 @@ func (m *LoadbalanceEntryServiceArguments) validateFcWarmupMs(formats strfmt.Reg
 	return nil
 }
 
+func (m *LoadbalanceEntryServiceArguments) validateHalfCloseEffective(formats strfmt.Registry) error {
+	if swag.IsZero(m.HalfCloseEffective) { // not required
+		return nil
+	}
+
+	if m.HalfCloseEffective != nil {
+		if err := m.HalfCloseEffective.Validate(formats); err != nil {
+			if ve, ok := err.(*errors.Validation); ok {
+				return ve.ValidateName("serviceArguments" + "." + "half_close_effective")
+			} else if ce, ok := err.(*errors.CompositeError); ok {
+				return ce.ValidateName("serviceArguments" + "." + "half_close_effective")
+			}
+			return err
+		}
+	}
+
+	return nil
+}
+
 var loadbalanceEntryServiceArgumentsTypeHalfCloseModePropEnum []interface{}
 
 func init() {
@@ -2182,6 +2217,22 @@ func (m *LoadbalanceEntryServiceArguments) validatePdCacheThreshold(formats strf
 	return nil
 }
 
+func (m *LoadbalanceEntryServiceArguments) validatePdPrefillTimeoutSec(formats strfmt.Registry) error {
+	if swag.IsZero(m.PdPrefillTimeoutSec) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"pd_prefill_timeout_sec", "body", int64(m.PdPrefillTimeoutSec), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"pd_prefill_timeout_sec", "body", int64(m.PdPrefillTimeoutSec), 3600, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (m *LoadbalanceEntryServiceArguments) validatePdSessionTTLSec(formats strfmt.Registry) error {
 	if swag.IsZero(m.PdSessionTTLSec) { // not required
 		return nil
@@ -2421,6 +2472,10 @@ func (m *LoadbalanceEntryServiceArguments) ContextValidate(ctx context.Context, 
 		res = append(res, err)
 	}
 
+	if err := m.contextValidateHalfCloseEffective(ctx, formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.contextValidateMtlsBackend(ctx, formats); err != nil {
 		res = append(res, err)
 	}
@@ -2443,6 +2498,22 @@ func (m *LoadbalanceEntryServiceArguments) contextValidateFcEffective(ctx contex
 				return ve.ValidateName("serviceArguments" + "." + "fc_effective")
 			} else if ce, ok := err.(*errors.CompositeError); ok {
 				return ce.ValidateName("serviceArguments" + "." + "fc_effective")
+			}
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) contextValidateHalfCloseEffective(ctx context.Context, formats strfmt.Registry) error {
+
+	if m.HalfCloseEffective != nil {
+		if err := m.HalfCloseEffective.ContextValidate(ctx, formats); err != nil {
+			if ve, ok := err.(*errors.Validation); ok {
+				return ve.ValidateName("serviceArguments" + "." + "half_close_effective")
+			} else if ce, ok := err.(*errors.CompositeError); ok {
+				return ce.ValidateName("serviceArguments" + "." + "half_close_effective")
 			}
 			return err
 		}
@@ -3578,6 +3649,156 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) MarshalBinary() ([]b
 // UnmarshalBinary interface implementation
 func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) UnmarshalBinary(b []byte) error {
 	var res LoadbalanceEntryServiceArgumentsFcEffectiveSource
+	if err := swag.ReadJSON(b, &res); err != nil {
+		return err
+	}
+	*m = res
+	return nil
+}
+
+// LoadbalanceEntryServiceArgumentsHalfCloseEffective The half-close mode in force for new holds on this service, and where it came from. Present on GET for fullproxy services; ignored on input. mode is off or hold. source is blocked when new holds are blocked process-wide (/config/halfclose allow false), rule when the service declares its own half_close_mode, and default when it leaves it unset and runs on the process default. not_applied, with source default, says why the default does not reach this service: the same reasons hold is refused on it (not fullproxy, TLS clients, P/D). A change to the default applies to half-closes from then on.
+//
+// swagger:model LoadbalanceEntryServiceArgumentsHalfCloseEffective
+type LoadbalanceEntryServiceArgumentsHalfCloseEffective struct {
+
+	// mode
+	// Enum: [off hold]
+	Mode string `json:"mode,omitempty"`
+
+	// not applied
+	NotApplied string `json:"not_applied,omitempty"`
+
+	// source
+	// Enum: [rule default blocked]
+	Source string `json:"source,omitempty"`
+}
+
+// Validate validates this loadbalance entry service arguments half close effective
+func (m *LoadbalanceEntryServiceArgumentsHalfCloseEffective) Validate(formats strfmt.Registry) error {
+	var res []error
+
+	if err := m.validateMode(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateSource(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if len(res) > 0 {
+		return errors.CompositeValidationError(res...)
+	}
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsHalfCloseEffectiveTypeModePropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["off","hold"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsHalfCloseEffectiveTypeModePropEnum = append(loadbalanceEntryServiceArgumentsHalfCloseEffectiveTypeModePropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsHalfCloseEffectiveModeOff captures enum value "off"
+	LoadbalanceEntryServiceArgumentsHalfCloseEffectiveModeOff string = "off"
+
+	// LoadbalanceEntryServiceArgumentsHalfCloseEffectiveModeHold captures enum value "hold"
+	LoadbalanceEntryServiceArgumentsHalfCloseEffectiveModeHold string = "hold"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsHalfCloseEffective) validateModeEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsHalfCloseEffectiveTypeModePropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsHalfCloseEffective) validateMode(formats strfmt.Registry) error {
+	if swag.IsZero(m.Mode) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateModeEnum("serviceArguments"+"."+"half_close_effective"+"."+"mode", "body", m.Mode); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsHalfCloseEffectiveTypeSourcePropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","default","blocked"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsHalfCloseEffectiveTypeSourcePropEnum = append(loadbalanceEntryServiceArgumentsHalfCloseEffectiveTypeSourcePropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsHalfCloseEffectiveSourceRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsHalfCloseEffectiveSourceRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsHalfCloseEffectiveSourceDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsHalfCloseEffectiveSourceDefault string = "default"
+
+	// LoadbalanceEntryServiceArgumentsHalfCloseEffectiveSourceBlocked captures enum value "blocked"
+	LoadbalanceEntryServiceArgumentsHalfCloseEffectiveSourceBlocked string = "blocked"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsHalfCloseEffective) validateSourceEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsHalfCloseEffectiveTypeSourcePropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsHalfCloseEffective) validateSource(formats strfmt.Registry) error {
+	if swag.IsZero(m.Source) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateSourceEnum("serviceArguments"+"."+"half_close_effective"+"."+"source", "body", m.Source); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ContextValidate validate this loadbalance entry service arguments half close effective based on the context it is used
+func (m *LoadbalanceEntryServiceArgumentsHalfCloseEffective) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
+	var res []error
+
+	if len(res) > 0 {
+		return errors.CompositeValidationError(res...)
+	}
+	return nil
+}
+
+// MarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsHalfCloseEffective) MarshalBinary() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return swag.WriteJSON(m)
+}
+
+// UnmarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsHalfCloseEffective) UnmarshalBinary(b []byte) error {
+	var res LoadbalanceEntryServiceArgumentsHalfCloseEffective
 	if err := swag.ReadJSON(b, &res); err != nil {
 		return err
 	}

@@ -117,3 +117,70 @@ func TestHalfCloseResolve(t *testing.T) {
 		}
 	}
 }
+
+// The mode a rule sends the data plane and the mode its GET shows come from
+// the same check: a rule that leaves its mode unset is sent unset (the
+// process default) exactly where the default is shown as reaching it, and
+// off - with the reason shown - where hold is refused on it.
+func TestHalfCloseRuleModeAndEffective(t *testing.T) {
+	rule := func(mode cmn.LBMode, sec cmn.LBSec, pd bool, hc uint8) *ruleEnt {
+		return &ruleEnt{act: ruleAct{action: &ruleLBActs{mode: mode}},
+			secMode: sec, pdDisaggMode: pd, halfCloseMode: hc}
+	}
+	fp, plain := cmn.LBModeFullProxy, cmn.LBServPlain
+	allowOff := cmn.HalfCloseConfig{Allow: true, CapSeconds: 240, DefaultMode: cmn.HalfCloseModeOff}
+	allowHold := cmn.HalfCloseConfig{Allow: true, CapSeconds: 240, DefaultMode: cmn.HalfCloseModeHold}
+	blocked := cmn.HalfCloseConfig{Allow: false, CapSeconds: 240, DefaultMode: cmn.HalfCloseModeHold}
+	for _, c := range []struct {
+		name   string
+		r      *ruleEnt
+		cfg    cmn.HalfCloseConfig
+		dp     uint8
+		mode   string
+		source string
+		notApp bool
+	}{
+		{"unset, plain fullproxy, default hold", rule(fp, plain, false, cmn.HalfCloseRuleUnset), allowHold,
+			cmn.HalfCloseRuleUnset, "hold", "default", false},
+		{"unset, plain fullproxy, default off", rule(fp, plain, false, cmn.HalfCloseRuleUnset), allowOff,
+			cmn.HalfCloseRuleUnset, "off", "default", false},
+		{"unset, TLS", rule(fp, cmn.LBServHTTPS, false, cmn.HalfCloseRuleUnset), allowHold,
+			cmn.HalfCloseRuleOff, "off", "default", true},
+		{"unset, end-to-end TLS", rule(fp, cmn.LBServE2EHTTPS, false, cmn.HalfCloseRuleUnset), allowHold,
+			cmn.HalfCloseRuleOff, "off", "default", true},
+		{"unset, P/D", rule(fp, plain, true, cmn.HalfCloseRuleUnset), allowHold,
+			cmn.HalfCloseRuleOff, "off", "default", true},
+		{"unset, not fullproxy", rule(cmn.LBModeDefault, plain, false, cmn.HalfCloseRuleUnset), allowHold,
+			cmn.HalfCloseRuleOff, "off", "default", true},
+		{"own hold over default off", rule(fp, plain, false, cmn.HalfCloseRuleHold), allowOff,
+			cmn.HalfCloseRuleHold, "hold", "rule", false},
+		{"own off over default hold", rule(fp, plain, false, cmn.HalfCloseRuleOff), allowHold,
+			cmn.HalfCloseRuleOff, "off", "rule", false},
+		{"blocked over own hold", rule(fp, plain, false, cmn.HalfCloseRuleHold), blocked,
+			cmn.HalfCloseRuleHold, "off", "blocked", false},
+		{"blocked over default hold", rule(fp, plain, false, cmn.HalfCloseRuleUnset), blocked,
+			cmn.HalfCloseRuleUnset, "off", "blocked", false},
+		// A document written before the default existed carries none: off.
+		{"empty default reads off", rule(fp, plain, false, cmn.HalfCloseRuleUnset),
+			cmn.HalfCloseConfig{Allow: true, CapSeconds: 240}, cmn.HalfCloseRuleUnset, "off", "default", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.r.halfCloseDpMode(); got != c.dp {
+				t.Fatalf("data plane mode %d, want %d", got, c.dp)
+			}
+			eff := c.r.halfCloseEffective(c.cfg)
+			if eff.Mode != c.mode || eff.Source != c.source || (eff.NotApplied != "") != c.notApp {
+				t.Fatalf("effective %+v, want mode=%s source=%s not_applied=%v", *eff, c.mode, c.source, c.notApp)
+			}
+			// Sent off for an unset rule exactly where the default is shown
+			// as not reaching it.
+			if c.r.halfCloseMode == cmn.HalfCloseRuleUnset &&
+				(c.r.halfCloseDpMode() == cmn.HalfCloseRuleOff) != (c.r.halfCloseRefusal() != "") {
+				t.Fatalf("sent %d but the refusal reads %q", c.r.halfCloseDpMode(), c.r.halfCloseRefusal())
+			}
+			if eff.NotApplied != "" && eff.NotApplied != c.r.halfCloseRefusal() {
+				t.Fatalf("not_applied %q, refusal %q", eff.NotApplied, c.r.halfCloseRefusal())
+			}
+		})
+	}
+}

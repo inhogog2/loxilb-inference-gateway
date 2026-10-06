@@ -17,6 +17,7 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -58,38 +59,46 @@ func ConfigGetHalfClose(params operations.GetConfigHalfcloseParams, principal in
 }
 
 // halfCloseKeys are the fields POST /config/halfclose takes.
-var halfCloseKeys = map[string]bool{"allow": true, "capSeconds": true}
+var halfCloseKeys = map[string]bool{"allow": true, "capSeconds": true, "defaultMode": true}
 
-// halfCloseUnknownKeys names the fields of a raw body that the settings do
-// not have. A partial body treats an absent field as "keep", so without this
-// a misspelt one - {"alow":false} - would succeed and change nothing.
-func halfCloseUnknownKeys(raw []byte) ([]string, error) {
+// halfCloseBodyCheck reads a raw body for what the generated model cannot
+// tell apart: the fields the settings do not have, and a defaultMode sent as
+// null. A partial body treats an absent field as "keep", so without this a
+// misspelt one - {"alow":false} - would succeed and change nothing, and a
+// null default would pass for an omitted one.
+func halfCloseBodyCheck(raw []byte) (unknown []string, nullDefault bool, err error) {
 	if len(raw) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	var unknown []string
 	for k := range m {
 		if !halfCloseKeys[k] {
 			unknown = append(unknown, k)
 		}
 	}
 	sort.Strings(unknown)
-	return unknown, nil
+	if v, ok := m["defaultMode"]; ok && bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+		nullDefault = true
+	}
+	return unknown, nullDefault, nil
 }
 
 // halfClosePayload is the answer of GET and POST: the settings in force.
 func halfClosePayload(cfg cmn.HalfCloseConfig) *models.HalfCloseConfig {
+	cfg = cfg.Normalized()
 	allow := cfg.Allow
 	capSec := int32(cfg.CapSeconds)
-	return &models.HalfCloseConfig{Allow: &allow, CapSeconds: &capSec}
+	defaultMode := cfg.DefaultMode
+	return &models.HalfCloseConfig{Allow: &allow, CapSeconds: &capSec, DefaultMode: &defaultMode}
 }
 
 // ConfigPostHalfClose - POST /config/halfclose. A field omitted keeps the
-// value in force, so blocking new holds in an incident needs no other value;
+// value in force, so blocking new holds in an incident needs no other value
+// and turning the default mode to hold touches neither the switch nor the
+// bound;
 // a field the settings do not have is refused, and the answer is the settings
 // in force once applied, so the caller sees what it got.
 func ConfigPostHalfClose(params operations.PostConfigHalfcloseParams, principal interface{}) middleware.Responder {
@@ -102,19 +111,29 @@ func ConfigPostHalfClose(params operations.PostConfigHalfcloseParams, principal 
 		return errorResponseWithCode(http.StatusInternalServerError,
 			"half-close settings: the request body was not captured, so its fields cannot be checked")
 	}
-	unknown, err := halfCloseUnknownKeys(raw)
+	unknown, nullDefault, err := halfCloseBodyCheck(raw)
 	if err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, "malformed half-close settings body")
 	}
 	if len(unknown) > 0 {
 		return errorResponseWithCode(http.StatusBadRequest,
-			fmt.Sprintf("unknown field(s) %v: the settings are allow and capSeconds", unknown))
+			fmt.Sprintf("unknown field(s) %v: the settings are allow, capSeconds and defaultMode", unknown))
+	}
+	if nullDefault {
+		return errorResponseWithCode(http.StatusBadRequest,
+			"defaultMode must be off or hold: null is not a value here (omit it to keep the one in force)")
 	}
 	attr := params.Attr
-	if attr == nil || (attr.Allow == nil && attr.CapSeconds == nil) {
-		return errorResponseWithCode(http.StatusBadRequest, "give allow, capSeconds or both")
+	if attr == nil || (attr.Allow == nil && attr.CapSeconds == nil && attr.DefaultMode == nil) {
+		return errorResponseWithCode(http.StatusBadRequest,
+			"give at least one of allow, capSeconds and defaultMode")
 	}
-	u := cmn.HalfCloseUpdate{Allow: attr.Allow}
+	if attr.DefaultMode != nil {
+		if err := cmn.HalfCloseDefaultModeCheck(*attr.DefaultMode); err != nil {
+			return errorResponseWithCode(http.StatusBadRequest, err.Error())
+		}
+	}
+	u := cmn.HalfCloseUpdate{Allow: attr.Allow, DefaultMode: attr.DefaultMode}
 	if attr.CapSeconds != nil {
 		if *attr.CapSeconds < 0 {
 			return errorResponseWithCode(http.StatusBadRequest, "capSeconds must not be negative")

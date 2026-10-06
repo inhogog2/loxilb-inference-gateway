@@ -45,16 +45,26 @@ func TestHoldEndLabelsMatchDatapathEnum(t *testing.T) {
 	}
 }
 
+// spHoldModeHold is enum sp_hold_mode's hold: the default-mode gauge reads 1
+// on it and 0 otherwise.
+func TestHoldModeHoldMatchesDatapathEnum(t *testing.T) {
+	src := readSubmoduleFile(t, holdCoreHeader)
+	names := cEnumNames(t, src, "sp_hold_mode")
+	if spHoldModeHold >= len(names) || names[spHoldModeHold] != "SP_HOLD_MODE_HOLD" {
+		t.Fatalf("spHoldModeHold = %d, C enum sp_hold_mode: %v", spHoldModeHold, names)
+	}
+}
+
 // Gauges are taken as read; counters never go backwards.
 func TestHoldMerge(t *testing.T) {
 	prev := holdSnapshot{held: 5, oldestMs: 9000, begun: 10, refusedResidue: 3, accelSkipped: 2}
 	prev.ended[1] = 7
 	prev.expired[1][2] = 4
-	next := holdSnapshot{held: 1, oldestMs: 100, allowed: 1, capSec: 240, begun: 9, refusedResidue: 4}
+	next := holdSnapshot{held: 1, oldestMs: 100, allowed: 1, capSec: 240, defaultMode: 2, begun: 9, refusedResidue: 4}
 	next.ended[1] = 6
 	next.expired[1][2] = 5
 	m := mergeHold(prev, next)
-	if m.held != 1 || m.oldestMs != 100 || m.allowed != 1 || m.capSec != 240 {
+	if m.held != 1 || m.oldestMs != 100 || m.allowed != 1 || m.capSec != 240 || m.defaultMode != 2 {
 		t.Errorf("gauges not taken as read: %+v", m)
 	}
 	if m.begun != 10 || m.ended[1] != 7 || m.accelSkipped != 2 {
@@ -68,7 +78,7 @@ func TestHoldMerge(t *testing.T) {
 func TestHoldCollectorSeries(t *testing.T) {
 	holdStoreMutex.Lock()
 	saved := holdStore
-	s := holdSnapshot{held: 2, oldestMs: 1500, allowed: 1, capSec: 240, begun: 11,
+	s := holdSnapshot{held: 2, oldestMs: 1500, allowed: 1, capSec: 240, defaultMode: 2, begun: 11,
 		refusedResidue: 3, reentry: 0, emptyOut: 4, accelSkipped: 6}
 	s.ended[2] = 5      // backend_first
 	s.expired[0][1] = 7 // answer not begun, stream true
@@ -91,6 +101,7 @@ func TestHoldCollectorSeries(t *testing.T) {
 		"loxilb_proxy_halfclose_held_oldest_seconds":         1,
 		"loxilb_proxy_halfclose_hold_allowed":                1,
 		"loxilb_proxy_halfclose_hold_cap_seconds":            1,
+		"loxilb_proxy_halfclose_hold_default_mode":           1,
 		"loxilb_proxy_halfclose_hold_total":                  1,
 		"loxilb_proxy_halfclose_hold_ended_total":            holdEndReasons - 1,
 		"loxilb_proxy_halfclose_hold_expired_total":          2 * hcStreams,
@@ -143,6 +154,7 @@ func TestHoldCollectorSeries(t *testing.T) {
 		{"loxilb_proxy_halfclose_held", map[string]string{}, 2},
 		{"loxilb_proxy_halfclose_held_oldest_seconds", map[string]string{}, 1.5},
 		{"loxilb_proxy_halfclose_hold_cap_seconds", map[string]string{}, 240},
+		{"loxilb_proxy_halfclose_hold_default_mode", map[string]string{}, 1},
 		{"loxilb_proxy_halfclose_hold_total", map[string]string{}, 11},
 		{"loxilb_proxy_halfclose_hold_ended_total", map[string]string{"reason": "backend_first"}, 5},
 		{"loxilb_proxy_halfclose_hold_ended_total", map[string]string{"reason": "answered"}, 0},

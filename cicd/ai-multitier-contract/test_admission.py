@@ -54,6 +54,19 @@ class VerdictTests(unittest.TestCase):
         self.body["serviceArguments"]["pd_session_ttl_sec"] = 600
         self.assertFalse(verdict(self.body, 200, {}, self.empty, self.installed, None))
 
+    def test_prefill_timeout_zero_may_be_omitted_in_readback(self):
+        self.body["serviceArguments"]["pd_prefill_timeout_sec"] = 0
+        self.assertTrue(verdict(self.body, 200, {}, self.empty, self.installed, None))
+
+    def test_prefill_timeout_positive_must_not_be_lost(self):
+        self.body["serviceArguments"]["pd_prefill_timeout_sec"] = 30
+        self.assertFalse(verdict(self.body, 200, {}, self.empty, self.installed, None))
+
+    def test_prefill_timeout_must_not_read_back_changed(self):
+        self.body["serviceArguments"]["pd_prefill_timeout_sec"] = 30
+        self.installed["lbAttr"][0]["serviceArguments"]["pd_prefill_timeout_sec"] = 5
+        self.assertFalse(verdict(self.body, 200, {}, self.empty, self.installed, None))
+
     def test_ttl_declaration_must_not_be_replaced_by_effective_default(self):
         self.installed["lbAttr"][0]["serviceArguments"]["pd_session_ttl_sec"] = 300
         self.assertFalse(verdict(self.body, 200, {}, self.empty, self.installed, None))

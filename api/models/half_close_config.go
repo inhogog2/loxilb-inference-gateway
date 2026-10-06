@@ -14,7 +14,7 @@ import (
 	"github.com/go-openapi/validate"
 )
 
-// HalfCloseConfig The process-wide half-close hold settings. They apply to the services whose half_close_mode is hold; a service's own mode decides whether it holds at all. A field this model does not have is refused (400), so a misspelt one cannot pass for a change that was not made.
+// HalfCloseConfig The process-wide half-close hold settings. They apply to the services that hold: those whose half_close_mode is hold, and those that leave it unset while defaultMode is hold. A field this model does not have is refused (400), so a misspelt one cannot pass for a change that was not made.
 //
 // swagger:model HalfCloseConfig
 type HalfCloseConfig struct {
@@ -26,6 +26,9 @@ type HalfCloseConfig struct {
 	// Maximum: 3600
 	// Minimum: 1
 	CapSeconds *int32 `json:"capSeconds,omitempty"`
+
+	// The half-close mode of a service that leaves its own half_close_mode unset: off (the default) or hold. It reaches only the services that could take hold themselves - fullproxy, plaintext clients, not P/D; the others run off whatever it is, and a service's half_close_effective says which applies. A change applies at once to every service it reaches, for half-closes from then on: clients already held finish as they started. null, inherit (there is nothing to inherit from) and hold+parked (not available yet) are refused (400).
+	DefaultMode *string `json:"defaultMode,omitempty"`
 }
 
 // Validate validates this half close config

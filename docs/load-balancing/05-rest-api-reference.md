@@ -67,7 +67,7 @@ IPv6 in the path: bracket the literal — `…/externalipaddress/[2001:db8:aa::1
 | `mtls_frontend` | object | — | frontend (client → gateway) mTLS: client-cert mode, CA/CRL paths, CN/SAN pattern |
 | `mtls_backend` | object | — | backend (gateway → backend) mTLS: server-cert verification, CA bundle, client cert/key |
 | `backend_protocol` | string | — | backend ALPN capability: `http1` (default) · `http2` · `both` |
-| `half_close_mode` | string | — | fullproxy: a client that half-closes after its request. `hold` keeps it open until its answer is out (plaintext connections the kernel was never given to carry; with `sockMapMode` set, a client whose FIN comes before acceleration is not accelerated); `off` cuts it at its FIN; `inherit`/omitted runs on the process default, `off`. The bound and the allow/block switch are at [`/config/halfclose`](#half-close-holds). `hold+parked` is refused (`400`) until available; `hold` is refused on other modes, on TLS services (`security` 1 or 2) and on P/D services (`pd_disagg_mode`), judged on the rule as a replace leaves it. Replace and `null` semantics as `fc_mode`; a change of this field alone applies in place. |
+| `half_close_mode` | string | — | fullproxy: a client that half-closes after its request. `hold` keeps it open until its answer is out (plaintext connections the kernel was never given to carry; with `sockMapMode` set, a client whose FIN comes before acceleration is not accelerated); `off` cuts it at its FIN; `inherit`/omitted runs on the process default (`defaultMode` at [`/config/halfclose`](#half-close-holds), `off` unless set) where the service could take `hold` itself, and `off` elsewhere. The bound and the allow/block switch are there too; GET's read-only `half_close_effective` says the mode in force and where it came from. `hold+parked` is refused (`400`) until available; `hold` is refused on other modes, on TLS services (`security` 1 or 2) and on P/D services (`pd_disagg_mode`), judged on the rule as a replace leaves it. Replace and `null` semantics as `fc_mode`; a change of this field alone applies in place. |
 
 ### `serviceArguments` — AI gateway fields
 
@@ -101,6 +101,7 @@ snake_case (`pd_disagg_mode`, `sse_mode`, `model_name`, …) vs camelCase (`kvEx
 | `pdBootstrapPort` | int | SGLang P/D only: the `--disaggregation-bootstrap-port` on every prefill EP; omitted/`0` resolves to `8998`, positive values are bounded to 1..65535. JSON null is rejected; PATCH does not support this field. Rejected unless `pd_disagg_mode` + `kvEngineType:"sglang"`. |
 | `pd_cache_aware_mode` | bool | trie-based cache-affinity prefill selection |
 | `pd_session_ttl_sec` | int32 | Tier-0 P/D sliding idle TTL in seconds; omitted/`0` uses 300s, positive values override it. Independent of `pd_cache_aware_mode`; not an engine KV or request timeout. No no-expiry mode. |
+| `pd_prefill_timeout_sec` | int32 | P/D only: longest wait in seconds for the prefill stage before the Gateway answers 504 `pd_prefill_timeout`; omitted/`0` uses the process default (30 s, or `LLB_PD_PREFILL_TIMEOUT_SEC`), positive values up to `3600` override it for this rule. Changeable on a live rule by a replace POST. JSON null is rejected; PATCH does not support this field. Rejected unless `pd_disagg_mode`. |
 | `pd_cache_threshold` | int | cache-match threshold `0`–`100`; lower = more aggressive cache routing. Create omission/`0` uses effective `20`; on replace/PATCH omission retains, explicit `0` resets to `20`, and explicit `null` is rejected. |
 | `pd_balance_abs_threshold` | int | if max−min active connections exceeds this, bypass cache affinity. Create omission/`0` uses effective `3`; on replace/PATCH omission retains, explicit `0` resets to `3`, and explicit `null` is rejected. |
 
@@ -227,13 +228,27 @@ connection, when no answer byte has reached it for the bound below, or on a rele
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/config/halfclose` | The settings in force: `{"allow": true, "capSeconds": 240}` until set |
-| `POST` | `/config/halfclose` | Set `allow` (new holds allowed or blocked, on every service) and/or `capSeconds` (the idle bound, `1`–`3600`); an omitted field keeps its value, any other field is refused (`400`); answers with the settings in force once applied; persisted |
+| `GET` | `/config/halfclose` | The settings in force: `{"allow": true, "capSeconds": 240, "defaultMode": "off"}` until set |
+| `POST` | `/config/halfclose` | Set any of `allow` (new holds allowed or blocked, on every service), `capSeconds` (the idle bound, `1`–`3600`) and `defaultMode` (`off` or `hold`: the mode of the services that leave their own `half_close_mode` unset); an omitted field keeps its value, any other field is refused (`400`), and so are a `null`, `inherit` or `hold+parked` `defaultMode`; answers with the settings in force once applied; persisted |
 | `POST` | `/config/halfclose/release` | Close every held client at the next pass (within a second); stores nothing |
 
 Blocking stops new holds only; the clients already held finish as they started. To stop
 everything at once, block, then release. The bound is on idleness: it restarts with every
 write of the answer, so a long answer that keeps coming is never cut by it.
+
+`defaultMode` reaches only the services that could take `hold` themselves: fullproxy, with
+plaintext clients, not P/D. The others run `off` whatever it is. A change applies at once to
+every service it reaches, for half-closes from then on. In force, a service's mode is decided
+in this order: blocked (`allow` false) over its own `half_close_mode`, its own over the default.
+A fullproxy service's GET carries it, read-only:
+
+```json
+"half_close_effective": {"mode": "off", "source": "default",
+                         "not_applied": "not available on a P/D (pd_disagg_mode) service yet"}
+```
+
+`source` is `blocked`, `rule` or `default`; `not_applied` says why the default does not reach the
+service.
 
 Metrics: `loxilb_proxy_halfclose_held` (held now), `loxilb_proxy_halfclose_held_oldest_seconds`,
 `loxilb_proxy_halfclose_hold_total`, `loxilb_proxy_halfclose_hold_ended_total{reason}` (`answered`,
@@ -241,7 +256,8 @@ Metrics: `loxilb_proxy_halfclose_held` (held now), `loxilb_proxy_halfclose_held_
 that was waited on — `other`), `loxilb_proxy_halfclose_hold_expired_total{answer_started,stream}`,
 `loxilb_proxy_halfclose_hold_refused_total{reason}`, `loxilb_proxy_halfclose_accel_skipped_total`
 (connections left unaccelerated so that they could be held), and the settings as
-`loxilb_proxy_halfclose_hold_allowed` / `loxilb_proxy_halfclose_hold_cap_seconds`.
+`loxilb_proxy_halfclose_hold_allowed` / `loxilb_proxy_halfclose_hold_cap_seconds` /
+`loxilb_proxy_halfclose_hold_default_mode` (1 while the default is `hold`).
 
 ---
 

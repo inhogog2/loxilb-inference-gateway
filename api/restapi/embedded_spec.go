@@ -2408,7 +2408,7 @@ func init() {
     },
     "HalfCloseConfig": {
       "additionalProperties": false,
-      "description": "The process-wide half-close hold settings. They apply to the services whose half_close_mode is hold; a service's own mode decides whether it holds at all. A field this model does not have is refused (400), so a misspelt one cannot pass for a change that was not made.",
+      "description": "The process-wide half-close hold settings. They apply to the services that hold: those whose half_close_mode is hold, and those that leave it unset while defaultMode is hold. A field this model does not have is refused (400), so a misspelt one cannot pass for a change that was not made.",
       "properties": {
         "allow": {
           "description": "Whether new holds may be taken. false blocks them on every service, whatever its mode, and leaves the clients already held to finish.",
@@ -2421,6 +2421,11 @@ func init() {
           "maximum": 3600,
           "minimum": 1,
           "type": "integer",
+          "x-nullable": true
+        },
+        "defaultMode": {
+          "description": "The half-close mode of a service that leaves its own half_close_mode unset: off (the default) or hold. It reaches only the services that could take hold themselves - fullproxy, plaintext clients, not P/D; the others run off whatever it is, and a service's half_close_effective says which applies. A change applies at once to every service it reaches, for half-closes from then on: clients already held finish as they started. null, inherit (there is nothing to inherit from) and hold+parked (not available yet) are refused (400).",
+          "type": "string",
           "x-nullable": true
         }
       },
@@ -5182,8 +5187,33 @@ func init() {
               "type": "integer",
               "x-nullable": false
             },
+            "half_close_effective": {
+              "description": "The half-close mode in force for new holds on this service, and where it came from. Present on GET for fullproxy services; ignored on input. mode is off or hold. source is blocked when new holds are blocked process-wide (/config/halfclose allow false), rule when the service declares its own half_close_mode, and default when it leaves it unset and runs on the process default. not_applied, with source default, says why the default does not reach this service: the same reasons hold is refused on it (not fullproxy, TLS clients, P/D). A change to the default applies to half-closes from then on.",
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "off",
+                    "hold"
+                  ],
+                  "type": "string"
+                },
+                "not_applied": {
+                  "type": "string"
+                },
+                "source": {
+                  "enum": [
+                    "rule",
+                    "default",
+                    "blocked"
+                  ],
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "type": "object"
+            },
             "half_close_mode": {
-              "description": "What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default, which is off. hold+parked is refused (400) until it is available. hold is refused (400) on a service whose mode is not fullproxy, whose clients use TLS (security 1 or 2: TLS connections are never held), or that runs P/D (pd_disagg_mode, not yet measured) - judged on the service as a replace leaves it, so switching pd_disagg_mode on under a stored hold is refused as well. A snapshot restore of such a rule drops the hold with a warning. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.",
+              "description": "What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default (/config/halfclose defaultMode, off unless set) - where the service could take hold itself; a service that hold is refused on runs off whatever the default, and half_close_effective says what is in force and why. hold+parked is refused (400) until it is available. hold is refused (400) on a service whose mode is not fullproxy, whose clients use TLS (security 1 or 2: TLS connections are never held), or that runs P/D (pd_disagg_mode, not yet measured) - judged on the service as a replace leaves it, so switching pd_disagg_mode on under a stored hold is refused as well. A snapshot restore of such a rule drops the hold with a warning. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.",
               "enum": [
                 "off",
                 "hold",
@@ -5476,6 +5506,15 @@ func init() {
               "default": false,
               "description": "Enable Gateway prefill/decode orchestration. Requires mode=4 and at least one endpoint with ep_role=1 (prefill) and one with ep_role=2 (decode). kvEngineType selects the dialect: vllm and trtllm use sequential prefill-then-decode flows; sglang uses a concurrent bootstrap-based pair. llamacpp is not supported on this path. If KV Exact is also enabled, use kvExactMode=1, not 3. Engine transport, tokenizer, and deployment prerequisites remain necessary; this flag alone does not qualify an engine/model tuple.",
               "type": "boolean",
+              "x-nullable": false
+            },
+            "pd_prefill_timeout_sec": {
+              "default": 0,
+              "description": "Longest time in seconds the Gateway waits for the prefill stage of a P/D request before it answers 504 with the pd_prefill_timeout error. On the sglang dialect the same bound covers the wait for the first decode byte of the pair. Omitted or 0 uses the process default: 30 seconds, or LLB_PD_PREFILL_TIMEOUT_SEC when the Gateway was started with it. A positive value overrides the default for this service only and may be changed by a replace POST on a live rule; requests already waiting are judged against the new value. Explicit JSON null is rejected. PATCH does not support this field. A nonzero declaration requires pd_disagg_mode=true and is rejected on other shapes. This is a Gateway wait bound, not an engine KV-transfer timeout or a stream duration limit.",
+              "format": "int32",
+              "maximum": 3600,
+              "minimum": 0,
+              "type": "integer",
               "x-nullable": false
             },
             "pd_session_ttl_sec": {
@@ -20936,6 +20975,28 @@ func init() {
         ],
         "when": {
           "field": "/serviceArguments/pdBootstrapPort",
+          "operator": "greater-than",
+          "value": 0
+        }
+      },
+      {
+        "enforcement": "server-static",
+        "evidence": "pkg/loxinet/rules.go:pdPrefillTimeoutValidate",
+        "id": "LB-PD-PREFILL-TIMEOUT",
+        "kind": "requires",
+        "message": "A nonzero prefill timeout requires P/D orchestration.",
+        "require": [
+          {
+            "field": "/serviceArguments/pd_disagg_mode",
+            "missing": false,
+            "operator": "in",
+            "values": [
+              true
+            ]
+          }
+        ],
+        "when": {
+          "field": "/serviceArguments/pd_prefill_timeout_sec",
           "operator": "greater-than",
           "value": 0
         }
@@ -37261,7 +37322,7 @@ func init() {
       }
     },
     "HalfCloseConfig": {
-      "description": "The process-wide half-close hold settings. They apply to the services whose half_close_mode is hold; a service's own mode decides whether it holds at all. A field this model does not have is refused (400), so a misspelt one cannot pass for a change that was not made.",
+      "description": "The process-wide half-close hold settings. They apply to the services that hold: those whose half_close_mode is hold, and those that leave it unset while defaultMode is hold. A field this model does not have is refused (400), so a misspelt one cannot pass for a change that was not made.",
       "type": "object",
       "properties": {
         "allow": {
@@ -37275,6 +37336,11 @@ func init() {
           "format": "int32",
           "maximum": 3600,
           "minimum": 1,
+          "x-nullable": true
+        },
+        "defaultMode": {
+          "description": "The half-close mode of a service that leaves its own half_close_mode unset: off (the default) or hold. It reaches only the services that could take hold themselves - fullproxy, plaintext clients, not P/D; the others run off whatever it is, and a service's half_close_effective says which applies. A change applies at once to every service it reaches, for half-closes from then on: clients already held finish as they started. null, inherit (there is nothing to inherit from) and hold+parked (not available yet) are refused (400).",
+          "type": "string",
           "x-nullable": true
         }
       },
@@ -40024,8 +40090,33 @@ func init() {
               "minimum": 0,
               "x-nullable": false
             },
+            "half_close_effective": {
+              "description": "The half-close mode in force for new holds on this service, and where it came from. Present on GET for fullproxy services; ignored on input. mode is off or hold. source is blocked when new holds are blocked process-wide (/config/halfclose allow false), rule when the service declares its own half_close_mode, and default when it leaves it unset and runs on the process default. not_applied, with source default, says why the default does not reach this service: the same reasons hold is refused on it (not fullproxy, TLS clients, P/D). A change to the default applies to half-closes from then on.",
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "off",
+                    "hold"
+                  ]
+                },
+                "not_applied": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "default",
+                    "blocked"
+                  ]
+                }
+              },
+              "readOnly": true
+            },
             "half_close_mode": {
-              "description": "What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default, which is off. hold+parked is refused (400) until it is available. hold is refused (400) on a service whose mode is not fullproxy, whose clients use TLS (security 1 or 2: TLS connections are never held), or that runs P/D (pd_disagg_mode, not yet measured) - judged on the service as a replace leaves it, so switching pd_disagg_mode on under a stored hold is refused as well. A snapshot restore of such a rule drops the hold with a warning. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.",
+              "description": "What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default (/config/halfclose defaultMode, off unless set) - where the service could take hold itself; a service that hold is refused on runs off whatever the default, and half_close_effective says what is in force and why. hold+parked is refused (400) until it is available. hold is refused (400) on a service whose mode is not fullproxy, whose clients use TLS (security 1 or 2: TLS connections are never held), or that runs P/D (pd_disagg_mode, not yet measured) - judged on the service as a replace leaves it, so switching pd_disagg_mode on under a stored hold is refused as well. A snapshot restore of such a rule drops the hold with a warning. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.",
               "type": "string",
               "enum": [
                 "off",
@@ -40318,6 +40409,15 @@ func init() {
               "description": "Enable Gateway prefill/decode orchestration. Requires mode=4 and at least one endpoint with ep_role=1 (prefill) and one with ep_role=2 (decode). kvEngineType selects the dialect: vllm and trtllm use sequential prefill-then-decode flows; sglang uses a concurrent bootstrap-based pair. llamacpp is not supported on this path. If KV Exact is also enabled, use kvExactMode=1, not 3. Engine transport, tokenizer, and deployment prerequisites remain necessary; this flag alone does not qualify an engine/model tuple.",
               "type": "boolean",
               "default": false,
+              "x-nullable": false
+            },
+            "pd_prefill_timeout_sec": {
+              "description": "Longest time in seconds the Gateway waits for the prefill stage of a P/D request before it answers 504 with the pd_prefill_timeout error. On the sglang dialect the same bound covers the wait for the first decode byte of the pair. Omitted or 0 uses the process default: 30 seconds, or LLB_PD_PREFILL_TIMEOUT_SEC when the Gateway was started with it. A positive value overrides the default for this service only and may be changed by a replace POST on a live rule; requests already waiting are judged against the new value. Explicit JSON null is rejected. PATCH does not support this field. A nonzero declaration requires pd_disagg_mode=true and is rejected on other shapes. This is a Gateway wait bound, not an engine KV-transfer timeout or a stream duration limit.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 3600,
+              "minimum": 0,
               "x-nullable": false
             },
             "pd_session_ttl_sec": {
@@ -41082,8 +41182,33 @@ func init() {
           "minimum": 0,
           "x-nullable": false
         },
+        "half_close_effective": {
+          "description": "The half-close mode in force for new holds on this service, and where it came from. Present on GET for fullproxy services; ignored on input. mode is off or hold. source is blocked when new holds are blocked process-wide (/config/halfclose allow false), rule when the service declares its own half_close_mode, and default when it leaves it unset and runs on the process default. not_applied, with source default, says why the default does not reach this service: the same reasons hold is refused on it (not fullproxy, TLS clients, P/D). A change to the default applies to half-closes from then on.",
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "off",
+                "hold"
+              ]
+            },
+            "not_applied": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "default",
+                "blocked"
+              ]
+            }
+          },
+          "readOnly": true
+        },
         "half_close_mode": {
-          "description": "What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default, which is off. hold+parked is refused (400) until it is available. hold is refused (400) on a service whose mode is not fullproxy, whose clients use TLS (security 1 or 2: TLS connections are never held), or that runs P/D (pd_disagg_mode, not yet measured) - judged on the service as a replace leaves it, so switching pd_disagg_mode on under a stored hold is refused as well. A snapshot restore of such a rule drops the hold with a warning. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.",
+          "description": "What this FullProxy service does with a client that half-closes (shuts down its write side) after sending its request. hold keeps the client open until the answer is out, where the gateway relays the answer itself: a plaintext connection whose traffic the kernel was never given to carry. Such a client is then closed once its answers are written, once the backend ends the answer's connection, when no answer byte has reached it for the bound set at /config/halfclose, or when that endpoint's release is called; with sockMapMode other than off, a client whose FIN arrives before the connection is accelerated is not accelerated, so that it can be held. off cuts the client at its FIN, as before. inherit, or omitted on create, runs on the process default (/config/halfclose defaultMode, off unless set) - where the service could take hold itself; a service that hold is refused on runs off whatever the default, and half_close_effective says what is in force and why. hold+parked is refused (400) until it is available. hold is refused (400) on a service whose mode is not fullproxy, whose clients use TLS (security 1 or 2: TLS connections are never held), or that runs P/D (pd_disagg_mode, not yet measured) - judged on the service as a replace leaves it, so switching pd_disagg_mode on under a stored hold is refused as well. A snapshot restore of such a rule drops the hold with a warning. Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to half-closes from then on. Read back only when declared.",
           "type": "string",
           "enum": [
             "off",
@@ -41376,6 +41501,15 @@ func init() {
           "description": "Enable Gateway prefill/decode orchestration. Requires mode=4 and at least one endpoint with ep_role=1 (prefill) and one with ep_role=2 (decode). kvEngineType selects the dialect: vllm and trtllm use sequential prefill-then-decode flows; sglang uses a concurrent bootstrap-based pair. llamacpp is not supported on this path. If KV Exact is also enabled, use kvExactMode=1, not 3. Engine transport, tokenizer, and deployment prerequisites remain necessary; this flag alone does not qualify an engine/model tuple.",
           "type": "boolean",
           "default": false,
+          "x-nullable": false
+        },
+        "pd_prefill_timeout_sec": {
+          "description": "Longest time in seconds the Gateway waits for the prefill stage of a P/D request before it answers 504 with the pd_prefill_timeout error. On the sglang dialect the same bound covers the wait for the first decode byte of the pair. Omitted or 0 uses the process default: 30 seconds, or LLB_PD_PREFILL_TIMEOUT_SEC when the Gateway was started with it. A positive value overrides the default for this service only and may be changed by a replace POST on a live rule; requests already waiting are judged against the new value. Explicit JSON null is rejected. PATCH does not support this field. A nonzero declaration requires pd_disagg_mode=true and is rejected on other shapes. This is a Gateway wait bound, not an engine KV-transfer timeout or a stream duration limit.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 3600,
+          "minimum": 0,
           "x-nullable": false
         },
         "pd_session_ttl_sec": {
@@ -41886,6 +42020,31 @@ func init() {
           ]
         }
       }
+    },
+    "LoadbalanceEntryServiceArgumentsHalfCloseEffective": {
+      "description": "The half-close mode in force for new holds on this service, and where it came from. Present on GET for fullproxy services; ignored on input. mode is off or hold. source is blocked when new holds are blocked process-wide (/config/halfclose allow false), rule when the service declares its own half_close_mode, and default when it leaves it unset and runs on the process default. not_applied, with source default, says why the default does not reach this service: the same reasons hold is refused on it (not fullproxy, TLS clients, P/D). A change to the default applies to half-closes from then on.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "hold"
+          ]
+        },
+        "not_applied": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "default",
+            "blocked"
+          ]
+        }
+      },
+      "readOnly": true
     },
     "LoadbalanceEntryServiceArgumentsMtlsBackend": {
       "description": "Requested backend verification and client-certificate settings for FullProxy re-encryption (mode=4, security=2) with mTLS support. Implementation warning: REST stores and returns this object, but the active create encoder does not wire its verification flag or legacy path/inline material into the backend TLS configuration. The separate configuration bridge has no caller in the reviewed path. These fields therefore do not establish backend authentication, even after a successful POST. Backend cert-ID fields have separate C consumers; their existence does not repair this missing verification wiring. Requested-security fail-closed behavior and material precedence remain pending policy decisions, not supported fallback guarantees.",
@@ -45171,6 +45330,28 @@ func init() {
         ],
         "when": {
           "field": "/serviceArguments/pdBootstrapPort",
+          "operator": "greater-than",
+          "value": 0
+        }
+      },
+      {
+        "enforcement": "server-static",
+        "evidence": "pkg/loxinet/rules.go:pdPrefillTimeoutValidate",
+        "id": "LB-PD-PREFILL-TIMEOUT",
+        "kind": "requires",
+        "message": "A nonzero prefill timeout requires P/D orchestration.",
+        "require": [
+          {
+            "field": "/serviceArguments/pd_disagg_mode",
+            "missing": false,
+            "operator": "in",
+            "values": [
+              true
+            ]
+          }
+        ],
+        "when": {
+          "field": "/serviceArguments/pd_prefill_timeout_sec",
           "operator": "greater-than",
           "value": 0
         }

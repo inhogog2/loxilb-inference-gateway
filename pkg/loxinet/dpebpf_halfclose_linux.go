@@ -18,7 +18,7 @@ package loxinet
 
 /*
 #include <stdint.h>
-void proxy_update_halfclose_config(int allow, uint32_t cap_sec);
+void proxy_update_halfclose_config(int allow, uint32_t cap_sec, uint8_t default_mode);
 void proxy_halfclose_release(void);
 */
 import "C"
@@ -26,14 +26,15 @@ import "C"
 // The half-close hold's process-wide settings and release, over the controls
 // the sockproxy provides for them (loxilb-ebpf/common/sockproxy_hold.h).
 
-// DpHalfCloseConfig - whether new holds may be taken, and the idle bound on
-// a hold in seconds (the data path clamps it to 1..3600).
-func (e *DpEbpfH) DpHalfCloseConfig(allow bool, capSec uint32) {
+// DpHalfCloseConfig - whether new holds may be taken, the idle bound on a
+// hold in seconds (the data path clamps it to 1..3600), and the mode of a
+// rule that leaves its own unset (enum sp_hold_mode: hold, else off).
+func (e *DpEbpfH) DpHalfCloseConfig(allow bool, capSec uint32, defaultMode uint8) {
 	a := C.int(0)
 	if allow {
 		a = 1
 	}
-	C.proxy_update_halfclose_config(a, C.uint32_t(capSec))
+	C.proxy_update_halfclose_config(a, C.uint32_t(capSec), C.uint8_t(defaultMode))
 }
 
 // DpHalfCloseRelease - close every held client at the data path's next pass.

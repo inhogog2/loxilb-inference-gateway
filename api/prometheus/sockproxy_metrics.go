@@ -160,6 +160,7 @@ typedef struct proxy_metrics_snapshot {
     uint64_t hold_reentry;
     uint64_t hold_empty_out;
     uint64_t hold_accel_skipped;
+    uint64_t hold_default_mode;
 } proxy_metrics_snapshot_t;
 
 // C function from sockproxy.c
@@ -1061,6 +1062,7 @@ func holdFromC(m *C.proxy_metrics_snapshot_t) holdSnapshot {
 		reentry:        uint64(m.hold_reentry),
 		emptyOut:       uint64(m.hold_empty_out),
 		accelSkipped:   uint64(m.hold_accel_skipped),
+		defaultMode:    uint64(m.hold_default_mode),
 	}
 	for r := 0; r < holdEndReasons; r++ {
 		s.ended[r] = uint64(m.hold_ended[r])

@@ -103,7 +103,14 @@ import (
 // their included_domains never lists it, so restoring them leaves the
 // live sinks untouched. Builds that predate it refuse 1.8 documents via
 // the minor-version gate.
-const SchemaVersion = "1.8"
+//
+// 1.9: the halfclose domain gained defaultMode, the half-close mode of the
+// services that leave their own unset (off or hold). A document without it
+// ran on off, which is what an absent value reads as, so the 1.8->1.9
+// migration is restamp-only. Builds that predate it refuse 1.9 documents
+// via the minor-version gate - so a downgraded build cannot take a document
+// whose default is hold and quietly run its services off.
+const SchemaVersion = "1.9"
 
 // DocKind identifies the document type, matching §4's "kind" field.
 const DocKind = "loxilb-snapshot"

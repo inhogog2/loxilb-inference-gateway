@@ -142,7 +142,7 @@ func (p *loadbalancerRequestPresence) validatePDThresholds() error {
 func (p *loadbalancerRequestPresence) validateKVNumericArguments(
 	src *models.LoadbalanceEntryServiceArguments,
 ) error {
-	for _, key := range []string{"kvBlockSize", "kvZmqPort", "kvDpRankCount", "pdBootstrapPort"} {
+	for _, key := range []string{"kvBlockSize", "kvZmqPort", "kvDpRankCount", "pdBootstrapPort", "pd_prefill_timeout_sec"} {
 		if p.svcIsNull(key) {
 			return fmt.Errorf("%s must not be null", key)
 		}
@@ -162,6 +162,9 @@ func (p *loadbalancerRequestPresence) validateKVNumericArguments(
 	}
 	if src.PdBootstrapPort < 0 || src.PdBootstrapPort > 65535 {
 		return fmt.Errorf("pdBootstrapPort must be within 0..65535")
+	}
+	if src.PdPrefillTimeoutSec < 0 || src.PdPrefillTimeoutSec > int32(cmn.PDPrefillTimeoutSecMax) {
+		return fmt.Errorf("pd_prefill_timeout_sec must be within 0..%d", cmn.PDPrefillTimeoutSecMax)
 	}
 
 	// Only exact modes create subscribers. Resolve both zero sentinels before
@@ -484,7 +487,7 @@ func (p *loadbalancerRequestPresence) applyCHWBLArguments(
 // geometry. Silently ignoring these keys would turn a successful response into
 // false configuration evidence.
 func (p *loadbalancerRequestPresence) validateUnsupportedKVNumericPatch() error {
-	for _, key := range []string{"kvBlockSize", "kvZmqPort", "kvDpRankCount", "pdBootstrapPort"} {
+	for _, key := range []string{"kvBlockSize", "kvZmqPort", "kvDpRankCount", "pdBootstrapPort", "pd_prefill_timeout_sec"} {
 		if p.svcPresent(key) {
 			return fmt.Errorf("PATCH does not support field: %s", key)
 		}

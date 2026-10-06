@@ -132,7 +132,7 @@ Set with `docker run -e …`; all read once at startup.
 | `LLB_KV_NONE_HASH_SEED` | unset (zero NONE_HASH) | ≤23 bytes | **Must equal vLLM's `PYTHONHASHSEED`** (parity triad leg) |
 | `LLB_KV_HASH_DEBUG` | off | `1` | `[KV_HASH]` per-block forensic logging (testbed only) |
 | `LLB_KV_LOADGUARD` | off | non-`0` | Hard load-imbalance pre-guard before Tier 1.5 |
-| `LLB_PD_PREFILL_TIMEOUT_SEC` | 30 | int | Prefill-leg timeout. **Raise to ≥180 for long-context (32k) fleets** — the 30 s default 504s most requests under load |
+| `LLB_PD_PREFILL_TIMEOUT_SEC` | 30 | int | Prefill-leg timeout. **Raise to ≥180 for long-context (32k) fleets** — the 30 s default 504s most requests under load. Process-wide; a rule can override it with the `pd_prefill_timeout_sec` service argument (0..3600 s) |
 | `LLB_PD_MAX_INFLIGHT_PER_EP` | 0 (off) | 0<n<100000 | Admission: per-EP in-flight prefill cap |
 | `LLB_PD_QUEUE_DEPTH_PER_EP` | 0 (off) | n>0 (clamped 64) | Admission: park queue depth (hold-don't-drop) |
 | `LLB_PD_MAX_PARK_SEC` | 0 (→ prefill timeout) | 0<n<100000 | Admission: parked-request reap deadline (504) |

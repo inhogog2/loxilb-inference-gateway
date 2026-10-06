@@ -196,7 +196,8 @@ def run_threshold_update_contract(container, evidence):
     # presence even when the value is the zero/default sentinel, and the
     # rejection must leave the complete rule set unchanged.
     for field, positive in (("kvBlockSize", 16), ("kvZmqPort", 5557),
-                            ("kvDpRankCount", 1), ("pdBootstrapPort", 8998)):
+                            ("kvDpRankCount", 1), ("pdBootstrapPort", 8998),
+                            ("pd_prefill_timeout_sec", 30)):
         for label, value in (("zero", 0), ("positive", positive)):
             sent = {"serviceArguments": {field: value}}
             before = after
@@ -292,6 +293,19 @@ def main():
     ]
     for ttl in (0, 1, 300, 600, (1 << 31) - 1):
         cases.append((f"ttl-control-{ttl}", "serviceArguments", "pd_session_ttl_sec", ttl, None))
+    # The prefill wait bound: 0 is the default declaration on any rule, a
+    # positive value needs a P/D rule and at most 3600, and a value that would
+    # wrap to a small 16-bit number is refused, not truncated.
+    cases.extend((
+        ("prefill-timeout-null", "serviceArguments", "pd_prefill_timeout_sec", None, "pd_prefill_timeout_sec"),
+        ("prefill-timeout-zero-default", "serviceArguments", "pd_prefill_timeout_sec", 0, None),
+        ("prefill-timeout-negative", "serviceArguments", "pd_prefill_timeout_sec", -1, "pd_prefill_timeout_sec"),
+        ("prefill-timeout-without-pd", "serviceArguments", "pd_prefill_timeout_sec", 30, "pd_prefill_timeout_sec"),
+        ("prefill-timeout-over-maximum", "serviceArguments", "__pd_prefill_timeout__", 3601, "pd_prefill_timeout_sec"),
+        ("prefill-timeout-wraps", "serviceArguments", "__pd_prefill_timeout__", 65536 + 5, "pd_prefill_timeout_sec"),
+    ))
+    for sec in (0, 1, 30, 3600):
+        cases.append((f"prefill-timeout-control-{sec}", "serviceArguments", "__pd_prefill_timeout__", sec, None))
     fixed_c_strings = (
         ("host", 255),
         ("path_prefix", 255),
@@ -342,6 +356,11 @@ def main():
                 target.update(kvEngineType="trtllm", kvZmqPort=5558)
             elif key == "__llama_block__":
                 target.update(kvEngineType="llamacpp", kvBlockSize=value)
+            elif key == "__pd_prefill_timeout__":
+                target.update(pd_disagg_mode=True, pd_prefill_timeout_sec=value)
+                body["endpoints"] = [
+                    {"endpointIP": "127.0.0.2", "targetPort": 8080, "weight": 1, "ep_role": 1},
+                    {"endpointIP": "127.0.0.3", "targetPort": 8080, "weight": 1, "ep_role": 2}]
             else:
                 target[key] = value
         if name.startswith("reserved-"):

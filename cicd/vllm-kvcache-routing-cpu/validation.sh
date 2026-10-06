@@ -2719,6 +2719,180 @@ rm -f "${pd_trie_cf}" 2>/dev/null || true
 assert "P/D trie gauge: gated off it is 0, opening it alone gives exactly the root, three distinct keys give exactly root+3 via the Tier-2 site, and closing it returns to 0" "$pd_trie_ok"
 
 #################################################################################
+# P/D prefill timeout as a rule argument — pd_prefill_timeout_sec
+#
+#     The prefill wait bound was a process setting only (30 s, or the
+#     LLB_PD_PREFILL_TIMEOUT_SEC environment variable); the endpoint value had
+#     a per-rule field that nothing wrote. The argument now reaches it.
+#
+#     What is scored is the DATA PLANE, not the read-back: a read-back proves
+#     the control plane stored a number. Every prefill backend is made to
+#     accept and never answer, and the client's own clock plus the reaper's log
+#     line — which prints the timeout it applied — say which bound was in
+#     force. Four arms on the one live rule, each a replace POST of only this
+#     field: 5 s, then the argument dropped (back to the 30 s default — a rule
+#     that could only be shortened would pass a 5-then-7 test), then 7 s (not
+#     stuck at the first value), then a value over the bound, which must be
+#     refused and leave the 7 in force.
+#################################################################################
+echo "=== P/D prefill timeout: the rule argument reaches the reaper, and dropping it restores the default ==="
+
+PD_PTO_N=2
+PD_PTO_SLACK=6          # reaper tick + scheduling, on top of the bound itself
+PD_PTO_EARLY=1          # the reaper compares whole seconds, so a bound can fire up to 1 s early
+PD_PTO_LINE="P/D prefill timeout"
+PD_PTO_STAMP="$(date +%s)"
+
+# Same body as pd_trie_post left on the rule, plus the one field under test.
+# An empty argument leaves the field OUT of the body (the default declaration).
+pd_pto_post() {   # <seconds|""> -> echoes the HTTP code
+    local field=""
+    [[ -n "$1" ]] && field="\"pd_prefill_timeout_sec\": $1,"
+    $hexec llb1 curl -s -o /dev/null --max-time 20 -w '%{http_code}' \
+        -X POST "${LBBASE}" -H 'Content-Type: application/json' -d "{
+  \"serviceArguments\": {
+    \"externalIP\": \"${VIP}\",
+    \"port\": ${VPORT},
+    \"protocol\": \"tcp\",
+    \"sel\": 0,
+    \"mode\": 4,
+    \"host\": \"${VIP}\",
+    \"model_name\": \"${KV_MODEL}\",
+    \"pd_disagg_mode\": true,
+    \"probeRetries\": 1,
+    \"pd_cache_aware_mode\": false,
+    ${field}
+    \"kvExactMode\": 1,
+    \"kvZmqPort\": ${KV_ZMQ_PORT},
+    \"kvHashAlgo\": \"${KV_HASH_ALGO}\",
+    \"kvWarmupSec\": 20,
+    \"kvBlockSize\": ${KV_BLOCK_SIZE}
+  },
+  \"endpoints\": [
+    { \"endpointIP\": \"31.31.31.1\", \"targetPort\": 80, \"weight\": 1, \"ep_role\": 1 },
+    { \"endpointIP\": \"32.32.32.1\", \"targetPort\": 80, \"weight\": 1, \"ep_role\": 2 },
+    { \"endpointIP\": \"33.33.33.1\", \"targetPort\": 80, \"weight\": 1, \"ep_role\": 1 },
+    { \"endpointIP\": \"34.34.34.1\", \"targetPort\": 80, \"weight\": 1, \"ep_role\": 2 },
+    { \"endpointIP\": \"35.35.35.1\", \"targetPort\": 80, \"weight\": 1, \"ep_role\": 1 },
+    { \"endpointIP\": \"36.36.36.1\", \"targetPort\": 80, \"weight\": 1, \"ep_role\": 2 }
+  ]
+}" 2>/dev/null
+}
+
+# The stored declaration of this scenario's rule: a number, "absent", or
+# "unreadable" (never a silent 0 — absent and unreadable are different states).
+pd_pto_readback() {
+    llb_curl "${LBBASE}/all" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    rules = [r for r in json.load(sys.stdin).get("lbAttr", [])
+             if r.get("serviceArguments", {}).get("port") == int(sys.argv[1])
+             and r["serviceArguments"].get("externalIP") == sys.argv[2]]
+except Exception:
+    print("unreadable"); sys.exit(0)
+print(rules[0]["serviceArguments"].get("pd_prefill_timeout_sec", "absent") if len(rules) == 1 else "unreadable")
+' "${VPORT}" "${VIP}" 2>/dev/null || echo "unreadable"
+}
+
+# N concurrent requests against hanging prefill backends. One line per request:
+# "<http code> <seconds> <receipt present 0|1>". The curl cap sits well above
+# every bound used here, so a cap can never be read as a gateway answer.
+pd_pto_drive() {   # <tag> <out-file>
+    local tag="$1" out="$2" i
+    : > "${out}"
+    for i in $(seq 1 ${PD_PTO_N}); do
+        (
+            body="$(mktemp)"
+            line=$($hexec l3h1 curl -s -o - --max-time 90 -w '\n%{http_code} %{time_total}' \
+                -H 'Content-Type: application/json' \
+                -d "{\"model\":\"${KV_MODEL}\",\"prompt\":\"prefill timeout probe ${PD_PTO_STAMP} ${tag} ${i}\",\"max_tokens\":8}" \
+                "http://${VIP}:${VPORT}/v1/completions" 2>/dev/null > "${body}"; tail -n 1 "${body}")
+            grep -q 'pd_prefill_timeout' "${body}" && r=1 || r=0
+            echo "${line} ${r}" >> "${out}"
+            rm -f "${body}"
+        ) &
+    done
+    wait
+}
+
+# Score one arm: every request answered 504 with the receipt, no sooner than
+# the bound (less the reaper's one-second granularity) and no later than bound
+# + slack, and the reaper logged exactly N
+# lines naming THIS bound (none naming another).
+pd_pto_score() {   # <label> <want-seconds> <out-file> <log-count-before-for-this-bound> <log-count-before-total>
+    local label="$1" want="$2" out="$3" b_this="$4" b_all="$5"
+    local n ok=1 code secs rcpt
+    n=$(grep -c . "${out}" 2>/dev/null || echo 0)
+    [[ "${n}" == "${PD_PTO_N}" ]] || { ok=0; pd_pto_note="${pd_pto_note} ${label}: lost a measurement (${n}/${PD_PTO_N});"; }
+    while read -r code secs rcpt; do
+        [[ "${code}" == "504" && "${rcpt}" == "1" ]] || { ok=0; pd_pto_note="${pd_pto_note} ${label}: answered ${code} receipt=${rcpt};"; }
+        python3 -c "import sys; s=float(sys.argv[1]); w=float(sys.argv[2]); sys.exit(0 if w - ${PD_PTO_EARLY} <= s <= w + ${PD_PTO_SLACK} else 1)" "${secs:-0}" "${want}" \
+            || { ok=0; pd_pto_note="${pd_pto_note} ${label}: answered after ${secs}s, want $(( want - PD_PTO_EARLY ))..$(( want + PD_PTO_SLACK ))s;"; }
+    done < "${out}"
+    local d_this d_all
+    d_this=$(( $(dplog_count "timeout=${want}s") - b_this ))
+    d_all=$(( $(dplog_count "${PD_PTO_LINE}") - b_all ))
+    echo "  ${label}: answers=[$(tr '\n' ';' < "${out}")] ; reaper lines naming ${want}s Δ${d_this} (want ${PD_PTO_N}) ; all prefill-timeout lines Δ${d_all} (want ${PD_PTO_N})"
+    [[ "${d_this}" == "${PD_PTO_N}" ]] || { ok=0; pd_pto_note="${pd_pto_note} ${label}: reaper named ${want}s ${d_this}x;"; }
+    [[ "${d_all}" == "${PD_PTO_N}" ]] || { ok=0; pd_pto_note="${pd_pto_note} ${label}: ${d_all} prefill-timeout lines in total, so some named another bound;"; }
+    [[ "${ok}" == 1 ]] || pd_pto_ok=0
+}
+
+pd_pto_ok=1
+pd_pto_note=""
+pd_pto_out="$(mktemp)"
+
+if [[ ! -x "${PD_SWAP}" ]]; then
+    pd_pto_ok=0; pd_pto_note="missing ${PD_SWAP}"
+elif [[ "$(dplog_count "${PD_PTO_LINE}")" == "-1" ]]; then
+    pd_pto_ok=0; pd_pto_note="datapath log unreadable"
+else
+    for ns in ${PD_DECODE_NS}; do sudo ${PD_SWAP} "${ns}" off >/dev/null || true; done
+    for ns in ${PD_PREFILL_NS}; do sudo ${PD_SWAP} "${ns}" hang >/dev/null || pd_pto_ok=0; done
+    sleep 2
+
+    for arm in "A:5" "B:" "C:7"; do
+        label="${arm%%:*}"; sec="${arm#*:}"; want="${sec:-30}"
+        code=$(pd_pto_post "${sec}")
+        rb=$(pd_pto_readback)
+        echo "  ${label}: POST pd_prefill_timeout_sec=${sec:-<dropped>} -> HTTP ${code} ; read-back ${rb} (want ${sec:-absent})"
+        [[ "${code}" =~ ^2 ]] || { pd_pto_ok=0; pd_pto_note="${pd_pto_note} ${label}: POST answered ${code};"; }
+        [[ "${rb}" == "${sec:-absent}" ]] || { pd_pto_ok=0; pd_pto_note="${pd_pto_note} ${label}: read-back ${rb};"; }
+        b_this=$(dplog_count "timeout=${want}s"); b_all=$(dplog_count "${PD_PTO_LINE}")
+        pd_pto_drive "${label}" "${pd_pto_out}"
+        sleep 1
+        pd_pto_score "${label}" "${want}" "${pd_pto_out}" "${b_this}" "${b_all}"
+    done
+
+    # ---- D: a value over the bound is refused and the 7 stays in force -----
+    code=$(pd_pto_post 3601)
+    rb=$(pd_pto_readback)
+    echo "  D: POST pd_prefill_timeout_sec=3601 -> HTTP ${code} (want 400 or 422) ; read-back ${rb} (want 7)"
+    [[ "${code}" == "400" || "${code}" == "422" ]] || { pd_pto_ok=0; pd_pto_note="${pd_pto_note} D: an out-of-range value answered ${code};"; }
+    [[ "${rb}" == "7" ]] || { pd_pto_ok=0; pd_pto_note="${pd_pto_note} D: the refused POST changed the rule (read-back ${rb});"; }
+    b_this=$(dplog_count "timeout=7s"); b_all=$(dplog_count "${PD_PTO_LINE}")
+    pd_pto_drive "D" "${pd_pto_out}"
+    sleep 1
+    pd_pto_score "D" 7 "${pd_pto_out}" "${b_this}" "${b_all}"
+
+    # ---- restore: default declaration, healthy backends, and it serves -----
+    code=$(pd_pto_post "")
+    for ns in ${PD_PREFILL_NS}; do sudo ${PD_SWAP} "${ns}" off >/dev/null || true; done
+    sleep 3
+    rb=$(pd_pto_readback)
+    r_code=$($hexec l3h1 curl -s -o /dev/null --max-time 60 -w '%{http_code}' \
+        -H 'Content-Type: application/json' \
+        -d "{\"model\":\"${KV_MODEL}\",\"prompt\":\"prefill timeout restore ${PD_PTO_STAMP}\",\"max_tokens\":8}" \
+        "http://${VIP}:${VPORT}/v1/completions" 2>/dev/null)
+    echo "  restore: POST -> HTTP ${code} ; read-back ${rb} (want absent) ; a request on healthy backends -> ${r_code} (want 200)"
+    [[ "${code}" =~ ^2 && "${rb}" == "absent" ]] || { pd_pto_ok=0; pd_pto_note="${pd_pto_note} restore left the argument at ${rb} (HTTP ${code});"; }
+    [[ "${r_code}" == "200" ]] || { pd_pto_ok=0; pd_pto_note="${pd_pto_note} the service did not serve after the restore (${r_code});"; }
+fi
+rm -f "${pd_pto_out}" 2>/dev/null || true
+[[ -n "${pd_pto_note}" ]] && echo "  detail:${pd_pto_note}"
+assert "P/D prefill timeout: the rule argument sets the reaper's bound (5 s, then the 30 s default when dropped, then 7 s), and a refused value leaves it in force" "$pd_pto_ok"
+
+#################################################################################
 # P/D same-endpoint connect retry — a refused connect that SUCCEEDS on retry
 #
 #     loxilb_pd_connect_retry_same_ep_ok_total is the SUCCESS half of a pair.

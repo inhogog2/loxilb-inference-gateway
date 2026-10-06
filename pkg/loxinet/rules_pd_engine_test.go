@@ -38,6 +38,8 @@ package loxinet
 import (
 	"strings"
 	"testing"
+
+	cmn "github.com/loxilb-io/loxilb/common"
 )
 
 // TestPdBootstrapPortValidate — pdBootstrapPort is dead config anywhere but
@@ -73,6 +75,36 @@ func TestPdBootstrapPortValidate(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "pd_disagg_mode") || !strings.Contains(err.Error(), "sglang") {
 			t.Errorf("rejection must name both preconditions, got %q", err.Error())
+		}
+	}
+}
+
+// TestPdPrefillTimeoutValidate — the per-rule prefill wait bound is read only
+// by the P/D reaper: absent (0) passes on every shape; a non-zero value
+// passes only with pd_disagg_mode=true and at most the declared maximum; the
+// rejection names the field and what it needs.
+func TestPdPrefillTimeoutValidate(t *testing.T) {
+	for _, pd := range []bool{false, true} {
+		if err := pdPrefillTimeoutValidate(0, pd); err != nil {
+			t.Errorf("sec=0 pdDisagg=%v: want accept, got %v", pd, err)
+		}
+	}
+	for _, sec := range []uint16{1, 5, 30, cmn.PDPrefillTimeoutSecMax} {
+		if err := pdPrefillTimeoutValidate(sec, true); err != nil {
+			t.Errorf("sec=%d on a P/D rule: want accept, got %v", sec, err)
+		}
+		err := pdPrefillTimeoutValidate(sec, false)
+		if err == nil {
+			t.Fatalf("sec=%d without P/D: want reject, got nil", sec)
+		}
+		if !strings.Contains(err.Error(), "pd_prefill_timeout_sec") || !strings.Contains(err.Error(), "pd_disagg_mode") {
+			t.Errorf("rejection must name the field and its precondition, got %q", err.Error())
+		}
+	}
+	for _, pd := range []bool{false, true} {
+		err := pdPrefillTimeoutValidate(cmn.PDPrefillTimeoutSecMax+1, pd)
+		if err == nil || !strings.Contains(err.Error(), "0..3600") {
+			t.Errorf("sec over the bound pdDisagg=%v: want a range rejection, got %v", pd, err)
 		}
 	}
 }
