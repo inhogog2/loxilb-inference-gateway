@@ -836,6 +836,17 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	tmpSvc.BackendCaCertID = lb.Serv.BackendCaCertId
 	tmpSvc.BackendClientCertID = lb.Serv.BackendClientCertId
 	tmpSvc.BackendTLSServerName = lb.Serv.BackendTLSServerName
+	if eff := lb.Serv.BackendTLSEffective; eff != nil {
+		tmpSvc.BackendTLSEffective = &models.LoadbalanceEntryServiceArgumentsBackendTLSEffective{
+			Status:       eff.Status,
+			Verify:       eff.Verify,
+			Ca:           eff.CA,
+			ClientCert:   eff.ClientCert,
+			ClientCertID: eff.ClientCertID,
+			ServerName:   eff.ServerName,
+			Generation:   int64(eff.Generation),
+		}
+	}
 
 	tmpLB.ServiceArguments = &tmpSvc
 

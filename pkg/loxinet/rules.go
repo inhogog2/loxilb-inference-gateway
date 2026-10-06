@@ -629,6 +629,7 @@ type ruleEnt struct {
 	backendCaCertId             string                  // backend CA certId (empty=system default)
 	backendClientCertId         string                  // backend client certId (empty=none)
 	backendTLSServerName        string                  // backend SNI and expected DNS name (empty=endpoint address)
+	backendTLSKept              bool                    // the listener kept a backend context older than the rule's certificates
 	pdDisaggMode                bool                    // P/D disaggregation mode: orchestrate prefill→decode flow
 	pdCacheAwareMode            bool                    // P/D cache-aware routing: session + trie + min-load (US-PD801)
 	pdSessionTTLSec             uint32                  // Session stickiness TTL in seconds (0 = no expiry)
@@ -1234,6 +1235,11 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.BackendCaCertId = data.backendCaCertId
 		ret.Serv.BackendClientCertId = data.backendClientCertId
 		ret.Serv.BackendTLSServerName = data.backendTLSServerName
+		if mh.dpEbpf != nil && data.hasBackendTLSLeg() {
+			st, listening := mh.dpEbpf.DpBackendTLSStateGet(data.tuples.l3Dst.addr.IP,
+				data.tuples.l4Dst.valMin, uint8(data.tuples.l4Prot.val))
+			ret.Serv.BackendTLSEffective = data.backendTLSEffective(st, listening, cmn.MTLSBuild)
+		}
 		ret.Serv.PDDisaggMode = data.pdDisaggMode         // P/D disaggregation mode
 		ret.Serv.PDCacheAwareMode = data.pdCacheAwareMode // P/D cache-aware routing (US-PD801)
 		ret.Serv.PDSessionTTLSec = data.pdSessionTTLSec
@@ -4733,6 +4739,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 				eRule.tuples.String(), eRule.sync)
 			return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(true)}
 		}
+		eRule.backendTLSKept = false
 		if chwblTxn {
 			R.flushLBCtEntries(eRule, CtFlushRidMatchOrZero)
 		}

@@ -69,17 +69,48 @@ del_rule() {
 }
 get_rules() { $dexec llb1 curl -s $API/loadbalancer/all; }
 # The configured rules only: endpoint state and counters are runtime values
-# and move between two reads on their own.
+# and move between two reads on their own, and what the data plane has
+# installed is read from it on every GET and has checks of its own.
 rule_list() {
   get_rules | python3 -c "
 import sys, json
 rules = json.load(sys.stdin).get('lbAttr') or []
 for r in rules:
+    (r.get('serviceArguments') or {}).pop('backend_tls_effective', None)
     for ep in r.get('endpoints') or []:
         ep.pop('state', None)
         ep.pop('counter', None)
 print(len(rules), json.dumps(sorted(json.dumps(r, sort_keys=True) for r in rules)))
 " 2>/dev/null
+}
+
+# What the data plane has installed for the backend leg of a rule, as GET
+# reports it: "status verify ca client_cert client_cert_id server_name".
+effective() { # [port] [host]
+  get_rules | python3 -c "
+import sys, json
+for r in json.load(sys.stdin).get('lbAttr') or []:
+    s = r.get('serviceArguments') or {}
+    if s.get('port') == ${1:-$PORT} and s.get('host') == '${2:-$VIP}':
+        e = s.get('backend_tls_effective')
+        if e is None:
+            print('absent')
+        else:
+            print(e.get('status'), e.get('verify'), e.get('ca'), e.get('client_cert'), e.get('client_cert_id'), e.get('server_name'))
+" 2>/dev/null
+}
+generation() {
+  get_rules | python3 -c "
+import sys, json
+for r in json.load(sys.stdin).get('lbAttr') or []:
+    s = r.get('serviceArguments') or {}
+    if s.get('port') == $PORT and s.get('host') == '$VIP':
+        print((s.get('backend_tls_effective') or {}).get('generation'))
+" 2>/dev/null
+}
+expect_effective() { # want, what
+  local got; got=$(effective)
+  [ "$got" == "$1" ] && pass "GET reports what is installed $2: $got" || fail "GET reports '$got' $2, want '$1'"
 }
 
 # How many of n requests an endpoint answered.
@@ -150,6 +181,13 @@ body=$(get_rules)
 [[ "$body" == *'"backend_ca_cert_id":"betls-ca"'* && "$body" == *'"backend_client_cert_id":"betls-client"'* ]] \
   && pass "GET reports the certificate IDs of the rule" || fail "GET does not report the rule's certificate IDs"
 [ "$(del_cert betls-ca)" == "400" ] && pass "a certificate a rule refers to cannot be deleted" || fail "a certificate in use was deleted"
+expect_effective "applied True betls-ca True betls-client None" "for the new rule"
+caps=$($dexec llb1 curl -s ${API%/config}/status/capabilities)
+[[ "$caps" == *'"name":"backend_tls_verify"'* ]] && pass "the capability is listed" || fail "backend_tls_verify is not in the capabilities: ${caps:0:200}"
+echo "$caps" | python3 -c "
+import sys, json
+c = [x for x in json.load(sys.stdin)['capabilities'] if x['name'] == 'backend_tls_verify']
+sys.exit(0 if len(c) == 1 and c[0]['ready'] is True else 1)" && pass "the capability is ready on this build" || fail "backend_tls_verify is not ready on a build that verifies"
 
 echo "A second rule on the same listener"
 before=$(rule_list)
@@ -172,10 +210,13 @@ expect_served "with two rules on the listener"
 [ "$(del_rule_at $PORT sibling.betls.test)" == "200" ] && pass "the second rule is deleted" || fail "the second rule could not be deleted"
 
 echo "A CA the endpoints do not chain to"
-n=$(replaced)
+n=$(replaced); g=$(generation)
 rc=$(post_rule ', "mtls_backend": {"verify_server_cert": true}, "backend_ca_cert_id": "betls-otherca", "backend_client_cert_id": "betls-client"'); echo "  POST -> $rc"
 expect_replaced $n
 expect_refused "endpoints signed by another CA"
+expect_effective "applied True betls-otherca True betls-client None" "after the change"
+[[ "$g" == [0-9]* && "$(generation)" -gt "$g" ]] && pass "the installed generation moved with the replacement ($g -> $(generation))" \
+  || fail "the generation did not move with a replacement: $g -> $(generation)"
 
 echo "Back to the right CA"
 n=$(replaced)
@@ -189,12 +230,15 @@ echo "A policy the data plane cannot build"
 [ "$(post_cert betls-damagedca ca minica.pem)" == "201" ] || fail "precondition: could not register the CA to damage"
 $dexec llb1 sh -c 'echo "not a certificate" > /etc/loxilb/certs/betls-damagedca/ca.crt'
 DMG='"mtls_backend": {"verify_server_cert": true}, "backend_ca_cert_id": "betls-damagedca", "backend_client_cert_id": "betls-client"'
-before=$(rule_list); nr=$(refused)
+before=$(rule_list); nr=$(refused); g=$(generation)
+[[ "$g" == [0-9]* ]] || fail "precondition: GET reports no generation ('$g')"
 rc=$(post_rule ", $DMG"); echo "  POST -> $rc"
 [ "$rc" == "400" ] && pass "a policy change the data plane refuses is answered 400" || fail "a refused policy change was answered $rc, want 400"
 [ "$(refused)" -gt "$nr" ] && pass "the data plane refused the new context and kept the one in service" \
   || fail "the data plane log shows no refused replacement: the request was stopped earlier, or not at all"
 [ "$(rule_list)" == "$before" ] && pass "the rule keeps the policy it had" || fail "a refused change is stored on the rule"
+expect_effective "applied True betls-ca True betls-client None" "after the refused change"
+[ "$(generation)" == "$g" ] && pass "the installed generation did not move ($g)" || fail "the generation moved $g -> $(generation) on a refused change"
 expect_served "after the refused change"
 nr=$(refused); sleep 20
 [ "$(refused)" == "$nr" ] && pass "the refused policy is not pushed again behind the caller's back" \
@@ -207,6 +251,12 @@ ans=$(post_rule_at $((PORT + 1)) "$VIP" ", $BE")
 [ "${ans##*$'\n'}" == "200" ] && pass "the same rule with a policy that can be built is installed" \
   || fail "the rule could not be created after the refused attempt: ${ans:0:300}"
 [ "$(del_rule_at $((PORT + 1)) "$VIP")" == "200" ] || fail "the rule on the second port could not be deleted"
+ans=$(post_rule_at $((PORT + 1)) "$VIP" "")
+[ "${ans##*$'\n'}" == "200" ] || fail "precondition: a rule without a backend policy could not be created: ${ans:0:300}"
+got=$(effective $((PORT + 1)))
+[ "$got" == "applied False none False None None" ] && pass "a rule that asks for nothing reports an unverified leg, never a protected one" \
+  || fail "a rule without a backend policy reports '$got', want 'applied False none False None None'"
+[ "$(del_rule_at $((PORT + 1)) "$VIP")" == "200" ] || fail "the rule without a policy could not be deleted"
 del_cert betls-damagedca > /dev/null
 
 echo "A server name the endpoints' certificates do not carry"
@@ -214,12 +264,14 @@ n=$(replaced)
 rc=$(post_rule ", $BE"', "backend_tls_server_name": "backend.invalid.test"'); echo "  POST -> $rc"
 expect_replaced $n
 expect_refused "right CA, wrong name"
+expect_effective "applied True betls-ca True betls-client backend.invalid.test" "with a server name"
 
 echo "No client certificate"
 n=$(replaced)
 rc=$(post_rule ', "mtls_backend": {"verify_server_cert": true}, "backend_ca_cert_id": "betls-ca"'); echo "  POST -> $rc"
 expect_replaced $n
 expect_refused "endpoints that require a client certificate, none named"
+expect_effective "applied True betls-ca False None None" "without a client certificate"
 
 echo "The CA is rotated under its ID"
 n=$(replaced)

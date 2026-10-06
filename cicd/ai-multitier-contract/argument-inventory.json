@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "3684843ed628a07a0451dc54297cee1c9fbe001b49a736fb9ad06b13bdc8d21a"
+    "swagger.yml": "fdf763fa8ed8a6524db34806354b4bdd090f441e21ee68f6354bac78c460e2cd"
   },
   "fields": [
     {
@@ -393,6 +393,80 @@
           "both"
         ],
         "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/backend_tls_effective",
+      "required": false,
+      "contract": {
+        "description": "What the data plane has installed for the TLS leg to the endpoints, beside what the rule asks for in mtls_backend.verify_server_cert, backend_ca_cert_id, backend_client_cert_id and backend_tls_server_name. Present on GET for mode=4 rules with security=2; ignored on input. Every member but status describes the installed policy, never the request. It is the policy new backend connections are made under, and does not say that any connection was verified. The listener of an address, port and protocol has one such policy, so rules that share a listener report the same one.",
+        "readOnly": true,
+        "type": "object"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/backend_tls_effective/ca",
+      "required": false,
+      "contract": {
+        "description": "Certificate ID of the CA bundle in use, or \"none\".",
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/backend_tls_effective/client_cert",
+      "required": false,
+      "contract": {
+        "description": "A client certificate is presented to endpoints. Always present, false included.",
+        "type": "boolean",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/backend_tls_effective/client_cert_id",
+      "required": false,
+      "contract": {
+        "description": "Certificate ID of that client certificate. Absent when none is presented.",
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/backend_tls_effective/generation",
+      "required": false,
+      "contract": {
+        "description": "How many times the listener's backend context was replaced in place since the listener was created.",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/backend_tls_effective/server_name",
+      "required": false,
+      "contract": {
+        "description": "The name sent as SNI and expected of an endpoint's certificate. Absent when the endpoint address is expected.",
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/backend_tls_effective/status",
+      "required": false,
+      "contract": {
+        "description": "applied: the listener runs what the rule asks for. pending: the rule has no listener in the data plane yet and nothing is installed. failed: the listener runs something else than the rule asks for, which the other members describe; this is the state of a rule whose listener could not load a certificate replaced under the same ID, and of a restored rule that disagrees with the rules on its listener. unsupported: this Gateway was built without client-certificate support, see the backend_tls_verify capability; the leg is TLS without verification or a client certificate.",
+        "enum": [
+          "applied",
+          "pending",
+          "failed",
+          "unsupported"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/backend_tls_effective/verify",
+      "required": false,
+      "contract": {
+        "description": "Endpoint certificates are verified. Always present, false included.",
+        "type": "boolean",
+        "x-omitempty": false
       }
     },
     {
