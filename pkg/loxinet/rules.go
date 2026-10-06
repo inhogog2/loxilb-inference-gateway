@@ -4552,7 +4552,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		eRule.chwblReplication = serv.CHWBLReplication
 		eRule.chwblEnableCacheSalt = serv.CHWBLEnableCacheSalt
 		eRule.mtlsFrontend = serv.MTLSFrontend
-		eRule.mtlsBackend = serv.MTLSBackend
+		eRule.mtlsBackend = serv.MTLSBackend.Stored()
 
 		// Re-apply tracing catalog if trace_type changed
 		if serv.Mode == cmn.LBModeFullProxy && serv.TraceType != "" {
@@ -4896,7 +4896,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 	// Store mTLS configuration
 	r.mtlsFrontend = serv.MTLSFrontend
-	r.mtlsBackend = serv.MTLSBackend
+	r.mtlsBackend = serv.MTLSBackend.Stored()
 
 	// Per LB end-point health-check is supposed to be handled at kube-loxilb/CCM,
 	// but it certain cases like stand-alone mode, loxilb can do its own

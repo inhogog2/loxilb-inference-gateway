@@ -17,6 +17,8 @@
 package common
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"net"
 	"time"
@@ -844,33 +846,117 @@ type MTLSFrontendConfig struct {
 	ClientCRLPath string `json:"client_crl_path,omitempty"`
 }
 
-// MTLSBackendConfig - Backend server certificate verification + client cert
+// MTLSBackendConfig - Backend server certificate verification request.
+// Backend trust anchors and the client identity are named by certificate ID
+// on the rule (BackendCaCertId, BackendClientCertId); this object carries no
+// certificate or key material.
 type MTLSBackendConfig struct {
 	// VerifyServerCert - Enable backend server certificate verification
 	// true = verify backend server cert (SSL_VERIFY_PEER)
 	// false = skip verification (SSL_VERIFY_NONE, default for backward compatibility)
 	VerifyServerCert bool `json:"verify_server_cert"`
 
-	// BackendCAPath - Path to backend CA bundle (PEM format)
-	// Empty = use system CA store (etc/ssl/certs)
-	// Example: "/opt/loxilb/cert/backend_ca_bundle.crt"
-	BackendCAPath string `json:"backend_ca_path,omitempty"`
+	// retired holds the path and inline-material keys this object used to
+	// carry, when a document written by an earlier release still has them.
+	// They are kept only so that document re-encodes to the bytes its
+	// checksum was computed over; the loader then calls DropRetired. They are
+	// never applied, stored on a rule or returned.
+	retired *mtlsBackendRetired
+}
 
-	// ClientCertPath - Path to loxilb's client certificate for backend mTLS
-	// Example: "/opt/loxilb/cert/loxilb_client.crt"
+// mtlsBackendRetired is the set of keys MTLSBackendConfig no longer carries.
+type mtlsBackendRetired struct {
+	BackendCAPath  string `json:"backend_ca_path,omitempty"`
 	ClientCertPath string `json:"client_cert_path,omitempty"`
-
-	// ClientKeyPath - Path to loxilb's private key for backend mTLS
-	// Example: "/opt/loxilb/cert/loxilb_client.key"
-	ClientKeyPath string `json:"client_key_path,omitempty"`
-
-	// ClientCertData - Inline client certificate (base64-encoded PEM)
-	// Alternative to ClientCertPath
+	ClientKeyPath  string `json:"client_key_path,omitempty"`
 	ClientCertData string `json:"client_cert_data,omitempty"`
+	ClientKeyData  string `json:"client_key_data,omitempty"`
+}
 
-	// ClientKeyData - Inline client key (base64-encoded PEM)
-	// Alternative to ClientKeyPath
-	ClientKeyData string `json:"client_key_data,omitempty"`
+// mtlsBackendDoc is the on-disk shape of MTLSBackendConfig, in the key order
+// earlier releases wrote.
+type mtlsBackendDoc struct {
+	VerifyServerCert bool `json:"verify_server_cert"`
+	mtlsBackendRetired
+}
+
+// UnmarshalJSON accepts the current object and the one earlier releases
+// wrote. Any other key is refused, so a strict document decoder stays strict
+// for this object.
+func (m *MTLSBackendConfig) UnmarshalJSON(b []byte) error {
+	var doc mtlsBackendDoc
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&doc); err != nil {
+		return err
+	}
+	m.VerifyServerCert = doc.VerifyServerCert
+	m.retired = nil
+	if doc.mtlsBackendRetired != (mtlsBackendRetired{}) {
+		retired := doc.mtlsBackendRetired
+		m.retired = &retired
+	}
+	return nil
+}
+
+// MarshalJSON writes verify_server_cert only, unless retired keys decoded
+// from an earlier document have not been dropped yet.
+func (m MTLSBackendConfig) MarshalJSON() ([]byte, error) {
+	doc := mtlsBackendDoc{VerifyServerCert: m.VerifyServerCert}
+	if m.retired != nil {
+		doc.mtlsBackendRetired = *m.retired
+	}
+	// Escaping is left to the caller's encoder, which re-escapes this output
+	// when it is configured to.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(doc); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+// DropRetired discards the retired keys decoded from an earlier document and
+// returns their names (never their values), nil when there were none.
+func (m *MTLSBackendConfig) DropRetired() []string {
+	if m == nil || m.retired == nil {
+		return nil
+	}
+	var names []string
+	for _, f := range []struct{ name, val string }{
+		{"backend_ca_path", m.retired.BackendCAPath},
+		{"client_cert_path", m.retired.ClientCertPath},
+		{"client_key_path", m.retired.ClientKeyPath},
+		{"client_cert_data", m.retired.ClientCertData},
+		{"client_key_data", m.retired.ClientKeyData},
+	} {
+		if f.val != "" {
+			names = append(names, f.name)
+		}
+	}
+	m.retired = nil
+	return names
+}
+
+// ResetUnavailable clears a verification request carried by a document an
+// earlier release wrote, and reports whether there was one. The request never
+// had an effect, and a create request can no longer make it, so a loaded rule
+// must not read back as if it were verified.
+func (m *MTLSBackendConfig) ResetUnavailable() bool {
+	if m == nil || !m.VerifyServerCert {
+		return false
+	}
+	m.VerifyServerCert = false
+	return true
+}
+
+// Stored returns the copy of m a rule keeps: the request fields only.
+func (m *MTLSBackendConfig) Stored() *MTLSBackendConfig {
+	if m == nil {
+		return nil
+	}
+	return &MTLSBackendConfig{VerifyServerCert: m.VerifyServerCert}
 }
 
 // CertArg - (11/12/13/16): the canonical TLS-material handle.

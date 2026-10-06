@@ -10,11 +10,11 @@ This test validates complete end-to-end mutual TLS (mTLS) functionality in loxil
 10.10.10.1               10.10.10.254              31.31.31.1/32.32.32.1/33.33.33.1
 
   │                          │                          │
-  │  Frontend mTLS (HTTPS)   │   Backend mTLS (HTTPS)   │
+  │  Frontend mTLS (HTTPS)   │   Backend TLS (HTTPS)    │
   │  ────────────────────>   │   ────────────────────>  │
   │                          │                          │
-  │  Client cert required    │   Server cert verified   │
-  │  CN pattern matching     │   Client cert presented  │
+  │  Client cert required    │   Re-encrypted;          │
+  │  CN pattern matching     │   server cert unverified │
 ```
 
 ## mTLS Configuration
@@ -26,17 +26,20 @@ This test validates complete end-to-end mutual TLS (mTLS) functionality in loxil
   - **Optional mode**: Client certificate is optional (backward compatibility)
 - **CN pattern validation**: Uses fnmatch wildcards for flexible matching
 
-### Backend mTLS (LoxiLB → Backend Servers)
-- **Server verification**: loxilb verifies backend server certificates against CA
-- **Client presentation**: loxilb presents its own client certificate to backend servers
-- **Mutual authentication**: Backend servers require and verify loxilb's client certificate
+### Backend TLS (LoxiLB → Backend Servers)
+- **Re-encryption**: loxilb opens a TLS connection to each backend (`security=e2ehttps`)
+- **Not asserted here**: verification of the backend's certificate, and which client
+  certificate loxilb presents. A rule cannot request either in this release; the API refuses
+  `mtls_backend.verify_server_cert=true`, `backend_ca_cert_id`, `backend_client_cert_id` and the
+  retired `mtls_backend` path/inline keys (`validate_api.sh`, API-T6). Tests 6, 10b and 10c are
+  explicit skips for that reason.
 
 ## Test Scenarios
 
 ### Test 1: E2E mTLS Required - Valid Frontend Client Certificate
 - Client presents valid certificate (CN: `client1.internal.corp.com`)
 - Frontend: Certificate accepted (CN matches `*.internal.corp.com`)
-- Backend: loxilb presents client cert, verifies server certs
+- Backend: re-encrypted over TLS
 - **Expected**: Connection succeeds, load balanced across backends
 
 ### Test 2: E2E mTLS Required - Invalid Frontend Client Certificate
@@ -52,19 +55,17 @@ This test validates complete end-to-end mutual TLS (mTLS) functionality in loxil
 ### Test 4: E2E mTLS Optional - With Frontend Client Certificate
 - Client presents valid certificate
 - Frontend: Certificate accepted (optional mode)
-- Backend: mTLS enforced (loxilb verifies backends)
+- Backend: re-encrypted over TLS
 - **Expected**: Connection succeeds, load balanced across backends
 
 ### Test 5: E2E mTLS Optional - Without Frontend Client Certificate
 - Client doesn't present certificate
 - Frontend: Connection accepted (optional mode)
-- Backend: mTLS enforced (loxilb verifies backends)
+- Backend: re-encrypted over TLS
 - **Expected**: Connection succeeds, load balanced across backends
 
-### Test 6: Backend mTLS Verification
-- Validates that loxilb properly verifies backend server certificates
-- Validates that backends accept loxilb's client certificate
-- **Expected**: All backend connections use mTLS successfully
+### Test 6: Backend server certificate verification
+- **Skipped**: a rule cannot request backend certificate verification in this release
 
 ## Certificate Hierarchy
 
@@ -76,47 +77,33 @@ Root CA (minica)
   ├── Backend Server Cert 1 (31.31.31.1) - Backend ep1
   ├── Backend Server Cert 2 (32.32.32.1) - Backend ep2
   ├── Backend Server Cert 3 (33.33.33.1) - Backend ep3
-  └── LoxiLB Client Cert (loxilb.internal.loadbalancer.com) - Presented to backends
+  └── LoxiLB Client Cert (loxilb.internal.loadbalancer.com) - Generated, not referenced by any rule
 ```
 
 ## Load Balancer Configuration
 
-### Port 2020: Required Frontend mTLS + Backend mTLS
+### Port 2020: Required Frontend mTLS, re-encrypted backend leg
 ```json
 {
-  "security": 5,
+  "security": 2,
   "mode": 4,
   "mtls_frontend": {
     "client_cert_mode": "required",
     "client_ca_path": "/opt/loxilb/cert/client_ca.crt",
     "require_client_cn": true,
     "client_cn_pattern": "*.internal.corp.com"
-  },
-  "mtls_backend": {
-    "ca_path": "/opt/loxilb/cert/backend_ca.crt",
-    "cert_path": "/opt/loxilb/cert/backend_client.crt",
-    "key_path": "/opt/loxilb/cert/backend_client.key",
-    "verify_server": true,
-    "server_name_pattern": "*"
   }
 }
 ```
 
-### Port 2021: Optional Frontend mTLS + Backend mTLS
+### Port 2021: Optional Frontend mTLS, re-encrypted backend leg
 ```json
 {
-  "security": 5,
+  "security": 2,
   "mode": 4,
   "mtls_frontend": {
     "client_cert_mode": "optional",
     "client_ca_path": "/opt/loxilb/cert/client_ca.crt"
-  },
-  "mtls_backend": {
-    "ca_path": "/opt/loxilb/cert/backend_ca.crt",
-    "cert_path": "/opt/loxilb/cert/backend_client.crt",
-    "key_path": "/opt/loxilb/cert/backend_client.key",
-    "verify_server": true,
-    "server_name_pattern": "*"
   }
 }
 ```
@@ -241,58 +228,6 @@ docker cp 10.10.10.254/key.pem llb1:/opt/loxilb/cert/server.key
 docker restart llb1
 ```
 
-#### Rotating LoxiLB Backend Client Certificate
-
-```bash
-# 1. Generate new client certificate for loxilb
-./minica -domains loxilb.internal.loadbalancer.com -ip-addresses 10.10.10.254
-
-# 2. Update on loxilb
-docker cp loxilb.internal.loadbalancer.com/cert.pem llb1:/opt/loxilb/cert/backend_client.crt
-docker cp loxilb.internal.loadbalancer.com/key.pem llb1:/opt/loxilb/cert/backend_client.key
-
-# 3. Restart loxilb
-docker restart llb1
-```
-
-### Certificate Validation and Testing
-
-#### Verify Certificate Details
-
-```bash
-# View certificate information
-openssl x509 -in client1.internal.corp.com/cert.pem -text -noout
-
-# Check certificate CN
-openssl x509 -in client1.internal.corp.com/cert.pem -noout -subject
-
-# Check certificate expiration
-openssl x509 -in client1.internal.corp.com/cert.pem -noout -dates
-
-# Verify certificate against CA
-openssl verify -CAfile minica.pem client1.internal.corp.com/cert.pem
-```
-
-#### Test Client Certificate Authentication
-
-```bash
-# Test with valid client certificate (should succeed)
-$dexec l3h1 curl -v --cacert /tmp/minica.pem \
-  --cert /tmp/client1.crt \
-  --key /tmp/client1.key \
-  https://10.10.10.254:2020
-
-# Test without client certificate (should fail on required mode)
-$dexec l3h1 curl -v --cacert /tmp/minica.pem \
-  https://10.10.10.254:2020
-
-# Test with invalid CN (should fail)
-$dexec l3h1 curl -v --cacert /tmp/minica.pem \
-  --cert /tmp/client2.crt \
-  --key /tmp/client2.key \
-  https://10.10.10.254:2020
-```
-
 ### Certificate Storage Locations
 
 | Component | Certificate Type | LoxiLB Path | Purpose |
@@ -300,9 +235,6 @@ $dexec l3h1 curl -v --cacert /tmp/minica.pem \
 | Frontend TLS | Server Cert | `/opt/loxilb/cert/server.crt` | Presented to clients |
 | Frontend TLS | Server Key | `/opt/loxilb/cert/server.key` | Private key for server cert |
 | Frontend mTLS | Client CA Bundle | `/opt/loxilb/cert/client_ca.crt` | Verifies client certificates |
-| Backend mTLS | Backend CA Bundle | `/opt/loxilb/cert/backend_ca.crt` | Verifies backend server certs |
-| Backend mTLS | Client Cert | `/opt/loxilb/cert/backend_client.crt` | Presented to backends |
-| Backend mTLS | Client Key | `/opt/loxilb/cert/backend_client.key` | Private key for backend client |
 
 ### Best Practices
 
@@ -350,15 +282,15 @@ cd /path/to/cicd/e2ehttpsproxy-mtls
    - ✅ Required vs optional client certificates
    - ✅ Certificate rejection for invalid CNs
 
-2. **Backend mTLS**:
-   - ✅ Backend server certificate verification
-   - ✅ loxilb client certificate presentation
-   - ✅ Mutual authentication between loxilb and backends
+2. **Backend TLS**:
+   - ✅ The backend leg is re-encrypted
+   - ⏭ Backend server certificate verification: not validated (cannot be requested in this release)
+   - ⏭ loxilb client certificate presentation: not validated (cannot be requested in this release)
 
-3. **End-to-End Security**:
-   - ✅ Complete TLS encryption from client to backend
-   - ✅ Certificate validation at both frontend and backend
-   - ✅ No plaintext communication in the entire chain
+3. **End-to-End**:
+   - ✅ TLS on both legs, client to backend
+   - ✅ Certificate validation at the frontend
+   - ✅ Backend TLS arguments a rule may not carry are refused with 400 (API-T6)
 
 ## References
 

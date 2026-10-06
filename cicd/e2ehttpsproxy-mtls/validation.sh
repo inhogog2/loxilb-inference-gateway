@@ -209,9 +209,9 @@ echo "#########################################"
 # cert not in the minica CA) and confirm loxilb rejects it.
 # Until a rogue-backend fixture is added to config.sh, mark this as an explicit
 # SKIP so its absence is visible in CI logs rather than silently passing.
-echo "Test 6: [SKIP] rogue-backend cert rejection test requires a 4th backend"
-echo "        with a self-signed cert outside the minica CA (not yet provisioned)"
-echo "        Add a rogue backend in config.sh and assert loxilb returns 5xx here"
+echo "Test 6: [SKIP] rogue-backend cert rejection — backend server certificate"
+echo "        verification cannot be requested on a rule in this release, and the"
+echo "        test also needs a 4th backend with a certificate outside the minica CA"
 
 echo "#########################################"
 echo "Test 7: Expired Client Certificate → Server Must Reject"
@@ -298,24 +298,31 @@ else
 fi
 
 echo "#########################################"
-echo "Test 10: Backend mTLS — loxilb Presents Cert to Backend, Connection Succeeds"
+echo "Test 10: Re-encrypted Path — Valid Client Reaches a Backend Over TLS"
 echo "#########################################"
 
 # Test 10: A valid mTLS client request traverses the full path:
-#   client → loxilb (frontend TLS) → loxilb → backend (backend mTLS with loxilb client cert)
-# Verifies the backend mTLS leg: loxilb presents backend_client.crt and backends verify it.
-# Uses the valid CN cert so the frontend check passes and we reach the backend mTLS path.
+#   client → loxilb (frontend TLS) → loxilb → backend (TLS)
+# This proves the re-encrypted path works end to end. It does NOT prove which
+# client certificate loxilb presents to the backend, nor that loxilb verifies
+# the backend's certificate: neither can be requested on a rule in this
+# release, and this topology cannot tell the configured identity from any
+# other certificate of the same CA.
 res=$($hexec l3h1 curl --max-time 10 \
     --cacert minica.pem \
     --cert client1.internal.corp.com/cert.pem \
     --key client1.internal.corp.com/key.pem \
     -s https://${servIP}:2020 2>&1)
 if [[ "$res" == "server1" || "$res" == "server2" || "$res" == "server3" ]]; then
-    echo "  Test 10: backend mTLS connection succeeded (response=$res) [OK]"
+    echo "  Test 10: re-encrypted connection succeeded (response=$res) [OK]"
 else
-    echo "  Test 10: backend mTLS connection failed: $res [FAILED]"
+    echo "  Test 10: re-encrypted connection failed: $res [FAILED]"
     code=1
 fi
+echo "  Test 10b: [SKIP] backend client identity — not assertable: no rule can"
+echo "            request a backend client certificate in this release"
+echo "  Test 10c: [SKIP] backend server certificate verification — not assertable:"
+echo "            no rule can request it in this release"
 
 echo "#########################################"
 echo "Test 11: Load Distribution Across mTLS Endpoints (≥2 backends receive traffic)"

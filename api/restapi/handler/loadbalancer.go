@@ -84,6 +84,9 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if err := pres.validateHalfCloseMode(params.Attr.ServiceArguments); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
+	if err := validateBackendTLSArguments(params.Attr.ServiceArguments); err != nil {
+		return errorResponseWithCode(http.StatusBadRequest, err.Error())
+	}
 
 	var lbRules cmn.LbRuleMod
 
@@ -260,13 +263,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 
 	// mTLS Backend Configuration
 	if params.Attr.ServiceArguments.MtlsBackend != nil {
-		lbRules.Serv.MTLSBackend = &cmn.MTLSBackendConfig{
-			BackendCAPath:  params.Attr.ServiceArguments.MtlsBackend.BackendCaPath,
-			ClientCertPath: params.Attr.ServiceArguments.MtlsBackend.ClientCertPath,
-			ClientKeyPath:  params.Attr.ServiceArguments.MtlsBackend.ClientKeyPath,
-			ClientCertData: params.Attr.ServiceArguments.MtlsBackend.ClientCertData,
-			ClientKeyData:  params.Attr.ServiceArguments.MtlsBackend.ClientKeyData,
-		}
+		lbRules.Serv.MTLSBackend = &cmn.MTLSBackendConfig{}
 		// Convert pointer field to value
 		if params.Attr.ServiceArguments.MtlsBackend.VerifyServerCert != nil {
 			lbRules.Serv.MTLSBackend.VerifyServerCert = *params.Attr.ServiceArguments.MtlsBackend.VerifyServerCert
@@ -824,11 +821,6 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 		verifyServerCert := lb.Serv.MTLSBackend.VerifyServerCert
 		mtlsBackend := &models.LoadbalanceEntryServiceArgumentsMtlsBackend{
 			VerifyServerCert: &verifyServerCert,
-			BackendCaPath:    lb.Serv.MTLSBackend.BackendCAPath,
-			ClientCertPath:   lb.Serv.MTLSBackend.ClientCertPath,
-			ClientKeyPath:    lb.Serv.MTLSBackend.ClientKeyPath,
-			ClientCertData:   lb.Serv.MTLSBackend.ClientCertData,
-			ClientKeyData:    lb.Serv.MTLSBackend.ClientKeyData,
 		}
 		tmpSvc.MtlsBackend = mtlsBackend
 	}

@@ -158,79 +158,6 @@ func (m *MTLSFrontendConfig) Validate() error {
 
 // Validate validates MTLSBackendConfig
 func (m *MTLSBackendConfig) Validate() error {
-	if m == nil {
-		return nil // nil config is valid (no mTLS)
-	}
-
-	// Validate cert/key consistency
-	hasCertPath := m.ClientCertPath != ""
-	hasKeyPath := m.ClientKeyPath != ""
-	hasCertData := m.ClientCertData != ""
-	hasKeyData := m.ClientKeyData != ""
-
-	// Both path fields must be provided together
-	if hasCertPath != hasKeyPath {
-		return fmt.Errorf("both client_cert_path and client_key_path must be provided together")
-	}
-
-	// Both data fields must be provided together
-	if hasCertData != hasKeyData {
-		return fmt.Errorf("both client_cert_data and client_key_data must be provided together")
-	}
-
-	// Cannot mix path and data
-	if (hasCertPath || hasKeyPath) && (hasCertData || hasKeyData) {
-		return fmt.Errorf("cannot use both path-based and data-based configuration")
-	}
-
-	// Validate path-based configuration
-	if hasCertPath {
-		// Check absolute paths
-		if !filepath.IsAbs(m.ClientCertPath) {
-			return fmt.Errorf("client_cert_path must be absolute path: %s", m.ClientCertPath)
-		}
-		if !filepath.IsAbs(m.ClientKeyPath) {
-			return fmt.Errorf("client_key_path must be absolute path: %s", m.ClientKeyPath)
-		}
-
-		// Check file existence
-		if !fileExists(m.ClientCertPath) {
-			return fmt.Errorf("client certificate file not found: %s", m.ClientCertPath)
-		}
-		if !fileExists(m.ClientKeyPath) {
-			return fmt.Errorf("client key file not found: %s", m.ClientKeyPath)
-		}
-
-		// Validate PEM formats
-		if err := validatePEMFile(m.ClientCertPath); err != nil {
-			return fmt.Errorf("invalid client certificate: %w", err)
-		}
-		// Note: Key validation would require different parsing
-	}
-
-	// Validate data-based configuration
-	if hasCertData {
-		if err := validatePEMData(m.ClientCertData); err != nil {
-			return fmt.Errorf("invalid client certificate data: %w", err)
-		}
-		// Note: Key validation would require different parsing
-	}
-
-	// Validate backend CA path if provided
-	if m.BackendCAPath != "" {
-		if !filepath.IsAbs(m.BackendCAPath) {
-			return fmt.Errorf("backend_ca_path must be absolute path: %s", m.BackendCAPath)
-		}
-
-		if !fileExists(m.BackendCAPath) {
-			return fmt.Errorf("backend CA file not found: %s", m.BackendCAPath)
-		}
-
-		if err := validatePEMFile(m.BackendCAPath); err != nil {
-			return fmt.Errorf("invalid backend CA file: %w", err)
-		}
-	}
-
 	return nil
 }
 
@@ -250,7 +177,7 @@ func ValidateMTLSConfig(mode LBMode, security LBSec, frontend *MTLSFrontendConfi
 	}
 
 	// Backend mTLS requires E2EHTTPS security mode
-	if backend != nil && (backend.VerifyServerCert || backend.ClientCertPath != "" || backend.ClientCertData != "") {
+	if backend != nil && backend.VerifyServerCert {
 		if security != LBServE2EHTTPS {
 			return fmt.Errorf("backend mTLS requires security=e2ehttps (current: %v)", security)
 		}
