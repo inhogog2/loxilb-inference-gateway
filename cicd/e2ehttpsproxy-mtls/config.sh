@@ -132,12 +132,10 @@ docker cp 10.10.10.254/key.pem llb1:/opt/loxilb/cert/server.key
 # Install client CA bundle on loxilb (for verifying frontend client certificates)
 docker cp minica.pem llb1:/opt/loxilb/cert/client_ca.crt
 
-# Install backend CA bundle on loxilb (for verifying backend server certificates)
-docker cp minica.pem llb1:/opt/loxilb/cert/backend_ca.crt
-
-# Install loxilb's client certificate for backend mTLS (presented to backends)
-docker cp loxilb.internal.loadbalancer.com/cert.pem llb1:/opt/loxilb/cert/backend_client.crt
-docker cp loxilb.internal.loadbalancer.com/key.pem llb1:/opt/loxilb/cert/backend_client.key
+# No backend CA bundle or backend client certificate is installed: a rule
+# cannot request backend certificate verification or a backend client
+# certificate in this release (the API refuses those arguments; see
+# validate_api.sh API-T6).
 
 # Copy CA cert to l3h1 for curl validation
 docker cp minica.pem l3h1:/tmp/minica.pem
@@ -188,11 +186,11 @@ echo "#########################################"
 
 sleep 5
 
-# Test 1: Full end-to-end mTLS with required frontend client cert + backend mTLS verification
+# Test 1: required frontend client cert, re-encrypted backend leg
 # Frontend: Client must present valid cert with CN matching "*.internal.corp.com"
-# Backend: Verify backend server certificates and present loxilb client cert
+# Backend: TLS without server certificate verification
 if [[ "$USE_CLI" == "1" ]]; then
-  create_lb_rule llb1 10.10.10.254 --tcp=2020:8443 --endpoints=31.31.31.1:1,32.32.32.1:1,33.33.33.1:1 --mode=fullproxy --security=e2ehttps --name=e2e-mtls-required-service --host=10.10.10.254 --mtls-client-cert-mode=required --mtls-client-ca-path=/opt/loxilb/cert/client_ca.crt --mtls-require-client-cn --mtls-client-cn-pattern='*.internal.corp.com' --mtls-backend-ca-path=/opt/loxilb/cert/backend_ca.crt --mtls-backend-cert-path=/opt/loxilb/cert/backend_client.crt --mtls-backend-key-path=/opt/loxilb/cert/backend_client.key --mtls-backend-verify-server
+  create_lb_rule llb1 10.10.10.254 --tcp=2020:8443 --endpoints=31.31.31.1:1,32.32.32.1:1,33.33.33.1:1 --mode=fullproxy --security=e2ehttps --name=e2e-mtls-required-service --host=10.10.10.254 --mtls-client-cert-mode=required --mtls-client-ca-path=/opt/loxilb/cert/client_ca.crt --mtls-require-client-cn --mtls-client-cn-pattern='*.internal.corp.com'
 else
 docker exec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
   -H "Content-Type: application/json" \
@@ -210,12 +208,6 @@ docker exec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalanc
       "client_ca_path": "/opt/loxilb/cert/client_ca.crt",
       "require_client_cn": true,
       "client_cn_pattern": "*.internal.corp.com"
-    },
-    "mtls_backend": {
-      "backend_ca_path": "/opt/loxilb/cert/backend_ca.crt",
-      "client_cert_path": "/opt/loxilb/cert/backend_client.crt",
-      "client_key_path": "/opt/loxilb/cert/backend_client.key",
-      "verify_server_cert": true
     }
   },
   "endpoints": [
@@ -238,9 +230,9 @@ docker exec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalanc
 }'
 fi
 
-# Test 2: Frontend mTLS optional + Backend mTLS verification
+# Test 2: Frontend mTLS optional, re-encrypted backend leg
 if [[ "$USE_CLI" == "1" ]]; then
-  create_lb_rule llb1 10.10.10.254 --tcp=2021:8443 --endpoints=31.31.31.1:1,32.32.32.1:1,33.33.33.1:1 --mode=fullproxy --security=e2ehttps --name=e2e-mtls-optional-service --host=10.10.10.254 --mtls-client-cert-mode=optional --mtls-client-ca-path=/opt/loxilb/cert/client_ca.crt --mtls-backend-ca-path=/opt/loxilb/cert/backend_ca.crt --mtls-backend-cert-path=/opt/loxilb/cert/backend_client.crt --mtls-backend-key-path=/opt/loxilb/cert/backend_client.key --mtls-backend-verify-server
+  create_lb_rule llb1 10.10.10.254 --tcp=2021:8443 --endpoints=31.31.31.1:1,32.32.32.1:1,33.33.33.1:1 --mode=fullproxy --security=e2ehttps --name=e2e-mtls-optional-service --host=10.10.10.254 --mtls-client-cert-mode=optional --mtls-client-ca-path=/opt/loxilb/cert/client_ca.crt
 else
 docker exec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
   -H "Content-Type: application/json" \
@@ -256,12 +248,6 @@ docker exec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalanc
     "mtls_frontend": {
       "client_cert_mode": "optional",
       "client_ca_path": "/opt/loxilb/cert/client_ca.crt"
-    },
-    "mtls_backend": {
-      "backend_ca_path": "/opt/loxilb/cert/backend_ca.crt",
-      "client_cert_path": "/opt/loxilb/cert/backend_client.crt",
-      "client_key_path": "/opt/loxilb/cert/backend_client.key",
-      "verify_server_cert": true
     }
   },
   "endpoints": [
