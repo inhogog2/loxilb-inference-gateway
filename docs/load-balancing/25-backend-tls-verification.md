@@ -15,13 +15,13 @@ path or PEM data.
 
 | `usage` | What it holds | Request body |
 |---|---|---|
-| `ca` | The CA bundle endpoint certificates must chain to | `certPem` (one or more CA certificates; `chainPem` is appended). `keyPem` must be empty. |
+| `ca` | The CA bundle endpoint certificates must chain to | `certPem` (one or more CA certificates; `chainPem` is appended). `keyPem` is sent as the empty string. |
 | `client` | The certificate and key the gateway presents to endpoints | `certPem`, `keyPem`, optional `chainPem`. The pair must match. |
 | `server` (default) | A listener certificate, selected by SNI | unchanged |
 
 ```
 POST /netlox/v1/config/cert
-{ "certId": "backend-ca", "usage": "ca", "certPem": "-----BEGIN CERTIFICATE-----\n..." }
+{ "certId": "backend-ca", "usage": "ca", "certPem": "-----BEGIN CERTIFICATE-----\n...", "keyPem": "" }
 
 POST /netlox/v1/config/cert
 { "certId": "backend-client", "usage": "client",

@@ -27,8 +27,7 @@ cert_json() { # id, usage, cert file, [key file]
   python3 - "$@" <<'PY'
 import json, sys
 d = {"certId": sys.argv[1], "usage": sys.argv[2], "certPem": open(sys.argv[3]).read()}
-if len(sys.argv) > 4:
-    d["keyPem"] = open(sys.argv[4]).read()
+d["keyPem"] = open(sys.argv[4]).read() if len(sys.argv) > 4 else ""
 print(json.dumps(d))
 PY
 }

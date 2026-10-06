@@ -713,8 +713,7 @@ function register_backend_cert() {
   code=$(python3 -c '
 import json, sys
 d = {"certId": sys.argv[1], "usage": sys.argv[2], "certPem": open(sys.argv[3]).read()}
-if len(sys.argv) > 4:
-    d["keyPem"] = open(sys.argv[4]).read()
+d["keyPem"] = open(sys.argv[4]).read() if len(sys.argv) > 4 else ""
 print(json.dumps(d))' "$@" | sudo docker exec -i $dock curl -s -o /dev/null -w '%{http_code}' \
     -X POST http://localhost:11111/netlox/v1/config/cert -H "Content-Type: application/json" -d @-)
   if [[ "$code" != "201" ]]; then

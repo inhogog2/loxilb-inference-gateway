@@ -33,10 +33,11 @@ type Cert struct {
 	// Output-only. SAN-DNS/CN auto-derived hostnames the certId registered into the SNI store. Ignored on POST/PUT.
 	Hostnames []string `json:"hostnames"`
 
-	// Private key in PEM. Required on POST/PUT for usage "server" and "client", and refused for usage "ca". Persisted 0600 (key-at-rest). Never returned on GET.
-	KeyPem *string `json:"keyPem,omitempty"`
+	// Private key in PEM on POST/PUT for usage "server" and "client". For usage "ca" the member is still sent and must be the empty string; a key is refused. Persisted 0600 (key-at-rest). Never returned on GET.
+	// Required: true
+	KeyPem *string `json:"keyPem"`
 
-	// What the entry is for, fixed when the ID is created. "server": a listener certificate and key, selected by SNI. "ca": a bundle of CA certificates that backend certificates are verified against; certPem (plus chainPem) is the bundle and keyPem must be empty. "client": the certificate and key the gateway presents to backends. Only "server" entries are offered to clients. A load-balancer rule refers to a "ca" entry with backend_ca_cert_id and to a "client" entry with backend_client_cert_id; an entry a rule refers to cannot be deleted. A rotated "ca" or "client" entry takes effect on a rule when that rule is next updated.
+	// What the entry is for, fixed when the ID is created. "server": a listener certificate and key, selected by SNI. "ca": a bundle of CA certificates that backend certificates are verified against; certPem (plus chainPem) is the bundle and keyPem is the empty string. "client": the certificate and key the gateway presents to backends. Only "server" entries are offered to clients. A load-balancer rule refers to a "ca" entry with backend_ca_cert_id and to a "client" entry with backend_client_cert_id; an entry a rule refers to cannot be deleted. A rotated "ca" or "client" entry takes effect on a rule when that rule is next updated.
 	// Enum: [server ca client]
 	Usage *string `json:"usage,omitempty"`
 }
@@ -46,6 +47,10 @@ func (m *Cert) Validate(formats strfmt.Registry) error {
 	var res []error
 
 	if err := m.validateCertPem(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateKeyPem(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -62,6 +67,15 @@ func (m *Cert) Validate(formats strfmt.Registry) error {
 func (m *Cert) validateCertPem(formats strfmt.Registry) error {
 
 	if err := validate.Required("certPem", "body", m.CertPem); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *Cert) validateKeyPem(formats strfmt.Registry) error {
+
+	if err := validate.Required("keyPem", "body", m.KeyPem); err != nil {
 		return err
 	}
 

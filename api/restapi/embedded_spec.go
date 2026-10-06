@@ -1523,13 +1523,13 @@ func init() {
           "type": "array"
         },
         "keyPem": {
-          "description": "Private key in PEM. Required on POST/PUT for usage \"server\" and \"client\", and refused for usage \"ca\". Persisted 0600 (key-at-rest). Never returned on GET.",
+          "description": "Private key in PEM on POST/PUT for usage \"server\" and \"client\". For usage \"ca\" the member is still sent and must be the empty string; a key is refused. Persisted 0600 (key-at-rest). Never returned on GET.",
           "type": "string",
           "x-nullable": true
         },
         "usage": {
           "default": "server",
-          "description": "What the entry is for, fixed when the ID is created. \"server\": a listener certificate and key, selected by SNI. \"ca\": a bundle of CA certificates that backend certificates are verified against; certPem (plus chainPem) is the bundle and keyPem must be empty. \"client\": the certificate and key the gateway presents to backends. Only \"server\" entries are offered to clients. A load-balancer rule refers to a \"ca\" entry with backend_ca_cert_id and to a \"client\" entry with backend_client_cert_id; an entry a rule refers to cannot be deleted. A rotated \"ca\" or \"client\" entry takes effect on a rule when that rule is next updated.",
+          "description": "What the entry is for, fixed when the ID is created. \"server\": a listener certificate and key, selected by SNI. \"ca\": a bundle of CA certificates that backend certificates are verified against; certPem (plus chainPem) is the bundle and keyPem is the empty string. \"client\": the certificate and key the gateway presents to backends. Only \"server\" entries are offered to clients. A load-balancer rule refers to a \"ca\" entry with backend_ca_cert_id and to a \"client\" entry with backend_client_cert_id; an entry a rule refers to cannot be deleted. A rotated \"ca\" or \"client\" entry takes effect on a rule when that rule is next updated.",
           "enum": [
             "server",
             "ca",
@@ -1539,7 +1539,8 @@ func init() {
         }
       },
       "required": [
-        "certPem"
+        "certPem",
+        "keyPem"
       ],
       "type": "object"
     },
@@ -36405,7 +36406,8 @@ func init() {
       "description": "Managed PEM input and partial read model. POST currently returns empty 201, including when it mints an ID; callers cannot obtain that minted handle from the response. PUT uses the path ID and ignores body ID and hostnames. Known lifecycle gaps: duplicate POST persists before rejecting registration and can remove existing material; failed rotation does not roll back files; hostname ownership conflicts and multi-host swaps are not transactional; rotation retains the old hostname set. Do not claim atomic certificate transactions, automatic SAN migration, or verified zero downtime. GET returns no private-key material, although the shared schema still requires keyPem and the generated response can serialize it as null.",
       "type": "object",
       "required": [
-        "certPem"
+        "certPem",
+        "keyPem"
       ],
       "properties": {
         "certId": {
@@ -36430,12 +36432,12 @@ func init() {
           }
         },
         "keyPem": {
-          "description": "Private key in PEM. Required on POST/PUT for usage \"server\" and \"client\", and refused for usage \"ca\". Persisted 0600 (key-at-rest). Never returned on GET.",
+          "description": "Private key in PEM on POST/PUT for usage \"server\" and \"client\". For usage \"ca\" the member is still sent and must be the empty string; a key is refused. Persisted 0600 (key-at-rest). Never returned on GET.",
           "type": "string",
           "x-nullable": true
         },
         "usage": {
-          "description": "What the entry is for, fixed when the ID is created. \"server\": a listener certificate and key, selected by SNI. \"ca\": a bundle of CA certificates that backend certificates are verified against; certPem (plus chainPem) is the bundle and keyPem must be empty. \"client\": the certificate and key the gateway presents to backends. Only \"server\" entries are offered to clients. A load-balancer rule refers to a \"ca\" entry with backend_ca_cert_id and to a \"client\" entry with backend_client_cert_id; an entry a rule refers to cannot be deleted. A rotated \"ca\" or \"client\" entry takes effect on a rule when that rule is next updated.",
+          "description": "What the entry is for, fixed when the ID is created. \"server\": a listener certificate and key, selected by SNI. \"ca\": a bundle of CA certificates that backend certificates are verified against; certPem (plus chainPem) is the bundle and keyPem is the empty string. \"client\": the certificate and key the gateway presents to backends. Only \"server\" entries are offered to clients. A load-balancer rule refers to a \"ca\" entry with backend_ca_cert_id and to a \"client\" entry with backend_client_cert_id; an entry a rule refers to cannot be deleted. A rotated \"ca\" or \"client\" entry takes effect on a rule when that rule is next updated.",
           "type": "string",
           "default": "server",
           "enum": [

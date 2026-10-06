@@ -14828,6 +14828,7 @@ definitions:
       keyPem and the generated response can serialize it as null.
     required:
       - certPem
+      - keyPem
     properties:
       usage:
         type: string
@@ -14837,7 +14838,7 @@ definitions:
           What the entry is for, fixed when the ID is created. "server": a
           listener certificate and key, selected by SNI. "ca": a bundle of CA
           certificates that backend certificates are verified against; certPem
-          (plus chainPem) is the bundle and keyPem must be empty. "client": the
+          (plus chainPem) is the bundle and keyPem is the empty string. "client": the
           certificate and key the gateway presents to backends. Only "server"
           entries are offered to clients. A load-balancer rule refers to a "ca"
           entry with backend_ca_cert_id and to a "client" entry with
@@ -14855,7 +14856,7 @@ definitions:
       keyPem:
         type: string
         x-nullable: true
-        description: Private key in PEM. Required on POST/PUT for usage "server" and "client", and refused for usage "ca". Persisted 0600 (key-at-rest). Never returned on GET.
+        description: Private key in PEM on POST/PUT for usage "server" and "client". For usage "ca" the member is still sent and must be the empty string; a key is refused. Persisted 0600 (key-at-rest). Never returned on GET.
       chainPem:
         type: string
         description: Optional intermediate-chain PEM appended after the leaf.
