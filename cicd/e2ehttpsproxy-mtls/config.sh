@@ -132,10 +132,9 @@ docker cp 10.10.10.254/key.pem llb1:/opt/loxilb/cert/server.key
 # Install client CA bundle on loxilb (for verifying frontend client certificates)
 docker cp minica.pem llb1:/opt/loxilb/cert/client_ca.crt
 
-# No backend CA bundle or backend client certificate is installed: a rule
-# cannot request backend certificate verification or a backend client
-# certificate in this release (the API refuses those arguments; see
-# validate_api.sh API-T6).
+# The backend CA bundle and the gateway's backend client certificate are not
+# files a rule points at: they are registered with the gateway further down
+# and the rules refer to them by certificate ID.
 
 # Copy CA cert to l3h1 for curl validation
 docker cp minica.pem l3h1:/tmp/minica.pem
@@ -184,14 +183,19 @@ echo "#########################################"
 echo "Creating end-to-end mTLS load balancer rules"
 echo "#########################################"
 
+# The backends present a certificate for their own address, signed by the
+# scenario CA, and require a client certificate signed by it. Both rules
+# verify the backend against that CA and present the gateway's client
+# certificate. The CLI has no arguments for these yet, so the rules are
+# created over REST.
+register_backend_cert llb1 e2e-backend-ca ca minica.pem || exit 1
+register_backend_cert llb1 e2e-backend-client client 10.10.10.254/cert.pem 10.10.10.254/key.pem || exit 1
+
 sleep 5
 
 # Test 1: required frontend client cert, re-encrypted backend leg
 # Frontend: Client must present valid cert with CN matching "*.internal.corp.com"
-# Backend: TLS without server certificate verification
-if [[ "$USE_CLI" == "1" ]]; then
-  create_lb_rule llb1 10.10.10.254 --tcp=2020:8443 --endpoints=31.31.31.1:1,32.32.32.1:1,33.33.33.1:1 --mode=fullproxy --security=e2ehttps --name=e2e-mtls-required-service --host=10.10.10.254 --mtls-client-cert-mode=required --mtls-client-ca-path=/opt/loxilb/cert/client_ca.crt --mtls-require-client-cn --mtls-client-cn-pattern='*.internal.corp.com'
-else
+# Backend: verified against the scenario CA, client certificate presented
 docker exec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
   -H "Content-Type: application/json" \
   -d '{
@@ -201,6 +205,9 @@ docker exec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalanc
     "protocol": "tcp",
     "security": 2,
     "mode": 4,
+    "mtls_backend": { "verify_server_cert": true },
+    "backend_ca_cert_id": "e2e-backend-ca",
+    "backend_client_cert_id": "e2e-backend-client",
     "name": "e2e-mtls-required-service",
     "host": "10.10.10.254",
     "mtls_frontend": {
@@ -228,12 +235,8 @@ docker exec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalanc
     }
   ]
 }'
-fi
 
-# Test 2: Frontend mTLS optional, re-encrypted backend leg
-if [[ "$USE_CLI" == "1" ]]; then
-  create_lb_rule llb1 10.10.10.254 --tcp=2021:8443 --endpoints=31.31.31.1:1,32.32.32.1:1,33.33.33.1:1 --mode=fullproxy --security=e2ehttps --name=e2e-mtls-optional-service --host=10.10.10.254 --mtls-client-cert-mode=optional --mtls-client-ca-path=/opt/loxilb/cert/client_ca.crt
-else
+# Test 2: Frontend mTLS optional, verified backend leg with a client certificate
 docker exec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
   -H "Content-Type: application/json" \
   -d '{
@@ -243,6 +246,9 @@ docker exec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalanc
     "protocol": "tcp",
     "security": 2,
     "mode": 4,
+    "mtls_backend": { "verify_server_cert": true },
+    "backend_ca_cert_id": "e2e-backend-ca",
+    "backend_client_cert_id": "e2e-backend-client",
     "name": "e2e-mtls-optional-service",
     "host": "10.10.10.254",
     "mtls_frontend": {
@@ -268,7 +274,6 @@ docker exec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalanc
     }
   ]
 }'
-fi
 
 echo "#########################################"
 echo "End-to-end mTLS configuration complete"

@@ -62,10 +62,12 @@ docker cp 10.10.10.254/key.pem llb1:/opt/loxilb/cert/server.key
 
 sleep 5
 cli_preflight llb1 && USE_CLI=1 || USE_CLI=0
+
+# The HTTP/2 backends of this scenario require a client certificate in their
+# strict phase. The gateway presents one only when the rule names it, and the
+# CLI has no argument for that yet, so these rules are created over REST.
+register_backend_cert llb1 e2e-backend-client client 10.10.10.254/cert.pem 10.10.10.254/key.pem || exit 1
 create_lb_rule llb1 10.10.10.254 --tcp=2020:8080 --endpoints=31.31.31.1:1,32.32.32.1:1,33.33.33.1:1 --mode=fullproxy --security=e2ehttps --host=10.10.10.254
-if [[ "$USE_CLI" == "1" ]]; then
-  create_lb_rule llb1 10.10.10.254 --tcp=2021:8081 --endpoints=31.31.31.1:1,32.32.32.1:1,33.33.33.1:1 --mode=fullproxy --security=e2ehttps --host=10.10.10.254 --backend-protocol=http2
-else
 $dexec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
   -H "Content-Type: application/json" \
   -d '{
@@ -75,6 +77,7 @@ $dexec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
     "protocol": "tcp",
     "security": 2,
     "mode": 4,
+    "backend_client_cert_id": "e2e-backend-client",
     "host": "10.10.10.254",
     "backend_protocol": "http2"
   },
@@ -84,4 +87,3 @@ $dexec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
     { "endpointIP": "33.33.33.1", "targetPort": 8081, "weight": 1 }
   ]
 }'
-fi
