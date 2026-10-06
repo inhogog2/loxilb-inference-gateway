@@ -123,15 +123,20 @@ func TestMTLSBackendDecode(t *testing.T) {
 	}
 }
 
-func TestMTLSBackendResetUnavailable(t *testing.T) {
+func TestMTLSBackendResetUnverifiable(t *testing.T) {
 	cfg := &MTLSBackendConfig{VerifyServerCert: true}
-	if !cfg.ResetUnavailable() || cfg.VerifyServerCert {
-		t.Fatalf("a verification request was not reset: %+v", cfg)
+	if !cfg.ResetUnverifiable("") || cfg.VerifyServerCert {
+		t.Fatalf("a request without a CA was not reset: %+v", cfg)
 	}
-	if cfg.ResetUnavailable() {
-		t.Fatal("second ResetUnavailable reported a request")
+	if cfg.ResetUnverifiable("") {
+		t.Fatal("second ResetUnverifiable reported a request")
 	}
-	if (*MTLSBackendConfig)(nil).ResetUnavailable() {
-		t.Fatal("ResetUnavailable on nil reported a request")
+	if (*MTLSBackendConfig)(nil).ResetUnverifiable("") {
+		t.Fatal("ResetUnverifiable on nil reported a request")
+	}
+	// A request that names its CA is a real one and is kept.
+	cfg = &MTLSBackendConfig{VerifyServerCert: true}
+	if cfg.ResetUnverifiable("backend-ca") || !cfg.VerifyServerCert {
+		t.Fatalf("a request with a CA was reset: %+v", cfg)
 	}
 }

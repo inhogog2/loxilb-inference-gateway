@@ -628,6 +628,7 @@ type ruleEnt struct {
 	hstsPreload                 bool                    // "; preload"
 	backendCaCertId             string                  // backend CA certId (empty=system default)
 	backendClientCertId         string                  // backend client certId (empty=none)
+	backendTLSServerName        string                  // backend SNI and expected DNS name (empty=endpoint address)
 	pdDisaggMode                bool                    // P/D disaggregation mode: orchestrate prefill→decode flow
 	pdCacheAwareMode            bool                    // P/D cache-aware routing: session + trie + min-load (US-PD801)
 	pdSessionTTLSec             uint32                  // Session stickiness TTL in seconds (0 = no expiry)
@@ -1232,6 +1233,7 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.HstsPreload = data.hstsPreload
 		ret.Serv.BackendCaCertId = data.backendCaCertId
 		ret.Serv.BackendClientCertId = data.backendClientCertId
+		ret.Serv.BackendTLSServerName = data.backendTLSServerName
 		ret.Serv.PDDisaggMode = data.pdDisaggMode         // P/D disaggregation mode
 		ret.Serv.PDCacheAwareMode = data.pdCacheAwareMode // P/D cache-aware routing (US-PD801)
 		ret.Serv.PDSessionTTLSec = data.pdSessionTTLSec
@@ -3810,6 +3812,11 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if err := validateLBFixedCStringFields(serv); err != nil {
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
 	}
+	// A rule that asks for backend verification or a client certificate is
+	// installed with it or not at all, whichever way it arrived.
+	if err := cmn.ValidateBackendTLS(&serv); err != nil {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+	}
 
 	// Validate service args
 	service := ""
@@ -4344,6 +4351,8 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.hstsPreload != serv.HstsPreload ||
 			eRule.backendCaCertId != serv.BackendCaCertId ||
 			eRule.backendClientCertId != serv.BackendClientCertId ||
+			eRule.backendTLSServerName != serv.BackendTLSServerName ||
+			backendVerifyOf(eRule.mtlsBackend) != backendVerifyOf(serv.MTLSBackend) ||
 			!strSliceEqual(eRule.alpnProtocols, serv.AlpnProtocols) ||
 			!strSliceEqual(eRule.tlsVersions, serv.TlsVersions) ||
 			eRule.name != serv.Name {
@@ -4523,6 +4532,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		eRule.hstsPreload = serv.HstsPreload
 		eRule.backendCaCertId = serv.BackendCaCertId
 		eRule.backendClientCertId = serv.BackendClientCertId
+		eRule.backendTLSServerName = serv.BackendTLSServerName
 		// update the per-service connectionLimit (0 = unlimited).
 		// Assigned like maxStreamDurationSec so an explicit 0 can clear a previously-set limit;
 		// the change is detected above and re-pushed to the dataplane conn_limit gate.
@@ -4846,6 +4856,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	r.hstsPreload = serv.HstsPreload
 	r.backendCaCertId = serv.BackendCaCertId
 	r.backendClientCertId = serv.BackendClientCertId
+	r.backendTLSServerName = serv.BackendTLSServerName
 
 	// Store P/D disaggregation configuration
 	r.pdDisaggMode = serv.PDDisaggMode
@@ -6681,6 +6692,7 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.HstsPreload = r.hstsPreload
 	nWork.BackendCaCertId = r.backendCaCertId
 	nWork.BackendClientCertId = r.backendClientCertId
+	nWork.BackendTLSServerName = r.backendTLSServerName
 	nWork.PDDisaggMode = r.pdDisaggMode         // P/D disaggregation mode
 	nWork.PDCacheAwareMode = r.pdCacheAwareMode // P/D cache-aware routing (US-PD801)
 	nWork.PDSessionTTLSec = r.pdSessionTTLSec

@@ -7,6 +7,7 @@ package models
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/go-openapi/errors"
 	"github.com/go-openapi/strfmt"
@@ -32,9 +33,12 @@ type Cert struct {
 	// Output-only. SAN-DNS/CN auto-derived hostnames the certId registered into the SNI store. Ignored on POST/PUT.
 	Hostnames []string `json:"hostnames"`
 
-	// Private key in PEM. Required on POST/PUT. Persisted 0600 (key-at-rest). Never returned on GET.
-	// Required: true
-	KeyPem *string `json:"keyPem"`
+	// Private key in PEM. Required on POST/PUT for usage "server" and "client", and refused for usage "ca". Persisted 0600 (key-at-rest). Never returned on GET.
+	KeyPem *string `json:"keyPem,omitempty"`
+
+	// What the entry is for, fixed when the ID is created. "server": a listener certificate and key, selected by SNI. "ca": a bundle of CA certificates that backend certificates are verified against; certPem (plus chainPem) is the bundle and keyPem must be empty. "client": the certificate and key the gateway presents to backends. Only "server" entries are offered to clients. A load-balancer rule refers to a "ca" entry with backend_ca_cert_id and to a "client" entry with backend_client_cert_id; an entry a rule refers to cannot be deleted. A rotated "ca" or "client" entry takes effect on a rule when that rule is next updated.
+	// Enum: [server ca client]
+	Usage *string `json:"usage,omitempty"`
 }
 
 // Validate validates this cert
@@ -45,7 +49,7 @@ func (m *Cert) Validate(formats strfmt.Registry) error {
 		res = append(res, err)
 	}
 
-	if err := m.validateKeyPem(formats); err != nil {
+	if err := m.validateUsage(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -64,9 +68,45 @@ func (m *Cert) validateCertPem(formats strfmt.Registry) error {
 	return nil
 }
 
-func (m *Cert) validateKeyPem(formats strfmt.Registry) error {
+var certTypeUsagePropEnum []interface{}
 
-	if err := validate.Required("keyPem", "body", m.KeyPem); err != nil {
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["server","ca","client"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		certTypeUsagePropEnum = append(certTypeUsagePropEnum, v)
+	}
+}
+
+const (
+
+	// CertUsageServer captures enum value "server"
+	CertUsageServer string = "server"
+
+	// CertUsageCa captures enum value "ca"
+	CertUsageCa string = "ca"
+
+	// CertUsageClient captures enum value "client"
+	CertUsageClient string = "client"
+)
+
+// prop value enum
+func (m *Cert) validateUsageEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, certTypeUsagePropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Cert) validateUsage(formats strfmt.Registry) error {
+	if swag.IsZero(m.Usage) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateUsageEnum("usage", "body", *m.Usage); err != nil {
 		return err
 	}
 

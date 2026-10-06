@@ -291,6 +291,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	lbRules.Serv.HstsPreload = params.Attr.ServiceArguments.HstsPreload                     //
 	lbRules.Serv.BackendCaCertId = params.Attr.ServiceArguments.BackendCaCertID             //
 	lbRules.Serv.BackendClientCertId = params.Attr.ServiceArguments.BackendClientCertID     //
+	lbRules.Serv.BackendTLSServerName = params.Attr.ServiceArguments.BackendTLSServerName
 
 	if lbRules.Serv.Proto == "sctp" {
 		for _, data := range params.Attr.SecondaryIPs {
@@ -353,6 +354,12 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 
 	if lbRules.Serv.Mode == cmn.LBModeDSR && lbRules.Serv.Sel != cmn.LbSelHash {
 		return &ResultResponse{Result: "Error: Only Hash Selection criteria allowed for DSR mode"}
+	}
+
+	// The rule layer makes the same check for every way a rule arrives; here
+	// it turns a refused request away before anything is touched.
+	if err := cmn.ValidateBackendTLS(&lbRules.Serv); err != nil {
+		return &ErrorResponse{Payload: ResultErrorResponseError(&cmn.RuleArgumentError{Err: err})}
 	}
 
 	tk.LogIt(tk.LogDebug, "api: lbRules : %v\n", lbRules)
@@ -824,6 +831,11 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 		}
 		tmpSvc.MtlsBackend = mtlsBackend
 	}
+	// What the rule asks of its backend leg, by name only: the certificate
+	// IDs, never the material behind them.
+	tmpSvc.BackendCaCertID = lb.Serv.BackendCaCertId
+	tmpSvc.BackendClientCertID = lb.Serv.BackendClientCertId
+	tmpSvc.BackendTLSServerName = lb.Serv.BackendTLSServerName
 
 	tmpLB.ServiceArguments = &tmpSvc
 

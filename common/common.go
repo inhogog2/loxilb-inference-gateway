@@ -939,12 +939,13 @@ func (m *MTLSBackendConfig) DropRetired() []string {
 	return names
 }
 
-// ResetUnavailable clears a verification request carried by a document an
-// earlier release wrote, and reports whether there was one. The request never
-// had an effect, and a create request can no longer make it, so a loaded rule
-// must not read back as if it were verified.
-func (m *MTLSBackendConfig) ResetUnavailable() bool {
-	if m == nil || !m.VerifyServerCert {
+// ResetUnverifiable clears a verification request that names no CA, as a
+// document written by an earlier release can carry, and reports whether there
+// was one. Such a request never had an effect and cannot be honoured: there is
+// nothing to verify against. A create request with the same shape is refused;
+// a stored rule is loaded as it behaved, unverified, and says so.
+func (m *MTLSBackendConfig) ResetUnverifiable(caCertID string) bool {
+	if m == nil || !m.VerifyServerCert || caCertID != "" {
 		return false
 	}
 	m.VerifyServerCert = false
@@ -977,6 +978,9 @@ type CertArg struct {
 	KeyPEM string `json:"keyPem"`
 	// ChainPEM - optional intermediate-chain PEM appended after the leaf.
 	ChainPEM string `json:"chainPem,omitempty"`
+	// Usage - what the entry is for: CertUsageServer (default), CertUsageCA or
+	// CertUsageClient. Set on POST and fixed for the life of the ID.
+	Usage string `json:"usage,omitempty"`
 	// Hostnames - SAN-DNS/CN auto-derived hostnames the certId registered into the SNI
 	// store. Output-only — populated on GET, ignored on POST/PUT.
 	Hostnames []string `json:"hostnames,omitempty"`
@@ -1425,6 +1429,10 @@ type LbServiceArg struct {
 	// BackendClientCertId - (16): certId of loxilb's backend client cert+key.
 	// Empty ⇒ no backend client cert (today's behaviour).
 	BackendClientCertId string `json:"backend_client_cert_id,omitempty"`
+	// BackendTLSServerName - name sent as SNI to the endpoints and, when the
+	// endpoint's certificate is verified, expected among its DNS names.
+	// Empty ⇒ no SNI, and a verified endpoint must carry its own address.
+	BackendTLSServerName string `json:"backend_tls_server_name,omitempty"`
 }
 
 // LbEndPointArg - Information related to load-balancer end-point

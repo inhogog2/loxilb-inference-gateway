@@ -28,10 +28,9 @@ import (
 // echoes its value.
 //
 // The path and inline-material keys of mtls_backend are retired: a rule names
-// backend trust and the client identity by certificate ID. Backend
-// certificate verification and a backend client certificate are not available
-// in this release, so the arguments that request them are refused too rather
-// than accepted and left without effect.
+// backend trust and the client identity by certificate ID. What the rule may
+// ask for by ID is checked on the rule itself (cmn.ValidateBackendTLS), where
+// every way a rule arrives passes.
 func validateBackendTLSArguments(sa *models.LoadbalanceEntryServiceArguments) error {
 	if mb := sa.MtlsBackend; mb != nil {
 		for _, f := range []struct{ name, val string }{
@@ -45,15 +44,6 @@ func validateBackendTLSArguments(sa *models.LoadbalanceEntryServiceArguments) er
 				return fmt.Errorf("mtls_backend.%s is no longer supported: upload the certificate through /config/cert and refer to it by certificate ID", f.name)
 			}
 		}
-		if mb.VerifyServerCert != nil && *mb.VerifyServerCert {
-			return fmt.Errorf("mtls_backend.verify_server_cert: backend certificate verification is not available in this release")
-		}
-	}
-	if sa.BackendCaCertID != "" {
-		return fmt.Errorf("backend_ca_cert_id: backend certificate verification is not available in this release")
-	}
-	if sa.BackendClientCertID != "" {
-		return fmt.Errorf("backend_client_cert_id: a backend client certificate is not available in this release")
 	}
 	return nil
 }

@@ -32,6 +32,9 @@ import (
 // ============================================================================
 
 // fileExists - Check if file exists
+// MTLSBuild reports whether this build carries client-certificate support.
+const MTLSBuild = true
+
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

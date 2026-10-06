@@ -154,6 +154,7 @@ func fullFieldLbRule() cmn.LbRuleMod {
 			HstsPreload:           true,
 			BackendCaCertId:       "cert-backend-ca",
 			BackendClientCertId:   "cert-backend-client",
+			BackendTLSServerName:  "backend.example.com",
 		},
 		SecIPs:  []cmn.LbSecIPArg{{SecIP: "20.20.20.2"}},
 		SecVIPs: []cmn.LbSecVIPArg{{Address: "20.20.20.3", SubnetId: "subnet-1", PortId: "port-1", Proto: "tcp"}},

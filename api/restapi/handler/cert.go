@@ -49,6 +49,7 @@ package handler
 import "C"
 import (
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
@@ -70,7 +71,7 @@ import (
 
 // certManagedDir mirrors PROXY_SSL_CERTID_DIR (sockproxy_ssl.h) — the managed dir the C
 // registry loads from. The handler persists PEM here BEFORE calling the registry.
-const certManagedDir = "/etc/loxilb/certs"
+var certManagedDir = cmn.CertManagedDir
 
 // File/permission constants — : the private key is the secret-at-rest, so the dir
 // is 0700 (owner-only) and the key file is 0600. The cert/chain are public material (0644).
@@ -81,7 +82,7 @@ const (
 )
 
 // certIDMax mirrors the C CERTID_MAX (sockproxy_ssl.h) — the opaque handle bound.
-const certIDMax = 64
+const certIDMax = cmn.CertIDMax
 
 // certStore is the in-memory certId registry metadata mirror (id -> CertArg). The C registry
 // holds the SNI-store binding + derived hostnames; this Go store carries the management-side
@@ -105,28 +106,89 @@ func validateCert(c *cmn.CertArg) error {
 	if err := validateCertID(c.CertId); err != nil {
 		return err
 	}
+	usage, err := certUsageOf(c)
+	if err != nil {
+		return err
+	}
 	if strings.TrimSpace(c.CertPEM) == "" {
 		return fmt.Errorf("cert: certPem is required")
 	}
-	if strings.TrimSpace(c.KeyPEM) == "" {
-		return fmt.Errorf("cert: keyPem is required")
-	}
 	// Structural PEM-armor validation: the cert PEM must carry a CERTIFICATE
-	// armor and the key PEM a key armor (BEGIN/END markers). This rejects a non-PEM / wrong-type
-	// upload at config time WITHOUT a deep base64/ASN.1 parse — validateCert is a pure, regen-free
-	// gate (the 77-01 RED scaffold exercises it with armored-but-truncated fixtures). The
-	// AUTHORITATIVE deep X.509 / key parse is OpenSSL's at SSL_CTX load time inside the C registry
-	// (faithful to the existing path-based loader); a truly malformed body there makes
-	// proxy_register_cert return an error which the handler maps to 400 (no panic, no bad material
-	// ever selected at handshake).
+	// armor and the key PEM a key armor (BEGIN/END markers). The deep X.509 /
+	// key parse is OpenSSL's when the material is loaded.
 	if !pemHasArmor(c.CertPEM, "CERTIFICATE") {
 		return fmt.Errorf("cert: certPem is not a PEM CERTIFICATE (missing BEGIN/END CERTIFICATE armor)")
+	}
+	if usage == cmn.CertUsageCA {
+		// A CA bundle is certificates only. A private key sent with one is a
+		// mistake worth refusing: it would be a CA key at rest for no purpose.
+		if strings.TrimSpace(c.KeyPEM) != "" {
+			return fmt.Errorf("cert: keyPem must be empty for usage %q, a CA bundle holds no private key", usage)
+		}
+		return certBundleParses(c.CertPEM + "\n" + c.ChainPEM)
+	}
+	if strings.TrimSpace(c.KeyPEM) == "" {
+		return fmt.Errorf("cert: keyPem is required")
 	}
 	if !pemHasArmor(c.KeyPEM, "PRIVATE KEY") && !pemHasArmor(c.KeyPEM, "RSA PRIVATE KEY") &&
 		!pemHasArmor(c.KeyPEM, "EC PRIVATE KEY") {
 		return fmt.Errorf("cert: keyPem is not a PEM private key (missing BEGIN/END *PRIVATE KEY armor)")
 	}
+	if usage == cmn.CertUsageClient {
+		// Nothing else parses a client pair before a rule uses it, so a pair
+		// that does not match is refused here and not at the first rule.
+		if _, err := tls.X509KeyPair([]byte(certWithChain(c)), []byte(c.KeyPEM)); err != nil {
+			return fmt.Errorf("cert: certPem and keyPem are not a usable pair: %v", err)
+		}
+	}
 	return nil
+}
+
+// certUsageOf returns the usage of an entry, "server" when none is given.
+func certUsageOf(c *cmn.CertArg) (string, error) {
+	switch c.Usage {
+	case "", cmn.CertUsageServer:
+		return cmn.CertUsageServer, nil
+	case cmn.CertUsageCA, cmn.CertUsageClient:
+		return c.Usage, nil
+	}
+	return "", fmt.Errorf("cert: usage must be one of %q, %q, %q", cmn.CertUsageServer, cmn.CertUsageCA, cmn.CertUsageClient)
+}
+
+// certBundleParses requires every PEM block of a CA bundle to be a
+// certificate that parses, and at least one of them.
+func certBundleParses(bundle string) error {
+	rest := []byte(bundle)
+	n := 0
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			return fmt.Errorf("cert: a CA bundle holds certificates only, found a %q block", block.Type)
+		}
+		if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+			return fmt.Errorf("cert: certificate %d of the CA bundle does not parse: %v", n+1, err)
+		}
+		n++
+	}
+	if n == 0 {
+		return fmt.Errorf("cert: the CA bundle holds no certificate")
+	}
+	return nil
+}
+
+func certWithChain(c *cmn.CertArg) string {
+	crt := c.CertPEM
+	if strings.TrimSpace(c.ChainPEM) != "" {
+		if !strings.HasSuffix(crt, "\n") {
+			crt += "\n"
+		}
+		crt += c.ChainPEM
+	}
+	return crt
 }
 
 // validateCertID enforces the certId contract everywhere an id reaches a
@@ -135,17 +197,7 @@ func validateCert(c *cmn.CertArg) error {
 // path-traversal / separator bytes so a crafted id cannot escape
 // PROXY_SSL_CERTID_DIR.
 func validateCertID(id string) error {
-	if strings.TrimSpace(id) == "" {
-		return fmt.Errorf("cert: certId is required")
-	}
-	if len(id) >= certIDMax {
-		return fmt.Errorf("cert: certId too long (%d >= %d)", len(id), certIDMax)
-	}
-	if strings.ContainsAny(id, "/\\") || id == "." || id == ".." ||
-		strings.Contains(id, "..") {
-		return fmt.Errorf("cert: certId %q contains illegal path characters", id)
-	}
-	return nil
+	return cmn.ValidateCertID(id)
 }
 
 // pemHasArmor reports whether s carries a "-----BEGIN <kind>-----" / "-----END <kind>-----"
@@ -161,6 +213,11 @@ func pemHasArmor(s, kind string) bool {
 // server.key (the chain, if present, is appended to server.crt so the existing path loader
 // picks up the full chain). Returns the managed dir on success.
 func certPersist(c *cmn.CertArg) (string, error) {
+	usage, err := certUsageOf(c)
+	if err != nil {
+		return "", err
+	}
+	crtName, keyName := cmn.CertUsageFiles(usage)
 	dir := filepath.Join(certManagedDir, c.CertId)
 	if err := os.MkdirAll(dir, certDirPerm); err != nil {
 		return "", fmt.Errorf("cert: failed to create managed dir %s: %v", dir, err)
@@ -169,20 +226,34 @@ func certPersist(c *cmn.CertArg) (string, error) {
 	if err := os.Chmod(dir, certDirPerm); err != nil {
 		return "", fmt.Errorf("cert: failed to chmod managed dir %s: %v", dir, err)
 	}
-	crt := c.CertPEM
-	if strings.TrimSpace(c.ChainPEM) != "" {
-		if !strings.HasSuffix(crt, "\n") {
-			crt += "\n"
+	if err := certWriteFile(filepath.Join(dir, crtName), []byte(certWithChain(c)), certFilePerm); err != nil {
+		return "", fmt.Errorf("cert: failed to write %s: %v", crtName, err)
+	}
+	if keyName != "" {
+		if err := certWriteFile(filepath.Join(dir, keyName), []byte(c.KeyPEM), certKeyPerm); err != nil {
+			return "", fmt.Errorf("cert: failed to write %s: %v", keyName, err)
 		}
-		crt += c.ChainPEM
-	}
-	if err := os.WriteFile(filepath.Join(dir, "server.crt"), []byte(crt), certFilePerm); err != nil {
-		return "", fmt.Errorf("cert: failed to write server.crt: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "server.key"), []byte(c.KeyPEM), certKeyPerm); err != nil {
-		return "", fmt.Errorf("cert: failed to write server.key: %v", err)
 	}
 	return dir, nil
+}
+
+// certWriteFile replaces a file by writing a new one beside it and renaming
+// it into place: a reader sees the old content or the new, never part of
+// either, and the replaced file is a different file to whoever compares.
+func certWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, perm); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // certRegister drives the 77-02 C registry: proxy_register_cert reads server.crt/server.key
@@ -238,6 +309,7 @@ func certFromModel(m *models.Cert) *cmn.CertArg {
 		CertPEM:  l7Str(m.CertPem),
 		KeyPEM:   l7Str(m.KeyPem),
 		ChainPEM: m.ChainPem,
+		Usage:    l7Str(m.Usage),
 	}
 }
 
@@ -252,8 +324,46 @@ func serializeCert(c *cmn.CertArg) *models.Cert {
 		CertID:    l7Ptr(c.CertId),
 		CertPem:   l7Ptr(c.CertPEM),
 		ChainPem:  c.ChainPEM,
+		Usage:     l7Ptr(certUsageStored(c)),
 		Hostnames: append([]string(nil), c.Hostnames...),
 	}
+}
+
+// certUsageStored returns the usage of a stored entry; an entry stored before
+// usages existed is a server certificate.
+func certUsageStored(c *cmn.CertArg) string {
+	if c == nil || c.Usage == "" {
+		return cmn.CertUsageServer
+	}
+	return c.Usage
+}
+
+// certStoreBackend records a CA or client entry. The key is on disk only.
+func certStoreBackend(cert *cmn.CertArg) {
+	stored := *cert
+	stored.KeyPEM = ""
+	certStoreMu.Lock()
+	certStore[cert.CertId] = &stored
+	certStoreMu.Unlock()
+}
+
+// certInUse names the first load-balancer rule that refers to a certificate
+// ID for its backend leg, or returns "".
+func certInUse(certId string) string {
+	if ApiHooks == nil {
+		return ""
+	}
+	rules, err := ApiHooks.NetLbRuleGet()
+	if err != nil {
+		return ""
+	}
+	for i := range rules {
+		serv := &rules[i].Serv
+		if serv.BackendCaCertId == certId || serv.BackendClientCertId == certId {
+			return fmt.Sprintf("%s:%d/%s", serv.ServIP, serv.ServPort, serv.Proto)
+		}
+	}
+	return ""
 }
 
 // --- CRUD handlers (deferred-regen: generated op types come from `make build`) -----------
@@ -280,9 +390,32 @@ func ConfigPostCert(params operations.PostConfigCertParams, principal interface{
 		return operations.NewPostConfigCertBadRequest().WithPayload(ResultErrorResponseErrorMessage(err.Error()))
 	}
 
+	cert.Usage, _ = certUsageOf(cert)
+	// An ID is one entry; writing a second kind of material under it would
+	// make it ambiguous which one a rule means.
+	if have := cmn.CertDiskUsage(cert.CertId); have != "" && have != cert.Usage {
+		return operations.NewPostConfigCertBadRequest().WithPayload(ResultErrorResponseErrorMessage(
+			fmt.Sprintf("cert: certId %q already holds a certificate with usage %q", cert.CertId, have)))
+	}
+	if cert.Usage != cmn.CertUsageServer && cmn.CertDiskUsage(cert.CertId) != "" {
+		return operations.NewPostConfigCertBadRequest().WithPayload(ResultErrorResponseErrorMessage(
+			fmt.Sprintf("cert: certId %q already exists; rotate it with PUT", cert.CertId)))
+	}
+
 	if _, err := certPersist(cert); err != nil {
 		tk.LogIt(tk.LogError, "api: cert persist failed: %v\n", err)
+		if cert.Usage != cmn.CertUsageServer {
+			certManagedDirRemove(cert.CertId)
+		}
 		return operations.NewPostConfigCertBadRequest().WithPayload(ResultErrorResponseErrorMessage(err.Error()))
+	}
+
+	if cert.Usage != cmn.CertUsageServer {
+		// Backend material is not a listener certificate: it is never offered
+		// by SNI, so it does not enter the SNI registry.
+		certStoreBackend(cert)
+		tk.LogIt(tk.LogInfo, "api: Cert %s uploaded (usage %s)\n", cert.CertId, cert.Usage)
+		return operations.NewPostConfigCertCreated()
 	}
 
 	n, err := certRegister(cert.CertId)
@@ -307,7 +440,7 @@ func ConfigPutCert(params operations.PutConfigCertCertIDParams, principal interf
 	tk.LogIt(tk.LogTrace, "api: Cert %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
 
 	certStoreMu.RLock()
-	_, known := certStore[params.CertID]
+	prev, known := certStore[params.CertID]
 	certStoreMu.RUnlock()
 	if !known {
 		return operations.NewPutConfigCertCertIDNotFound()
@@ -319,12 +452,26 @@ func ConfigPutCert(params operations.PutConfigCertCertIDParams, principal interf
 	cert := certFromModel(params.Attr)
 	// The path certId is authoritative — rotation never re-keys (the handle is stable).
 	cert.CertId = params.CertID
+	// The usage of an ID is fixed when it is created: rules refer to it as a
+	// CA or as a client certificate, and a rotation must not change which.
+	if cert.Usage != "" && cert.Usage != certUsageStored(prev) {
+		return operations.NewPutConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage(
+			fmt.Sprintf("cert: certId %q has usage %q, a rotation cannot change it", params.CertID, certUsageStored(prev))))
+	}
+	cert.Usage = certUsageStored(prev)
 	if err := validateCert(cert); err != nil {
 		return operations.NewPutConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage(err.Error()))
 	}
-
 	if _, err := certPersist(cert); err != nil {
 		return operations.NewPutConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage(err.Error()))
+	}
+	if cert.Usage != cmn.CertUsageServer {
+		certStoreBackend(cert)
+		// A rule picks the new material up when it is next updated: the
+		// listener's backend context is rebuilt when the files behind its
+		// certificate IDs are no longer the ones it was built from.
+		tk.LogIt(tk.LogInfo, "api: Cert %s rotated (usage %s)\n", cert.CertId, cert.Usage)
+		return operations.NewPutConfigCertCertIDOK()
 	}
 	if err := certRotate(cert.CertId); err != nil {
 		tk.LogIt(tk.LogError, "api: cert rotate failed: %v\n", err)
@@ -366,6 +513,10 @@ func ConfigDeleteCert(params operations.DeleteConfigCertCertIDParams, principal 
 	if !known && !dirExists {
 		return operations.NewDeleteConfigCertCertIDNotFound()
 	}
+	if rule := certInUse(params.CertID); rule != "" {
+		return operations.NewDeleteConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage(
+			fmt.Sprintf("cert: certId %q is used by load-balancer rule %s for its backend leg; remove it from the rule first", params.CertID, rule)))
+	}
 
 	// Unregister from the SNI store; a registry that never heard of the
 	// id (orphaned disk material after an unclean boot) is exactly the
@@ -405,6 +556,9 @@ func certListHostnames(certId string) []string {
 	certStoreMu.RLock()
 	c := certStore[certId]
 	certStoreMu.RUnlock()
+	if c != nil && certUsageStored(c) != cmn.CertUsageServer {
+		return nil
+	}
 	var pemBytes []byte
 	if c != nil && c.CertPEM != "" {
 		pemBytes = []byte(c.CertPEM)
@@ -463,17 +617,24 @@ func certErrIsExists(err error) bool {
 // sha256 over server.crt bytes followed by server.key bytes.
 func certDiskDigest(certId string) (string, error) {
 	dir := filepath.Join(certManagedDir, certId)
-	crt, err := os.ReadFile(filepath.Join(dir, "server.crt"))
-	if err != nil {
-		return "", fmt.Errorf("cert %s: read server.crt: %w", certId, err)
+	usage := cmn.CertDiskUsage(certId)
+	if usage == "" {
+		usage = cmn.CertUsageServer
 	}
-	key, err := os.ReadFile(filepath.Join(dir, "server.key"))
+	crtName, keyName := cmn.CertUsageFiles(usage)
+	crt, err := os.ReadFile(filepath.Join(dir, crtName))
 	if err != nil {
-		return "", fmt.Errorf("cert %s: read server.key: %w", certId, err)
+		return "", fmt.Errorf("cert %s: read %s: %w", certId, crtName, err)
 	}
 	h := sha256.New()
 	h.Write(crt)
-	h.Write(key)
+	if keyName != "" {
+		key, err := os.ReadFile(filepath.Join(dir, keyName))
+		if err != nil {
+			return "", fmt.Errorf("cert %s: read %s: %w", certId, keyName, err)
+		}
+		h.Write(key)
+	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
@@ -530,8 +691,10 @@ func CertApplyMeta(meta *cmn.CertMeta) error {
 		return fmt.Errorf("cert-exists error")
 	}
 
-	if _, err := certRegister(meta.CertId); err != nil && !certErrIsExists(err) {
-		return fmt.Errorf("cert %s: register: %w", meta.CertId, err)
+	if cmn.CertDiskUsage(meta.CertId) == cmn.CertUsageServer {
+		if _, err := certRegister(meta.CertId); err != nil && !certErrIsExists(err) {
+			return fmt.Errorf("cert %s: register: %w", meta.CertId, err)
+		}
 	}
 	certAdoptFromDisk(meta.CertId)
 	tk.LogIt(tk.LogInfo, "api: Cert %s re-registered from managed material (restore)\n", meta.CertId)
@@ -560,11 +723,16 @@ func CertWipeRegistration(id string) error {
 // from the managed directory (server.crt; the key is never held in
 // memory on this path -- it is write-only secret material).
 func certAdoptFromDisk(certId string) {
-	crt, err := os.ReadFile(filepath.Join(certManagedDir, certId, "server.crt"))
+	usage := cmn.CertDiskUsage(certId)
+	crtName, _ := cmn.CertUsageFiles(usage)
+	if crtName == "" {
+		return
+	}
+	crt, err := os.ReadFile(filepath.Join(certManagedDir, certId, crtName))
 	if err != nil {
 		return
 	}
-	entry := &cmn.CertArg{CertId: certId, CertPEM: string(crt)}
+	entry := &cmn.CertArg{CertId: certId, CertPEM: string(crt), Usage: usage}
 	certStoreMu.Lock()
 	certStore[certId] = entry
 	certStoreMu.Unlock()
@@ -597,15 +765,15 @@ func CertBootReconcile() int {
 			tk.LogIt(tk.LogWarning, "api: cert boot reconcile: skip %q: %v\n", id, err)
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(certManagedDir, id, "server.crt")); err != nil {
+		usage := cmn.CertDiskUsage(id)
+		if usage == "" {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(certManagedDir, id, "server.key")); err != nil {
-			continue
-		}
-		if _, err := certRegister(id); err != nil && !certErrIsExists(err) {
-			tk.LogIt(tk.LogError, "api: cert boot reconcile: register %s failed: %v\n", id, err)
-			continue
+		if usage == cmn.CertUsageServer {
+			if _, err := certRegister(id); err != nil && !certErrIsExists(err) {
+				tk.LogIt(tk.LogError, "api: cert boot reconcile: register %s failed: %v\n", id, err)
+				continue
+			}
 		}
 		certAdoptFromDisk(id)
 		n++

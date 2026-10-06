@@ -26,6 +26,9 @@ import "fmt"
 // Note: Types are defined in common.go, not here
 // ===========================================================================
 
+// MTLSBuild reports whether this build carries client-certificate support.
+const MTLSBuild = false
+
 // Validate stub - always returns error indicating mTLS is not compiled
 func (m *MTLSFrontendConfig) Validate() error {
 	if m != nil {

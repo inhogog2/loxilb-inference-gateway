@@ -667,10 +667,10 @@ type LoadbalanceEntryServiceArguments struct {
 	// Enum: [disabled required jwt apikey-or-jwt]
 	APIKeyAuth string `json:"api_key_auth,omitempty"`
 
-	// Certificate ID of the CA bundle the backend server certificate is verified against. Not available in this release: POST refuses a nonempty value with 400.
+	// Certificate ID of the CA bundle the backend server certificate is verified against. It must name a /config/cert entry with usage "ca". Required when mtls_backend.verify_server_cert is true, refused with 400 without it.
 	BackendCaCertID string `json:"backend_ca_cert_id,omitempty"`
 
-	// Certificate ID of the client certificate and key the gateway presents to backends. Not available in this release: POST refuses a nonempty value with 400.
+	// Certificate ID of the client certificate and key the gateway presents to backends that ask for one. It must name a /config/cert entry with usage "client". Without it the gateway presents no certificate. Needs mode=4 and security=2.
 	BackendClientCertID string `json:"backend_client_cert_id,omitempty"`
 
 	// Sets SO_KEEPALIVE + TCP_KEEPIDLE on backend socket in seconds. Keeps TCP CT entries alive through cloud NAT during long SSE streams. 0 = disabled. Recommended value 60 for most cloud environments.
@@ -680,6 +680,10 @@ type LoadbalanceEntryServiceArguments struct {
 	// FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. GET reports this field only for FullProxy.
 	// Enum: [http1 http2 both]
 	BackendProtocol *string `json:"backend_protocol,omitempty"`
+
+	// DNS host name sent as SNI to every endpoint of the rule. When mtls_backend.verify_server_cert is true the endpoint's certificate must carry it as a DNS subject alternative name. Empty: no SNI is sent and a verified endpoint must carry its own address. Never derived from the VIP or from a request's Host header. Needs mode=4 and security=2.
+	// Max Length: 253
+	BackendTLSServerName string `json:"backend_tls_server_name,omitempty"`
 
 	// Requests BGP advertisement of the service and flat secondary IPs after a successful add when the BGP component is available. This flag alone does not establish a BGP session or route advertisement; structured secondaryVIPs are not advertised by this hook.
 	Bgp bool `json:"bgp,omitempty"`
@@ -1019,6 +1023,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 		res = append(res, err)
 	}
 
+	if err := m.validateBackendTLSServerName(formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.validateChwblMeanLoadFactor(formats); err != nil {
 		res = append(res, err)
 	}
@@ -1304,6 +1312,18 @@ func (m *LoadbalanceEntryServiceArguments) validateBackendProtocol(formats strfm
 
 	// value enum
 	if err := m.validateBackendProtocolEnum("serviceArguments"+"."+"backend_protocol", "body", *m.BackendProtocol); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateBackendTLSServerName(formats strfmt.Registry) error {
+	if swag.IsZero(m.BackendTLSServerName) { // not required
+		return nil
+	}
+
+	if err := validate.MaxLength("serviceArguments"+"."+"backend_tls_server_name", "body", m.BackendTLSServerName, 253); err != nil {
 		return err
 	}
 
@@ -3806,7 +3826,7 @@ func (m *LoadbalanceEntryServiceArgumentsHalfCloseEffective) UnmarshalBinary(b [
 	return nil
 }
 
-// LoadbalanceEntryServiceArgumentsMtlsBackend Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. In this release backend certificate verification is not available: a POST that sets verify_server_cert to true is refused with 400. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.
+// LoadbalanceEntryServiceArgumentsMtlsBackend Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.
 //
 // swagger:model LoadbalanceEntryServiceArgumentsMtlsBackend
 type LoadbalanceEntryServiceArgumentsMtlsBackend struct {
@@ -3826,7 +3846,7 @@ type LoadbalanceEntryServiceArgumentsMtlsBackend struct {
 	// Retired. POST refuses a nonempty value with 400. Never returned.
 	ClientKeyPath string `json:"client_key_path,omitempty"`
 
-	// Requests backend server-certificate verification. Not available in this release - POST refuses true with 400. A configuration written by an earlier release that carries true is loaded with the value reset to false and a warning.
+	// Verifies the certificate of every endpoint the rule connects to. Requires backend_ca_cert_id: the chain must end in that CA bundle, there is no default trust store. The certificate must also name the endpoint: its address as an IP subject alternative name, or backend_tls_server_name as a DNS one when that is set. An endpoint that fails is not connected to. Needs mode=4, security=2 and a build with client-certificate support; otherwise 400. A stored configuration that carries true without a CA ID is loaded with the value reset to false and a warning.
 	VerifyServerCert *bool `json:"verify_server_cert,omitempty"`
 }
 
