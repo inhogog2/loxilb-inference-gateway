@@ -42,6 +42,10 @@ launchAll:
   - "Models whose chat template prints the date (Llama-3.2, gpt-oss): run the engine in UTC — no `TZ`, no host `/etc/localtime` mount."
   - "SGLang: `--model-path <snapshot path> --revision <revision>`. A hub id makes the engine load a different tokenizer pre-tokenizer on some models, and a path without `--revision` fails the gateway's identity probe."
   - "KV block size 16 (`--block-size 16` on vLLM, page size 16 on SGLang), matching the rule's `kvBlockSize`."
+  - "SGLang: wait for the engine's `The server is fired up` log line before sending traffic; `/v1/models` answers earlier. The first prompt longer than one 16-token page after a start in a fresh container compiles a hashing extension (about 8 s on a 4-core node) and requests wait for it: mount a host directory at `/root/.cache/torch_extensions` so it is built once per node and image, and send one long prompt to every engine before taking traffic."
+  - "SGLang prefill/decode: start the decode engines with `--disaggregation-decode-enable-radix-cache` (recommended). A decode engine then keeps the prefixes it received, and a request whose prefix it holds transfers about 1 MB instead of the whole prefix (93 MB without it, 0.7 MB with it, measured on DeepSeek-R1-Distill-Qwen-1.5B with a long shared prefix). SGLang v0.5.18 refuses the argument at start for models with sliding-window attention or state-space layers: the rows above name the models it was refused for. Not measured for Qwen3.6-27B-FP8 and gpt-oss-20b."
+  - "Prefill/decode, every engine: the prompt's KV travels from the prefill node to the decode node, so the sending node's network egress bounds the rate of requests whose prefix the decode engine does not hold: (prefill nodes x egress bytes per second) / (KV bytes of one prompt). Measured: 424 MB per prompt from two prefill nodes limited to 2 Gbit/s each gave 1.08 requests per second."
+  - "Prefill/decode, every engine: the gateway chooses the decode engine without regard to which one holds a prefix, so a shared prefix is transferred whole once per decode engine, not once per fleet. A conversation whose client sends `X-Conversation-Id` stays on one prefill/decode pair and pays one whole transfer (such a request is routed by the conversation, not by KV-exact selection). Sending each shared prefix once through every decode engine before taking traffic removes the cost."
 
 excludedFeatures:
   - "Tools: `tools`, `tool_choice`."
@@ -165,6 +169,8 @@ models:
         apis: [completions, chat]
         evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
         lastValidated: "2026-10-01"
+        launch:
+          - "prefill/decode: start the decode engines without `--disaggregation-decode-enable-radix-cache`; SGLang refuses it for this model (sliding-window attention) and the decode engine exits at start"
       - engine: trtllm
         engineVersion: 1.3.0rc24
         state: blocked
@@ -405,6 +411,8 @@ models:
         apis: [completions, chat]
         evidence: {renderDifferential: pass, pdChat: pass, pdCompletions: pass, abPerf: not_run}
         lastValidated: "2026-10-01"
+        launch:
+          - "prefill/decode: start the decode engines without `--disaggregation-decode-enable-radix-cache`; SGLang refuses it for this model (state-space layers) and the decode engine exits at start"
         detail: "hybrid model: the engine caches a prompt in 64-token chunks; the profile records it (`cacheChunk: 64`)."
       - engine: trtllm
         engineVersion: 1.3.0rc24
