@@ -681,6 +681,9 @@ type LoadbalanceEntryServiceArguments struct {
 	// Enum: [http1 http2 both]
 	BackendProtocol *string `json:"backend_protocol,omitempty"`
 
+	// backend tls effective
+	BackendTLSEffective *LoadbalanceEntryServiceArgumentsBackendTLSEffective `json:"backend_tls_effective,omitempty"`
+
 	// DNS host name sent as SNI to every endpoint of the rule. When mtls_backend.verify_server_cert is true the endpoint's certificate must carry it as a DNS subject alternative name. Empty: no SNI is sent and a verified endpoint must carry its own address. Never derived from the VIP or from a request's Host header. Needs mode=4 and security=2.
 	// Max Length: 253
 	BackendTLSServerName string `json:"backend_tls_server_name,omitempty"`
@@ -1023,6 +1026,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 		res = append(res, err)
 	}
 
+	if err := m.validateBackendTLSEffective(formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.validateBackendTLSServerName(formats); err != nil {
 		res = append(res, err)
 	}
@@ -1313,6 +1320,25 @@ func (m *LoadbalanceEntryServiceArguments) validateBackendProtocol(formats strfm
 	// value enum
 	if err := m.validateBackendProtocolEnum("serviceArguments"+"."+"backend_protocol", "body", *m.BackendProtocol); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateBackendTLSEffective(formats strfmt.Registry) error {
+	if swag.IsZero(m.BackendTLSEffective) { // not required
+		return nil
+	}
+
+	if m.BackendTLSEffective != nil {
+		if err := m.BackendTLSEffective.Validate(formats); err != nil {
+			if ve, ok := err.(*errors.Validation); ok {
+				return ve.ValidateName("serviceArguments" + "." + "backend_tls_effective")
+			} else if ce, ok := err.(*errors.CompositeError); ok {
+				return ce.ValidateName("serviceArguments" + "." + "backend_tls_effective")
+			}
+			return err
+		}
 	}
 
 	return nil
@@ -2488,6 +2514,10 @@ func (m *LoadbalanceEntryServiceArguments) validateSockMapMode(formats strfmt.Re
 func (m *LoadbalanceEntryServiceArguments) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
 	var res []error
 
+	if err := m.contextValidateBackendTLSEffective(ctx, formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.contextValidateFcEffective(ctx, formats); err != nil {
 		res = append(res, err)
 	}
@@ -2507,6 +2537,22 @@ func (m *LoadbalanceEntryServiceArguments) ContextValidate(ctx context.Context, 
 	if len(res) > 0 {
 		return errors.CompositeValidationError(res...)
 	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) contextValidateBackendTLSEffective(ctx context.Context, formats strfmt.Registry) error {
+
+	if m.BackendTLSEffective != nil {
+		if err := m.BackendTLSEffective.ContextValidate(ctx, formats); err != nil {
+			if ve, ok := err.(*errors.Validation); ok {
+				return ve.ValidateName("serviceArguments" + "." + "backend_tls_effective")
+			} else if ce, ok := err.(*errors.CompositeError); ok {
+				return ce.ValidateName("serviceArguments" + "." + "backend_tls_effective")
+			}
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -2585,6 +2631,124 @@ func (m *LoadbalanceEntryServiceArguments) MarshalBinary() ([]byte, error) {
 // UnmarshalBinary interface implementation
 func (m *LoadbalanceEntryServiceArguments) UnmarshalBinary(b []byte) error {
 	var res LoadbalanceEntryServiceArguments
+	if err := swag.ReadJSON(b, &res); err != nil {
+		return err
+	}
+	*m = res
+	return nil
+}
+
+// LoadbalanceEntryServiceArgumentsBackendTLSEffective What the data plane has installed for the TLS leg to the endpoints, beside what the rule asks for in mtls_backend.verify_server_cert, backend_ca_cert_id, backend_client_cert_id and backend_tls_server_name. Present on GET for mode=4 rules with security=2; ignored on input. Every member but status describes the installed policy, never the request. It is the policy new backend connections are made under, and does not say that any connection was verified. The listener of an address, port and protocol has one such policy, so rules that share a listener report the same one.
+//
+// swagger:model LoadbalanceEntryServiceArgumentsBackendTLSEffective
+type LoadbalanceEntryServiceArgumentsBackendTLSEffective struct {
+
+	// Certificate ID of the CA bundle in use, or "none".
+	Ca string `json:"ca,omitempty"`
+
+	// A client certificate is presented to endpoints. Always present, false included.
+	ClientCert bool `json:"client_cert"`
+
+	// Certificate ID of that client certificate. Absent when none is presented.
+	ClientCertID string `json:"client_cert_id,omitempty"`
+
+	// How many times the listener's backend context was replaced in place since the listener was created.
+	Generation int64 `json:"generation"`
+
+	// The name sent as SNI and expected of an endpoint's certificate. Absent when the endpoint address is expected.
+	ServerName string `json:"server_name,omitempty"`
+
+	// applied: the listener runs what the rule asks for. pending: the rule has no listener in the data plane yet and nothing is installed. failed: the listener runs something else than the rule asks for, which the other members describe; this is the state of a rule whose listener could not load a certificate replaced under the same ID, and of a restored rule that disagrees with the rules on its listener. unsupported: this Gateway was built without client-certificate support, see the backend_tls_verify capability; the leg is TLS without verification or a client certificate.
+	// Enum: [applied pending failed unsupported]
+	Status string `json:"status,omitempty"`
+
+	// Endpoint certificates are verified. Always present, false included.
+	Verify bool `json:"verify"`
+}
+
+// Validate validates this loadbalance entry service arguments backend TLS effective
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) Validate(formats strfmt.Registry) error {
+	var res []error
+
+	if err := m.validateStatus(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if len(res) > 0 {
+		return errors.CompositeValidationError(res...)
+	}
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsBackendTlsEffectiveTypeStatusPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["applied","pending","failed","unsupported"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsBackendTlsEffectiveTypeStatusPropEnum = append(loadbalanceEntryServiceArgumentsBackendTlsEffectiveTypeStatusPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusApplied captures enum value "applied"
+	LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusApplied string = "applied"
+
+	// LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusPending captures enum value "pending"
+	LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusPending string = "pending"
+
+	// LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusFailed captures enum value "failed"
+	LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusFailed string = "failed"
+
+	// LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusUnsupported captures enum value "unsupported"
+	LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusUnsupported string = "unsupported"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) validateStatusEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsBackendTlsEffectiveTypeStatusPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) validateStatus(formats strfmt.Registry) error {
+	if swag.IsZero(m.Status) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateStatusEnum("serviceArguments"+"."+"backend_tls_effective"+"."+"status", "body", m.Status); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ContextValidate validate this loadbalance entry service arguments backend TLS effective based on the context it is used
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
+	var res []error
+
+	if len(res) > 0 {
+		return errors.CompositeValidationError(res...)
+	}
+	return nil
+}
+
+// MarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) MarshalBinary() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return swag.WriteJSON(m)
+}
+
+// UnmarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) UnmarshalBinary(b []byte) error {
+	var res LoadbalanceEntryServiceArgumentsBackendTLSEffective
 	if err := swag.ReadJSON(b, &res); err != nil {
 		return err
 	}

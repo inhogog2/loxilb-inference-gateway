@@ -102,6 +102,19 @@ func lbAllowedSourcesCapability() *models.CapabilityStatus {
 	return status
 }
 
+// backendTLSVerifyCapability reports whether this gateway can verify a
+// backend and present a client certificate to it, from the predicate rule
+// admission refuses with.
+func backendTLSVerifyCapability() *models.CapabilityStatus {
+	name := cmn.CapabilityBackendTLSVerify
+	ready := true
+	status := &models.CapabilityStatus{Name: &name, Ready: &ready}
+	if perr := cmn.BackendTLSBuildPrecondition(cmn.MTLSBuild); perr != nil {
+		notReady(status, perr)
+	}
+	return status
+}
+
 // ConfigGetStatusCapabilities implements GET /status/capabilities: the
 // optional capabilities whose availability is decided by this gateway's
 // launch environment rather than by a request.
@@ -124,6 +137,7 @@ func ConfigGetStatusCapabilities(params operations.GetStatusCapabilitiesParams, 
 		Capabilities: []*models.CapabilityStatus{
 			kvExactVllmCapability(modelName),
 			lbAllowedSourcesCapability(),
+			backendTLSVerifyCapability(),
 		},
 	}
 	return operations.NewGetStatusCapabilitiesOK().WithPayload(payload)

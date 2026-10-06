@@ -118,9 +118,11 @@ func (R *RuleH) RefreshLbBackendCert(certID string) (int, []string) {
 	var kept []string
 	for _, r := range rules {
 		if r.sync == 0 {
+			r.backendTLSKept = false
 			continue
 		}
 		r.sync = 0
+		r.backendTLSKept = true
 		name := fmt.Sprintf("%s:%d (%s)", r.tuples.l3Dst.addr.IP.String(), r.tuples.l4Dst.valMin, listenerRuleName(&r.tuples))
 		kept = append(kept, name)
 		tk.LogIt(tk.LogError, "lb-rule %s keeps its previous backend TLS context: the material now under certificate %q was not loaded\n",

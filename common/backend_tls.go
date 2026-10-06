@@ -140,8 +140,8 @@ func ValidateBackendTLS(serv *LbServiceArg) error {
 	if !p.Requested() {
 		return nil
 	}
-	if !MTLSBuild {
-		return fmt.Errorf("backend TLS verification and client certificates need a build with client-certificate support")
+	if perr := BackendTLSBuildPrecondition(MTLSBuild); perr != nil {
+		return perr
 	}
 	if serv.Mode != LBModeFullProxy || serv.Security != LBServE2EHTTPS {
 		return fmt.Errorf("backend TLS verification and client certificates need mode fullproxy with security e2ehttps")

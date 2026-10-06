@@ -120,7 +120,43 @@ When a listener cannot load the new material, the answer is 400 and names the ru
 material is stored all the same; those rules keep the context they had until the certificate is
 written again.
 
-## 6. Upgrading
+## 6. Reading what is installed
+
+`GET` of a rule returns two different things, and only one of them is a statement about the data
+plane:
+
+- `mtls_backend.verify_server_cert`, `backend_ca_cert_id`, `backend_client_cert_id` and
+  `backend_tls_server_name` are what the rule asks for;
+- `backend_tls_effective` is what the listener has installed. It is read from the data plane on
+  every `GET`, is present for `mode=4` rules with `security=2`, and is ignored on input.
+
+```
+"backend_tls_effective": {
+  "status": "applied", "verify": true, "ca": "backend-ca",
+  "client_cert": true, "client_cert_id": "backend-client", "generation": 2
+}
+```
+
+| `status` | Meaning |
+|---|---|
+| `applied` | The listener runs what the rule asks for. |
+| `pending` | The rule has no listener in the data plane yet. Nothing is installed. |
+| `failed` | The listener runs something else than the rule asks for; the other members say what. A rule whose listener could not load a rotated certificate reads this way, and so does a restored rule that disagrees with the rules on its listener. |
+| `unsupported` | The gateway was built without client-certificate support. The leg is TLS without verification or a client certificate. |
+
+Every member but `status` describes the installed policy. `ca` is a certificate ID or `none`.
+`generation` counts the in-place replacements of the listener's backend context since the listener
+was created. The object says which policy new backend connections are made under; it does not say
+that any connection was verified. A rule without a backend policy reads `"verify": false`,
+`"ca": "none"`, `"client_cert": false`.
+
+`GET /status/capabilities` lists `backend_tls_verify`. It is `ready` on a gateway built with
+client-certificate support. On one built without it, `ready` is false with the reason
+`BACKEND_TLS_NOT_BUILT`, and a rule that asks for verification, a certificate ID or a server name
+is refused with 412 and the same sentence. A client should offer these arguments only when the
+capability is ready.
+
+## 7. Upgrading
 
 - A backend that requires a client certificate used to receive the listener's default certificate.
   It no longer does. Name a client certificate on the rule (sections 1 and 2).

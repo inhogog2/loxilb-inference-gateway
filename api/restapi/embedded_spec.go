@@ -1428,7 +1428,7 @@ func init() {
           "x-nullable": true
         },
         "name": {
-          "description": "Stable capability identifier. Deliberately not an enum: a build that gains a capability must not become unparseable to an older client. Known values - \"kv_exact_vllm\": admission of vLLM KV-exact (Tier 1.5) rules, kvExactMode 1 or 3 with kvEngineType vllm; \"lb_allowed_sources\": admission of allowedSources on the next load-balancer rule created.",
+          "description": "Stable capability identifier. Deliberately not an enum: a build that gains a capability must not become unparseable to an older client. Known values - \"kv_exact_vllm\": admission of vLLM KV-exact (Tier 1.5) rules, kvExactMode 1 or 3 with kvEngineType vllm; \"lb_allowed_sources\": admission of allowedSources on the next load-balancer rule created; \"backend_tls_verify\": admission of mtls_backend.verify_server_cert, backend_ca_cert_id, backend_client_cert_id and backend_tls_server_name on a load-balancer rule.",
           "example": "kv_exact_vllm",
           "type": "string"
         },
@@ -1441,7 +1441,7 @@ func init() {
           "type": "string"
         },
         "reason_code": {
-          "description": "Stable machine-readable code for why the capability is not ready, for clients that must branch without matching prose. Absent when ready. Known values - \"KV_EXACT_SEED_UNSET\": the Gateway was launched without a non-empty LLB_KV_NONE_HASH_SEED; \"KV_EXACT_SEED_TOO_LONG\": the seed exceeds the 23-byte representable bound; \"KV_EXACT_TOKENIZER_UNLOADABLE\": no tokenizer can be loaded for the model_name asked about (nothing staged under /etc/loxilb/tokenizers/\u003cmodel-slug\u003e/ and no published model profile carries one); \"LB_SOURCE_CHECK_SLOTS_EXHAUSTED\": every load-balancer rule slot able to carry source checks is held by an existing rule; \"LB_RULES_UNAVAILABLE\": this Gateway is not serving load-balancer rules (bgp-only mode).",
+          "description": "Stable machine-readable code for why the capability is not ready, for clients that must branch without matching prose. Absent when ready. Known values - \"KV_EXACT_SEED_UNSET\": the Gateway was launched without a non-empty LLB_KV_NONE_HASH_SEED; \"KV_EXACT_SEED_TOO_LONG\": the seed exceeds the 23-byte representable bound; \"KV_EXACT_TOKENIZER_UNLOADABLE\": no tokenizer can be loaded for the model_name asked about (nothing staged under /etc/loxilb/tokenizers/\u003cmodel-slug\u003e/ and no published model profile carries one); \"LB_SOURCE_CHECK_SLOTS_EXHAUSTED\": every load-balancer rule slot able to carry source checks is held by an existing rule; \"LB_RULES_UNAVAILABLE\": this Gateway is not serving load-balancer rules (bgp-only mode); \"BACKEND_TLS_NOT_BUILT\": this Gateway was built without client-certificate support.",
           "example": "KV_EXACT_SEED_UNSET",
           "type": "string"
         }
@@ -4776,6 +4776,50 @@ func init() {
                 "both"
               ],
               "type": "string"
+            },
+            "backend_tls_effective": {
+              "description": "What the data plane has installed for the TLS leg to the endpoints, beside what the rule asks for in mtls_backend.verify_server_cert, backend_ca_cert_id, backend_client_cert_id and backend_tls_server_name. Present on GET for mode=4 rules with security=2; ignored on input. Every member but status describes the installed policy, never the request. It is the policy new backend connections are made under, and does not say that any connection was verified. The listener of an address, port and protocol has one such policy, so rules that share a listener report the same one.",
+              "properties": {
+                "ca": {
+                  "description": "Certificate ID of the CA bundle in use, or \"none\".",
+                  "type": "string"
+                },
+                "client_cert": {
+                  "description": "A client certificate is presented to endpoints. Always present, false included.",
+                  "type": "boolean",
+                  "x-omitempty": false
+                },
+                "client_cert_id": {
+                  "description": "Certificate ID of that client certificate. Absent when none is presented.",
+                  "type": "string"
+                },
+                "generation": {
+                  "description": "How many times the listener's backend context was replaced in place since the listener was created.",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "server_name": {
+                  "description": "The name sent as SNI and expected of an endpoint's certificate. Absent when the endpoint address is expected.",
+                  "type": "string"
+                },
+                "status": {
+                  "description": "applied: the listener runs what the rule asks for. pending: the rule has no listener in the data plane yet and nothing is installed. failed: the listener runs something else than the rule asks for, which the other members describe; this is the state of a rule whose listener could not load a certificate replaced under the same ID, and of a restored rule that disagrees with the rules on its listener. unsupported: this Gateway was built without client-certificate support, see the backend_tls_verify capability; the leg is TLS without verification or a client certificate.",
+                  "enum": [
+                    "applied",
+                    "pending",
+                    "failed",
+                    "unsupported"
+                  ],
+                  "type": "string"
+                },
+                "verify": {
+                  "description": "Endpoint certificates are verified. Always present, false included.",
+                  "type": "boolean",
+                  "x-omitempty": false
+                }
+              },
+              "readOnly": true,
+              "type": "object"
             },
             "backend_tls_server_name": {
               "description": "DNS host name sent as SNI to every endpoint of the rule. When mtls_backend.verify_server_cert is true the endpoint's certificate must carry it as a DNS subject alternative name. Empty: no SNI is sent and a verified endpoint must carry its own address. Never derived from the VIP or from a request's Host header. Needs mode=4 and security=2.",
@@ -36337,7 +36381,7 @@ func init() {
           "example": 29
         },
         "name": {
-          "description": "Stable capability identifier. Deliberately not an enum: a build that gains a capability must not become unparseable to an older client. Known values - \"kv_exact_vllm\": admission of vLLM KV-exact (Tier 1.5) rules, kvExactMode 1 or 3 with kvEngineType vllm; \"lb_allowed_sources\": admission of allowedSources on the next load-balancer rule created.",
+          "description": "Stable capability identifier. Deliberately not an enum: a build that gains a capability must not become unparseable to an older client. Known values - \"kv_exact_vllm\": admission of vLLM KV-exact (Tier 1.5) rules, kvExactMode 1 or 3 with kvEngineType vllm; \"lb_allowed_sources\": admission of allowedSources on the next load-balancer rule created; \"backend_tls_verify\": admission of mtls_backend.verify_server_cert, backend_ca_cert_id, backend_client_cert_id and backend_tls_server_name on a load-balancer rule.",
           "type": "string",
           "example": "kv_exact_vllm"
         },
@@ -36350,7 +36394,7 @@ func init() {
           "type": "string"
         },
         "reason_code": {
-          "description": "Stable machine-readable code for why the capability is not ready, for clients that must branch without matching prose. Absent when ready. Known values - \"KV_EXACT_SEED_UNSET\": the Gateway was launched without a non-empty LLB_KV_NONE_HASH_SEED; \"KV_EXACT_SEED_TOO_LONG\": the seed exceeds the 23-byte representable bound; \"KV_EXACT_TOKENIZER_UNLOADABLE\": no tokenizer can be loaded for the model_name asked about (nothing staged under /etc/loxilb/tokenizers/\u003cmodel-slug\u003e/ and no published model profile carries one); \"LB_SOURCE_CHECK_SLOTS_EXHAUSTED\": every load-balancer rule slot able to carry source checks is held by an existing rule; \"LB_RULES_UNAVAILABLE\": this Gateway is not serving load-balancer rules (bgp-only mode).",
+          "description": "Stable machine-readable code for why the capability is not ready, for clients that must branch without matching prose. Absent when ready. Known values - \"KV_EXACT_SEED_UNSET\": the Gateway was launched without a non-empty LLB_KV_NONE_HASH_SEED; \"KV_EXACT_SEED_TOO_LONG\": the seed exceeds the 23-byte representable bound; \"KV_EXACT_TOKENIZER_UNLOADABLE\": no tokenizer can be loaded for the model_name asked about (nothing staged under /etc/loxilb/tokenizers/\u003cmodel-slug\u003e/ and no published model profile carries one); \"LB_SOURCE_CHECK_SLOTS_EXHAUSTED\": every load-balancer rule slot able to carry source checks is held by an existing rule; \"LB_RULES_UNAVAILABLE\": this Gateway is not serving load-balancer rules (bgp-only mode); \"BACKEND_TLS_NOT_BUILT\": this Gateway was built without client-certificate support.",
           "type": "string",
           "example": "KV_EXACT_SEED_UNSET"
         }
@@ -39695,6 +39739,50 @@ func init() {
                 "both"
               ]
             },
+            "backend_tls_effective": {
+              "description": "What the data plane has installed for the TLS leg to the endpoints, beside what the rule asks for in mtls_backend.verify_server_cert, backend_ca_cert_id, backend_client_cert_id and backend_tls_server_name. Present on GET for mode=4 rules with security=2; ignored on input. Every member but status describes the installed policy, never the request. It is the policy new backend connections are made under, and does not say that any connection was verified. The listener of an address, port and protocol has one such policy, so rules that share a listener report the same one.",
+              "type": "object",
+              "properties": {
+                "ca": {
+                  "description": "Certificate ID of the CA bundle in use, or \"none\".",
+                  "type": "string"
+                },
+                "client_cert": {
+                  "description": "A client certificate is presented to endpoints. Always present, false included.",
+                  "type": "boolean",
+                  "x-omitempty": false
+                },
+                "client_cert_id": {
+                  "description": "Certificate ID of that client certificate. Absent when none is presented.",
+                  "type": "string"
+                },
+                "generation": {
+                  "description": "How many times the listener's backend context was replaced in place since the listener was created.",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "server_name": {
+                  "description": "The name sent as SNI and expected of an endpoint's certificate. Absent when the endpoint address is expected.",
+                  "type": "string"
+                },
+                "status": {
+                  "description": "applied: the listener runs what the rule asks for. pending: the rule has no listener in the data plane yet and nothing is installed. failed: the listener runs something else than the rule asks for, which the other members describe; this is the state of a rule whose listener could not load a certificate replaced under the same ID, and of a restored rule that disagrees with the rules on its listener. unsupported: this Gateway was built without client-certificate support, see the backend_tls_verify capability; the leg is TLS without verification or a client certificate.",
+                  "type": "string",
+                  "enum": [
+                    "applied",
+                    "pending",
+                    "failed",
+                    "unsupported"
+                  ]
+                },
+                "verify": {
+                  "description": "Endpoint certificates are verified. Always present, false included.",
+                  "type": "boolean",
+                  "x-omitempty": false
+                }
+              },
+              "readOnly": true
+            },
             "backend_tls_server_name": {
               "description": "DNS host name sent as SNI to every endpoint of the rule. When mtls_backend.verify_server_cert is true the endpoint's certificate must carry it as a DNS subject alternative name. Empty: no SNI is sent and a verified endpoint must carry its own address. Never derived from the VIP or from a request's Host header. Needs mode=4 and security=2.",
               "type": "string",
@@ -40792,6 +40880,50 @@ func init() {
             "both"
           ]
         },
+        "backend_tls_effective": {
+          "description": "What the data plane has installed for the TLS leg to the endpoints, beside what the rule asks for in mtls_backend.verify_server_cert, backend_ca_cert_id, backend_client_cert_id and backend_tls_server_name. Present on GET for mode=4 rules with security=2; ignored on input. Every member but status describes the installed policy, never the request. It is the policy new backend connections are made under, and does not say that any connection was verified. The listener of an address, port and protocol has one such policy, so rules that share a listener report the same one.",
+          "type": "object",
+          "properties": {
+            "ca": {
+              "description": "Certificate ID of the CA bundle in use, or \"none\".",
+              "type": "string"
+            },
+            "client_cert": {
+              "description": "A client certificate is presented to endpoints. Always present, false included.",
+              "type": "boolean",
+              "x-omitempty": false
+            },
+            "client_cert_id": {
+              "description": "Certificate ID of that client certificate. Absent when none is presented.",
+              "type": "string"
+            },
+            "generation": {
+              "description": "How many times the listener's backend context was replaced in place since the listener was created.",
+              "type": "integer",
+              "x-omitempty": false
+            },
+            "server_name": {
+              "description": "The name sent as SNI and expected of an endpoint's certificate. Absent when the endpoint address is expected.",
+              "type": "string"
+            },
+            "status": {
+              "description": "applied: the listener runs what the rule asks for. pending: the rule has no listener in the data plane yet and nothing is installed. failed: the listener runs something else than the rule asks for, which the other members describe; this is the state of a rule whose listener could not load a certificate replaced under the same ID, and of a restored rule that disagrees with the rules on its listener. unsupported: this Gateway was built without client-certificate support, see the backend_tls_verify capability; the leg is TLS without verification or a client certificate.",
+              "type": "string",
+              "enum": [
+                "applied",
+                "pending",
+                "failed",
+                "unsupported"
+              ]
+            },
+            "verify": {
+              "description": "Endpoint certificates are verified. Always present, false included.",
+              "type": "boolean",
+              "x-omitempty": false
+            }
+          },
+          "readOnly": true
+        },
         "backend_tls_server_name": {
           "description": "DNS host name sent as SNI to every endpoint of the rule. When mtls_backend.verify_server_cert is true the endpoint's certificate must carry it as a DNS subject alternative name. Empty: no SNI is sent and a verified endpoint must carry its own address. Never derived from the VIP or from a request's Host header. Needs mode=4 and security=2.",
           "type": "string",
@@ -41710,6 +41842,50 @@ func init() {
           "type": "string"
         }
       }
+    },
+    "LoadbalanceEntryServiceArgumentsBackendTLSEffective": {
+      "description": "What the data plane has installed for the TLS leg to the endpoints, beside what the rule asks for in mtls_backend.verify_server_cert, backend_ca_cert_id, backend_client_cert_id and backend_tls_server_name. Present on GET for mode=4 rules with security=2; ignored on input. Every member but status describes the installed policy, never the request. It is the policy new backend connections are made under, and does not say that any connection was verified. The listener of an address, port and protocol has one such policy, so rules that share a listener report the same one.",
+      "type": "object",
+      "properties": {
+        "ca": {
+          "description": "Certificate ID of the CA bundle in use, or \"none\".",
+          "type": "string"
+        },
+        "client_cert": {
+          "description": "A client certificate is presented to endpoints. Always present, false included.",
+          "type": "boolean",
+          "x-omitempty": false
+        },
+        "client_cert_id": {
+          "description": "Certificate ID of that client certificate. Absent when none is presented.",
+          "type": "string"
+        },
+        "generation": {
+          "description": "How many times the listener's backend context was replaced in place since the listener was created.",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "server_name": {
+          "description": "The name sent as SNI and expected of an endpoint's certificate. Absent when the endpoint address is expected.",
+          "type": "string"
+        },
+        "status": {
+          "description": "applied: the listener runs what the rule asks for. pending: the rule has no listener in the data plane yet and nothing is installed. failed: the listener runs something else than the rule asks for, which the other members describe; this is the state of a rule whose listener could not load a certificate replaced under the same ID, and of a restored rule that disagrees with the rules on its listener. unsupported: this Gateway was built without client-certificate support, see the backend_tls_verify capability; the leg is TLS without verification or a client certificate.",
+          "type": "string",
+          "enum": [
+            "applied",
+            "pending",
+            "failed",
+            "unsupported"
+          ]
+        },
+        "verify": {
+          "description": "Endpoint certificates are verified. Always present, false included.",
+          "type": "boolean",
+          "x-omitempty": false
+        }
+      },
+      "readOnly": true
     },
     "LoadbalanceEntryServiceArgumentsFcEffective": {
       "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
