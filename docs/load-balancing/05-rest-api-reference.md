@@ -256,9 +256,22 @@ Metrics: `loxilb_proxy_halfclose_held` (held now), `loxilb_proxy_halfclose_held_
 `backend_first`, `expired`, `released`, `reset` — a client that reset while held, i.e. a cancel
 that was waited on — `other`), `loxilb_proxy_halfclose_hold_expired_total{answer_started,stream}`,
 `loxilb_proxy_halfclose_hold_refused_total{reason}`, `loxilb_proxy_halfclose_accel_skipped_total`
-(connections left unaccelerated so that they could be held), and the settings as
-`loxilb_proxy_halfclose_hold_allowed` / `loxilb_proxy_halfclose_hold_cap_seconds` /
+(connections left unaccelerated so that they could be held),
+`loxilb_proxy_halfclose_hold_spurious_wakeups_total{kind}` (`eof_reentry` should stay 0), and the
+settings as `loxilb_proxy_halfclose_hold_allowed` / `loxilb_proxy_halfclose_hold_cap_seconds` /
 `loxilb_proxy_halfclose_hold_default_mode` (1 while the default is `hold`).
+
+The L7 Proxy dashboard's collapsed "Half-close holds" row plots them, with the client FINs that
+had an answer owed (`loxilb_proxy_halfclose_fin_total{outcome="owed"}`: the clients a hold is
+for). Its first stats count over the dashboard's time range: holds taken, FINs with an answer
+owed, holds that expired before their answer began, and EOF re-entries. The shipped alert rules
+(`deploy/monitoring/prometheus/rules/loxilb-alerts.yml`, group `loxilb-halfclose`) fire on:
+
+| Alert | Fires on | Do |
+|---|---|---|
+| `LoxilbHalfCloseHoldExpiredBeforeAnswer` | A held client closed by the bound before any byte of its answer reached it | The first byte is slower than the bound (raise `capSeconds`), or the FIN was a cancel; do not set `defaultMode` to `hold` while it fires |
+| `LoxilbHalfCloseHoldEofReentry` | A held client's EOF handled a second time | A defect: report it with the gateway log; block and release if it repeats |
+| `LoxilbHalfCloseHoldLongLived` | The oldest hold older than an hour and twice the bound, for 5m | A client fed very slowly, or a hold that does not end; block and release if the held count keeps rising |
 
 ---
 
