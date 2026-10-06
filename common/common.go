@@ -2387,6 +2387,7 @@ type NetHookInterface interface {
 	NetLbRuleAdd(*LbRuleMod) (int, error)
 	NetLbRuleDel(*LbRuleMod) (int, error)
 	NetLbRuleGet() ([]LbRuleMod, error)
+	NetLbBackendCertRefresh(certID string) (int, []string, error)
 	NetKvExactBindingGet() ([]KvExactBindingMod, error)
 	NetKvExactBindingAdd(*KvExactBindingMod) (int, error)
 	NetKvExactBindingDel(*KvExactBindingMod) (int, error)

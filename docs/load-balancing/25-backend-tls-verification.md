@@ -62,7 +62,22 @@ Refused with `400`, naming the argument, before anything is changed:
 - an ID nothing is registered under, or an entry of the wrong usage;
 - a server name that is an address or not a DNS host name.
 
+- a rule on an address, port and protocol that already carry a rule with a different `security`
+  mode or a different backend TLS policy. The answer names the rule that is already there and the
+  arguments that differ.
+
 `GET` of a rule returns the three arguments as they were requested.
+
+### Rules that share a listener
+
+Rules that differ only in host, path or model share one listener, and the listener has one security
+mode and one backend TLS policy. Every rule on it must ask for the same. To change the policy of a
+listener that carries several rules, delete all but one, change that one, and create the others
+again with the new policy. A rule that is alone on its listener changes in place (section 4).
+
+A configuration saved by an earlier release may hold rules that disagree. It is restored as it is,
+the first rule's settings apply to the listener as they did before, and the gateway log names each
+rule that disagrees.
 
 ## 3. What a verified endpoint must present
 
@@ -91,12 +106,19 @@ connections are not dropped.
   its backend connection until the client closes it. To cut those over at once, delete and
   re-create the rule.
 
+The request waits for the data plane. When the new context cannot be built, the answer is 400, the
+rule keeps the policy it had, in the gateway and on `GET`, and the listener goes on serving with
+it. A new rule the data plane cannot install is answered with 400 as well and is not kept.
+
 ## 5. Rotating a certificate
 
-`PUT /config/cert/{certId}` replaces the material under the same ID. A rule that refers to the ID
-takes the new material the next time the rule is updated: the gateway compares the files behind
-the rule's IDs with the ones its context was built from and rebuilds the context when they differ.
-Until then the rule keeps the material it was installed with.
+`PUT /config/cert/{certId}` replaces the material under the same ID. For a `ca` or `client` entry
+the gateway then updates every rule that refers to the ID and waits for the data plane: each
+listener builds a new backend context from the new files and puts it in service as in section 4.
+
+When a listener cannot load the new material, the answer is 400 and names the rules concerned. The
+material is stored all the same; those rules keep the context they had until the certificate is
+written again.
 
 ## 6. Upgrading
 

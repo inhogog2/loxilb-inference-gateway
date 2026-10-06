@@ -37,7 +37,7 @@ type Cert struct {
 	// Required: true
 	KeyPem *string `json:"keyPem"`
 
-	// What the entry is for, fixed when the ID is created. "server": a listener certificate and key, selected by SNI. "ca": a bundle of CA certificates that backend certificates are verified against; certPem (plus chainPem) is the bundle and keyPem is the empty string. "client": the certificate and key the gateway presents to backends. Only "server" entries are offered to clients. A load-balancer rule refers to a "ca" entry with backend_ca_cert_id and to a "client" entry with backend_client_cert_id; an entry a rule refers to cannot be deleted. A rotated "ca" or "client" entry takes effect on a rule when that rule is next updated.
+	// What the entry is for, fixed when the ID is created. "server": a listener certificate and key, selected by SNI. "ca": a bundle of CA certificates that backend certificates are verified against; certPem (plus chainPem) is the bundle and keyPem is the empty string. "client": the certificate and key the gateway presents to backends. Only "server" entries are offered to clients. A load-balancer rule refers to a "ca" entry with backend_ca_cert_id and to a "client" entry with backend_client_cert_id; an entry a rule refers to cannot be deleted. Rotating a "ca" or "client" entry with PUT updates every rule that refers to it before the call returns; 400 names the rules whose listener could not load the new material and kept what it had.
 	// Enum: [server ca client]
 	Usage *string `json:"usage,omitempty"`
 }
