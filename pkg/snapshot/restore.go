@@ -243,6 +243,10 @@ func (e *Engine) restore(raw []byte, opts RestoreOptions) (*Result, error) {
 	result.SchemaVersion = doc.SchemaVersion
 	result.SnapshotGatewayVersion = doc.GatewayVersion
 	result.SnapshotGeneration = doc.Generation
+	// The checksum is verified; keys an earlier release wrote and this one no
+	// longer carries are dropped here, before any stage can apply, digest or
+	// re-encode them.
+	result.Warnings = append(result.Warnings, dropRetiredLbFields(doc)...)
 
 	// 2. VALIDATE -- schema-version gate + migrations + coverage checks.
 	// Stage gating: a VALIDATE failure returns here and never reaches

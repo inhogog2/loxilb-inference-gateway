@@ -114,16 +114,24 @@ must carry `Strict-Transport-Security: max-age=31536000; includeSubDomains`.
 > `keyUsage=critical,keyCertSign,cRLSign`. Check with
 > `openssl x509 -in ca.crt -text | grep -A1 'Key Usage'`.
 
-### 4.3 Backend re-encryption (pool → backend mTLS)
+### 4.3 Backend re-encryption (gateway → backend TLS)
 
-Reference uploaded material by **certId** (not inline paths — this reclaimed the `proxy_arg` budget):
+With `security: 2` (`e2ehttps`) the gateway opens a TLS connection to each backend. In this release
+that leg is **encrypted but not authenticated**: the gateway does not verify the backend's
+certificate, and a rule cannot select a client certificate for the gateway to present.
 
-| Field | Meaning |
+The arguments that request either are refused on `POST /config/loadbalancer` with `400`:
+
+| Argument | Status |
 |---|---|
-| `backend_ca_cert_id` | certId of the CA bundle that validates the backend's cert |
-| `backend_client_cert_id` | certId of LoxiLB's client cert+key presented to the backend |
+| `mtls_backend.verify_server_cert: true` | not available in this release |
+| `backend_ca_cert_id` | not available in this release |
+| `backend_client_cert_id` | not available in this release |
+| `mtls_backend.backend_ca_path`, `client_cert_path`, `client_key_path`, `client_cert_data`, `client_key_data` | retired; never stored, never returned |
 
-Resolved at backend `SSL_CTX` build time by the certId registry.
+`mtls_backend: {"verify_server_cert": false}` and an omitted `mtls_backend` are accepted and mean
+the same thing. Rules created before this release keep working exactly as they did; see
+[Backend TLS argument changes](24-backend-tls-argument-changes.md) for what changes on upgrade.
 
 ---
 

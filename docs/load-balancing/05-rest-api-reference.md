@@ -63,9 +63,9 @@ IPv6 in the path: bracket the literal — `…/externalipaddress/[2001:db8:aa::1
 | `hsts_max_age` | uint32 | — | seconds; `0`=off |
 | `hsts_include_subdomains`, `hsts_preload` | bool | — | |
 | `vip_qos_policy_id` | string | — | ref to `/config/policy` |
-| `backend_ca_cert_id`, `backend_client_cert_id` | string | — | backend re-encryption |
+| `backend_ca_cert_id`, `backend_client_cert_id` | string | — | backend CA bundle / backend client certificate by certId. Not available in this release: a nonempty value is refused (`400`). See [Backend TLS argument changes](24-backend-tls-argument-changes.md) |
 | `mtls_frontend` | object | — | frontend (client → gateway) mTLS: client-cert mode, CA/CRL paths, CN/SAN pattern |
-| `mtls_backend` | object | — | backend (gateway → backend) mTLS: server-cert verification, CA bundle, client cert/key |
+| `mtls_backend` | object | — | backend (gateway → backend) TLS request: `verify_server_cert` only. `true` is refused (`400`) in this release. The former path and inline-material keys are retired: refused on POST, never returned |
 | `backend_protocol` | string | — | backend ALPN capability: `http1` (default) · `http2` · `both` |
 | `half_close_mode` | string | — | fullproxy: a client that half-closes after its request. `hold` keeps it open until its answer is out (plaintext connections the kernel was never given to carry; with `sockMapMode` set, a client whose FIN comes before acceleration is not accelerated); `off` cuts it at its FIN; `inherit`/omitted runs on the process default (`defaultMode` at [`/config/halfclose`](#half-close-holds), `off` unless set) where the service could take `hold` itself, and `off` elsewhere. The bound and the allow/block switch are there too; GET's read-only `half_close_effective` says the mode in force and where it came from. `hold+parked` is refused (`400`) until available; `hold` is refused on other modes, on TLS services (`security` 1 or 2) and on P/D services (`pd_disagg_mode`), judged on the rule as a replace leaves it. Replace and `null` semantics as `fc_mode`; a change of this field alone applies in place. |
 

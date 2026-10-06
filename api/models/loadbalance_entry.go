@@ -667,10 +667,10 @@ type LoadbalanceEntryServiceArguments struct {
 	// Enum: [disabled required jwt apikey-or-jwt]
 	APIKeyAuth string `json:"api_key_auth,omitempty"`
 
-	// Reference used by the backend TLS material resolver for a managed CA bundle. It does not enable verification by itself; mtls_backend has missing verification-flag wiring. The C copy limits IDs to 63 bytes without admission rejection. Missing material can resolve to an empty path and select system CA paths if verification is otherwise enabled. Requested-security fail-closed semantics and material precedence are unresolved; this fallback is not an authenticated-backend guarantee.
+	// Certificate ID of the CA bundle the backend server certificate is verified against. Not available in this release: POST refuses a nonempty value with 400.
 	BackendCaCertID string `json:"backend_ca_cert_id,omitempty"`
 
-	// Reference for backend client certificate/key material. The resolver consults this ID when it did not obtain client material from the CA-ID directory. Missing material can leave no client certificate; the ID alone does not establish mTLS or server verification. IDs are copied into 63-byte payload capacity without admission rejection. Strict missing-material handling and precedence remain unresolved.
+	// Certificate ID of the client certificate and key the gateway presents to backends. Not available in this release: POST refuses a nonempty value with 400.
 	BackendClientCertID string `json:"backend_client_cert_id,omitempty"`
 
 	// Sets SO_KEEPALIVE + TCP_KEEPIDLE on backend socket in seconds. Keeps TCP CT entries alive through cloud NAT during long SSE streams. 0 = disabled. Recommended value 60 for most cloud environments.
@@ -3806,27 +3806,27 @@ func (m *LoadbalanceEntryServiceArgumentsHalfCloseEffective) UnmarshalBinary(b [
 	return nil
 }
 
-// LoadbalanceEntryServiceArgumentsMtlsBackend Requested backend verification and client-certificate settings for FullProxy re-encryption (mode=4, security=2) with mTLS support. Implementation warning: REST stores and returns this object, but the active create encoder does not wire its verification flag or legacy path/inline material into the backend TLS configuration. The separate configuration bridge has no caller in the reviewed path. These fields therefore do not establish backend authentication, even after a successful POST. Backend cert-ID fields have separate C consumers; their existence does not repair this missing verification wiring. Requested-security fail-closed behavior and material precedence remain pending policy decisions, not supported fallback guarantees.
+// LoadbalanceEntryServiceArgumentsMtlsBackend Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. In this release backend certificate verification is not available: a POST that sets verify_server_cert to true is refused with 400. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.
 //
 // swagger:model LoadbalanceEntryServiceArgumentsMtlsBackend
 type LoadbalanceEntryServiceArgumentsMtlsBackend struct {
 
-	// Requested gateway-local backend PEM CA bundle path. Stored/read back, but not wired into the active backend TLS material path; see mtls_backend. Omitting it does not by itself establish system-CA verification.
+	// Retired. POST refuses a nonempty value with 400. Never returned.
 	BackendCaPath string `json:"backend_ca_path,omitempty"`
 
-	// Requested inline client certificate declared as base64-encoded PEM. Stored/read back but not an effective substitute for a backend client certificate through the current active path.
+	// Retired. POST refuses a nonempty value with 400. Never returned.
 	ClientCertData string `json:"client_cert_data,omitempty"`
 
-	// Requested gateway-local client certificate path for backend mTLS, paired with client_key_path. Stored/read back but not wired into the active backend TLS material path.
+	// Retired. POST refuses a nonempty value with 400. Never returned.
 	ClientCertPath string `json:"client_cert_path,omitempty"`
 
-	// Requested inline client private key declared as base64-encoded PEM. Stored/read back with the object; active backend material wiring is missing. Treat the input and readback as sensitive key material.
+	// Retired. POST refuses a nonempty value with 400. Never returned.
 	ClientKeyData string `json:"client_key_data,omitempty"`
 
-	// Requested gateway-local client private-key path paired with client_cert_path. Stored/read back but not wired into the active backend TLS material path.
+	// Retired. POST refuses a nonempty value with 400. Never returned.
 	ClientKeyPath string `json:"client_key_path,omitempty"`
 
-	// Requests backend server-certificate verification. False leaves verification unrequested. Implementation gap - true is stored but does not reach the active backend_verify_cert flag through this intake; it must not be displayed as effective verification.
+	// Requests backend server-certificate verification. Not available in this release - POST refuses true with 400. A configuration written by an earlier release that carries true is loaded with the value reset to false and a warning.
 	VerifyServerCert *bool `json:"verify_server_cert,omitempty"`
 }
 
