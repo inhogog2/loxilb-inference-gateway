@@ -23,12 +23,28 @@ MODEL=$(profile_field "$PROF" baseModel)
 [ "$TOPOLOGY" = pd ] && BASE=${ABROOT}/${ENG}-${PROF} || BASE=${ABROOT}/${ENG}-${PROF}-${TOPOLOGY}
 mkdir -p "$BASE"; export AB_BASE=$BASE
 code=0
+DCACHE=$(sgl_decode_cache_plan "$ENG" "$TOPOLOGY" "$PROF"); DCACHE_ARG=""
+[ "$DCACHE" = on ] && DCACHE_ARG=$SGL_DECODE_CACHE_ARG
+# The argument handed in by SGL_EXTRA_DECODE for a profile that would run without it: recorded as what ran.
+case "$DCACHE/ ${SGL_EXTRA_DECODE:-} " in off/*" $SGL_DECODE_CACHE_ARG "*|refused/*" $SGL_DECODE_CACHE_ARG "*|unmeasured/*" $SGL_DECODE_CACHE_ARG "*) DCACHE=forced ;; esac
+# A fleet that starts without the cache says so, and why: never a silent off.
+decode_cache_line() {
+  case $DCACHE in
+  on) echo "  decode-side prefix cache: on ($SGL_DECODE_CACHE_ARG on every decode engine)" ;;
+  forced) echo "  decode-side prefix cache: on, from SGL_EXTRA_DECODE" ;;
+  off) echo "DECODE_CACHE_OFF SGL_DECODE_CACHE=0: the decode engines start without the decode-side prefix cache" ;;
+  refused) echo "DECODE_CACHE_SKIPPED refused: SGLang $SGL_VERSION does not start a decode engine of $PROF with $SGL_DECODE_CACHE_ARG; the decode engines start without it" ;;
+  unmeasured) echo "DECODE_CACHE_SKIPPED unmeasured: no decode engine of $PROF was started with $SGL_DECODE_CACHE_ARG on SGLang $SGL_VERSION (sgl_decode_cache_plan, env.sh); the decode engines start without it" ;;
+  esac
+}
 
 fleet_up() {
   local n pids=() rc=0
   for n in "${PNODES[@]}"; do PREFILL=$n CONVERGED=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" start "$ENG" "$ROLE1" "$PROF" & pids+=($!); done
-  # SGL_EXTRA_DECODE: SGLang arguments for the decode engines only (e.g. its decode-side prefix cache).
-  for n in "${DNODES[@]}"; do DECODE=$n EVROOT=$BASE/node-$n SGL_EXTRA="${SGL_EXTRA:-} ${SGL_EXTRA_DECODE:-}" "$COMPAT/engine.sh" start "$ENG" decode "$PROF" & pids+=($!); done
+  # The decode engines' own SGLang arguments: the decode-side prefix cache when this model takes it (env.sh),
+  # then SGL_EXTRA_DECODE. The state is kept with the evidence: points with and without it are not comparable.
+  echo "$DCACHE" > "$BASE/decode-cache.txt"
+  for n in "${DNODES[@]}"; do DECODE=$n EVROOT=$BASE/node-$n SGL_EXTRA="${SGL_EXTRA:-} $DCACHE_ARG ${SGL_EXTRA_DECODE:-}" "$COMPAT/engine.sh" start "$ENG" decode "$PROF" & pids+=($!); done
   for p in "${pids[@]}"; do wait "$p" || rc=1; done
   return $rc
 }
@@ -109,6 +125,7 @@ cal() { python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[sys.argv
 repeat_for() { python3 -c "import math,sys; print(max(3, math.ceil(float(sys.argv[1]) * $ARM_SECONDS / $FAMILIES)))" "$1"; }
 point() { "$AB_DIR/point.sh" "$ENG" "$PROF" "$1" "$2" "$3" "$(repeat_for "$3")" "${4:-chat}" || { code=1; return 1; }; }
 report() {
+  [ -s "$BASE/decode-cache.txt" ] && [ "$(cat "$BASE/decode-cache.txt")" != none ] && echo "# decode-side prefix cache: $(cat "$BASE/decode-cache.txt")"
   python3 - "$BASE" "$ENG" <<'PY'
 import glob, json, os, sys
 base, eng = sys.argv[1:]
@@ -133,11 +150,12 @@ PY
 }
 
 case $MODE in
-  fleet-up) fleet_up || code=1 ;;
+  fleet-up) decode_cache_line; fleet_up || code=1 ;;
   fleet-down) fleet_down ;;
   report) report ;;
   model)
     echo "=== A/B $ENG x $PROF ($MODEL), $TOPOLOGY: ${#PNODES[@]} $ROLE1 [$PREFILLS] + ${#DNODES[@]} decode [$DECODES] ==="
+    decode_cache_line
     if fleet_up && corpora && calibrate; then
       lo=$(cal rate_low); hi=$(cal rate_high)
       point "long-r$lo" "$BASE/corpus-long.jsonl" "$lo"
