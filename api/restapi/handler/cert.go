@@ -366,6 +366,20 @@ func certInUse(certId string) string {
 	return ""
 }
 
+// certRefreshRules has the rules that refer to a certificate ID pushed again
+// after its material was replaced. It returns how many were pushed and names
+// the ones whose listener kept its previous context.
+func certRefreshRules(certId string) (int, []string) {
+	if ApiHooks == nil {
+		return 0, nil
+	}
+	pushed, kept, err := ApiHooks.NetLbBackendCertRefresh(certId)
+	if err != nil {
+		return 0, nil
+	}
+	return pushed, kept
+}
+
 // --- CRUD handlers (deferred-regen: generated op types come from `make build`) -----------
 
 // ConfigPostCert uploads inline PEM under a certId: validates (malformed PEM ⇒ 400), persists
@@ -467,10 +481,20 @@ func ConfigPutCert(params operations.PutConfigCertCertIDParams, principal interf
 	}
 	if cert.Usage != cmn.CertUsageServer {
 		certStoreBackend(cert)
-		// A rule picks the new material up when it is next updated: the
-		// listener's backend context is rebuilt when the files behind its
-		// certificate IDs are no longer the ones it was built from.
-		tk.LogIt(tk.LogInfo, "api: Cert %s rotated (usage %s)\n", cert.CertId, cert.Usage)
+		// The rules that refer to the ID are pushed again: a listener
+		// rebuilds its backend context when the files behind its certificate
+		// IDs are no longer the ones the context was built from. One that
+		// cannot load the new material keeps the context it has, and the
+		// caller is told, because the material is stored either way.
+		pushed, kept := certRefreshRules(cert.CertId)
+		tk.LogIt(tk.LogInfo, "api: Cert %s rotated (usage %s, %d rule(s) pushed, %d kept the previous context)\n",
+			cert.CertId, cert.Usage, pushed, len(kept))
+		if len(kept) != 0 {
+			return operations.NewPutConfigCertCertIDBadRequest().WithPayload(ResultErrorResponseErrorMessage(fmt.Sprintf(
+				"cert: certId %q is stored, but the data plane could not load it for %s; "+
+					"those rules keep the previous material until the certificate is written again",
+				cert.CertId, strings.Join(kept, ", "))))
+		}
 		return operations.NewPutConfigCertCertIDOK()
 	}
 	if err := certRotate(cert.CertId); err != nil {

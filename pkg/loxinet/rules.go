@@ -4213,6 +4213,21 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 	eRule := R.tables[RtLB].eMap[rt.ruleKey()]
 
+	// The data plane keeps the security mode and the backend TLS contexts once
+	// per listener, so a rule that asks for something else than the rules
+	// already on its listener would silently run with theirs. A restored
+	// configuration is kept whole and the disagreement is logged instead.
+	if lBActs.mode == cmn.LBModeFullProxy {
+		if other, diff := R.lbListenerTLSConflict(eRule, &rt, listenerTLSOfServ(&serv)); other != nil {
+			conflict := listenerTLSConflictError(other, diff)
+			if !lbConfigReplay(&serv) {
+				return RuleArgsErr, &cmn.RuleArgumentError{Err: conflict}
+			}
+			tk.LogIt(tk.LogError, "lb-rule %s:%d restored on a listener it disagrees with, the listener's settings apply: %v\n",
+				serv.ServIP, serv.ServPort, conflict)
+		}
+	}
+
 	// Resolve the credential-policy pair the rule will end up with BEFORE
 	// any state is touched, on create and replace alike. The profile rides
 	// the same preserve-on-omit replace semantics as api_key_auth (they are
@@ -4349,10 +4364,6 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.hstsMaxAge != serv.HstsMaxAge ||
 			eRule.hstsIncludeSubdomains != serv.HstsIncludeSubdomains ||
 			eRule.hstsPreload != serv.HstsPreload ||
-			eRule.backendCaCertId != serv.BackendCaCertId ||
-			eRule.backendClientCertId != serv.BackendClientCertId ||
-			eRule.backendTLSServerName != serv.BackendTLSServerName ||
-			backendVerifyOf(eRule.mtlsBackend) != backendVerifyOf(serv.MTLSBackend) ||
 			!strSliceEqual(eRule.alpnProtocols, serv.AlpnProtocols) ||
 			!strSliceEqual(eRule.tlsVersions, serv.TlsVersions) ||
 			eRule.name != serv.Name {
@@ -4424,6 +4435,21 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.halfCloseMode != nextHalfClose) {
 			ruleChg = true
 			inPlaceOnlyChg = true
+		}
+
+		// A full-proxy listener takes a new backend TLS policy in place: the
+		// new context is built first and the old one stays in service when
+		// that fails. So a replace that changes nothing a listener must be
+		// re-created for keeps the entry, and the policy the rule held is
+		// kept at hand until the data plane has answered.
+		backendTLSStaged := false
+		backendTLSBefore := backendTLSFieldsOf(eRule)
+		if backendTLSChanged(eRule, &serv) {
+			if (!ruleChg || inPlaceOnlyChg) && lBActs.mode == cmn.LBModeFullProxy {
+				inPlaceOnlyChg = true
+				backendTLSStaged = true
+			}
+			ruleChg = true
 		}
 
 		if !ruleChg {
@@ -4693,6 +4719,20 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			}
 		}
 		DpBrokerSyncBarrier(mh.dp)
+		if lBActs.mode == cmn.LBModeFullProxy && eRule.sync != 0 {
+			if !backendTLSStaged {
+				return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(false)}
+			}
+			// The listener still runs the policy the rule had. Put the
+			// rule back to it and push once more, so that what is stored,
+			// what is reported and what is installed agree again.
+			backendTLSBefore.restore(eRule)
+			eRule.DP(DpCreate)
+			DpBrokerSyncBarrier(mh.dp)
+			tk.LogIt(tk.LogError, "lb-rule %s backend TLS policy not replaced, the previous policy stays (sync %d)\n",
+				eRule.tuples.String(), eRule.sync)
+			return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(true)}
+		}
 		if chwblTxn {
 			R.flushLBCtEntries(eRule, CtFlushRidMatchOrZero)
 		}
@@ -5086,6 +5126,19 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	R.flushLBCtEntries(r, CtFlushRidMatchOrZero)
 	r.DP(DpCreate)
 	DpBrokerSyncBarrier(mh.dp)
+	// A full-proxy rule the data plane did not install has no listener. It is
+	// taken back out, so the caller is told and nothing is left to be retried
+	// behind its back. A restored configuration is kept whole instead and the
+	// rule is retried, as before.
+	if lBActs.mode == cmn.LBModeFullProxy && r.sync != 0 && !lbConfigReplay(&serv) {
+		tk.LogIt(tk.LogError, "lb-rule %s not installed by the data plane, removed (sync %d)\n",
+			r.tuples.String(), r.sync)
+		if _, derr := R.DeleteLbRule(serv); derr != nil {
+			tk.LogIt(tk.LogError, "lb-rule %s could not be removed after a refused install: %v\n",
+				r.tuples.String(), derr)
+		}
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(false)}
+	}
 	R.flushLBCtEntries(r, CtFlushRidZeroOnly)
 
 	// Install the contract word now that the DP worker is creating the

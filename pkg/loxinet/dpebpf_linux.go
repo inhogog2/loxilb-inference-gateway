@@ -58,32 +58,6 @@ int proxy_update_qos_config(struct proxy_ent *key, uint64_t cir_bps, uint64_t pi
 int proxy_set_service_catalog(uint32_t xip, uint16_t xport, uint8_t protocol, uint16_t catalog_id);
 // Note: chwbl_prefix_hash_level is now propagated via dp_proxy_tacts.chwbl_prefix_hash_level during proxy_add_entry
 
-// mTLS configuration structures (matching proxy_arg_t fields)
-struct mtls_frontend_config {
-  uint8_t mode;                      // 0=disabled, 1=optional, 2=required
-  char client_ca_path[256];          // Client CA bundle path
-  char client_ca_cert_data[4096];    // Client CA certificate data (PEM)
-  uint8_t require_client_cn;         // 1=require CN pattern match
-  char client_cn_pattern[256];       // CN pattern (e.g., "*.corp.example.com")
-};
-
-struct mtls_backend_config {
-  uint8_t verify_server_cert;        // 1=verify server cert
-  char backend_ca_path[256];         // Backend CA bundle path
-  char client_cert_path[256];        // Client cert for backend
-  char client_key_path[256];         // Client key for backend
-  char client_cert_data[4096];       // Client cert data (PEM)
-  char client_key_data[4096];        // Client key data (PEM)
-};
-
-// Function to update proxy mTLS configuration after proxy entry is created
-int proxy_update_mtls_config(struct proxy_ent *key,
-                              struct mtls_frontend_config *frontend,
-                              struct mtls_backend_config *backend);
-
-// Function to clean up mTLS configuration when rule is deleted
-int proxy_cleanup_mtls_config(struct proxy_ent *key);
-
 // (-10..13): certId registry entry points (declared in
 // loxilb-ebpf/common/sockproxy_ssl.h). Prototyped inline here — like struct proxy_ent
 // above — to avoid pulling sockproxy.h/uthash into this preamble. These persist-free
@@ -100,7 +74,7 @@ int proxy_delete_cert(const char *certId);
 //
 // A SEPARATE CGO attach call carries the variable-length ordered route array to
 // the running sockproxy — NEVER inline on proxy_arg (the 4096-byte _Static_assert
-// forbids it). Modeled on proxy_update_mtls_config. The l7_route_t IR below is an
+// forbids it). The l7_route_t IR below is an
 // ABI-IDENTICAL mirror of the canonical definition in
 // loxilb-ebpf/common/sockproxy_l7policy.h — we mirror it here (instead of including
 // that header) for the SAME reason this preamble mirrors struct proxy_ent: pulling
@@ -1995,11 +1969,6 @@ func DpLBRuleMod(w *LBDpWorkQ) int {
 			for _, ep := range w.endPoints {
 				_ = mh.dp.DpHooks.DeleteEndpointFromGPUIndexMap(ep.XIP, ep.XPort)
 			}
-		}
-
-		// Clean up mTLS configuration when rule is deleted
-		if w.NatType == DpFullProxy {
-			DpProxyCleanupMTLS(w.ServiceIP, w.L4Port, w.Proto)
 		}
 
 		C.llb_del_map_elem_wval(C.LL_DP_NAT_MAP,
@@ -5875,33 +5844,6 @@ func (e *DpEbpfH) NetTraceCatalogParserDelete(catalogID uint16) error {
 	return nil
 }
 
-// DpProxyCleanupMTLS - Clean up mTLS configuration when a rule is deleted
-// This prevents memory leaks by removing stored mTLS config from the bridge storage
-func DpProxyCleanupMTLS(serviceIP net.IP, port uint16, proto uint8) int {
-	tk.LogIt(tk.LogDebug, "[DP] Cleaning up mTLS config for %s:%d proto=%d\n",
-		serviceIP.String(), port, proto)
-
-	// Build proxy key to identify the rule
-	var proxyKey C.struct_proxy_ent
-	if serviceIP.To4() != nil {
-		proxyKey.xip = C.uint(tk.IPtonl(serviceIP))
-	} else {
-		// IPv6 not yet supported, but don't fail cleanup
-		return 0
-	}
-	proxyKey.xport = C.ushort(tk.Htons(port))
-	proxyKey.protocol = C.uchar(proto)
-
-	// Call C function to remove stored mTLS configuration
-	ret := C.proxy_cleanup_mtls_config(&proxyKey)
-	if ret != 0 {
-		// Don't treat cleanup failure as critical error
-		tk.LogIt(tk.LogDebug, "[DP] mTLS cleanup returned %d (may not exist)\n", int(ret))
-	}
-
-	return 0
-}
-
 // --- certId registry bridge (13) --------------------
 //
 // DpProxyRegisterCert / DpProxyRotateCert / DpProxyDeleteCert bridge the Go control
@@ -6194,7 +6136,7 @@ func DpProxyAttachL7Policy(serviceIP net.IP, port uint16, proto uint8, routes []
 }
 
 // DpProxyDetachL7Policy - detach the L7 policy from a rule (regfrees every compiled
-// REGEX program on the C side). Mirrors DpProxyCleanupMTLS.
+// REGEX program on the C side).
 func DpProxyDetachL7Policy(serviceIP net.IP, port uint16, proto uint8) int {
 	tk.LogIt(tk.LogDebug, "[DP] Detaching L7 policy for %s:%d proto=%d\n",
 		serviceIP.String(), port, proto)

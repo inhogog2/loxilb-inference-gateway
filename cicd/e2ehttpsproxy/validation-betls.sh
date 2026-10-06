@@ -46,6 +46,23 @@ post_rule() { # extra serviceArguments (JSON members, leading comma)
     { "endpointIP": "33.33.33.1", "targetPort": 8081, "weight": 1 }
   ]}'
 }
+# The same rule shape under another host or on another port. Prints the
+# answer's body, then its status on a line of its own.
+post_rule_at() { # port, host, extra serviceArguments
+  $dexec llb1 curl -s -w '\n%{http_code}' -X POST $API/loadbalancer \
+    -H "Content-Type: application/json" -d '{
+  "serviceArguments": { "externalIP": "'$VIP'", "port": '$1', "protocol": "tcp",
+    "security": 2, "mode": 4, "host": "'$2'", "backend_protocol": "http2"'"$3"' },
+  "endpoints": [
+    { "endpointIP": "31.31.31.1", "targetPort": 8081, "weight": 1 },
+    { "endpointIP": "32.32.32.1", "targetPort": 8081, "weight": 1 },
+    { "endpointIP": "33.33.33.1", "targetPort": 8081, "weight": 1 }
+  ]}'
+}
+del_rule_at() { # port, host
+  $dexec llb1 curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+    "$API/loadbalancer/hosturl/$2/externalipaddress/$VIP/port/$1/protocol/tcp"
+}
 del_rule() {
   $dexec llb1 curl -s -o /dev/null -w '%{http_code}' -X DELETE \
     "$API/loadbalancer/hosturl/$VIP/externalipaddress/$VIP/port/$PORT/protocol/tcp"
@@ -134,6 +151,26 @@ body=$(get_rules)
   && pass "GET reports the certificate IDs of the rule" || fail "GET does not report the rule's certificate IDs"
 [ "$(del_cert betls-ca)" == "400" ] && pass "a certificate a rule refers to cannot be deleted" || fail "a certificate in use was deleted"
 
+echo "A second rule on the same listener"
+before=$(rule_list)
+ans=$(post_rule_at $PORT sibling.betls.test '')
+[ "${ans##*$'\n'}" == "400" ] && pass "a rule that asks for another backend policy than its listener has is refused" \
+  || fail "a second rule with another backend policy was answered ${ans##*$'\n'}, want 400"
+[[ "$ans" == *"$VIP"* && "$ans" == *"mtls_backend.verify_server_cert"* && "$ans" == *"backend_ca_cert_id"* ]] \
+  && pass "the refusal names the rule already there and the arguments that differ" \
+  || fail "the refusal does not name the rule and the arguments: ${ans:0:300}"
+[ "$(rule_list)" == "$before" ] && pass "the rule list is unchanged by the refused rule" || fail "the refused rule changed the rule list"
+ans=$(post_rule_at $PORT sibling.betls.test ", $BE")
+[ "${ans##*$'\n'}" == "200" ] && pass "a second rule with the same backend policy is accepted" \
+  || fail "a second rule with the same policy was answered ${ans##*$'\n'}, want 200: ${ans:0:300}"
+before=$(rule_list)
+[ "$(post_rule ', "mtls_backend": {"verify_server_cert": true}, "backend_ca_cert_id": "betls-otherca", "backend_client_cert_id": "betls-client"')" == "400" ] \
+  && pass "one of two rules cannot change the policy of the listener they share" \
+  || fail "a rule changed the backend policy of a shared listener"
+[ "$(rule_list)" == "$before" ] && pass "both rules are as they were" || fail "the refused change altered a rule"
+expect_served "with two rules on the listener"
+[ "$(del_rule_at $PORT sibling.betls.test)" == "200" ] && pass "the second rule is deleted" || fail "the second rule could not be deleted"
+
 echo "A CA the endpoints do not chain to"
 n=$(replaced)
 rc=$(post_rule ', "mtls_backend": {"verify_server_cert": true}, "backend_ca_cert_id": "betls-otherca", "backend_client_cert_id": "betls-client"'); echo "  POST -> $rc"
@@ -145,6 +182,32 @@ n=$(replaced)
 rc=$(post_rule ", $BE"); echo "  POST -> $rc"
 expect_replaced $n
 expect_served "after the policy was put back"
+
+echo "A policy the data plane cannot build"
+# The entry is registered whole and its file is damaged afterwards, so the
+# request passes every check the gateway makes before the data plane is asked.
+[ "$(post_cert betls-damagedca ca minica.pem)" == "201" ] || fail "precondition: could not register the CA to damage"
+$dexec llb1 sh -c 'echo "not a certificate" > /etc/loxilb/certs/betls-damagedca/ca.crt'
+DMG='"mtls_backend": {"verify_server_cert": true}, "backend_ca_cert_id": "betls-damagedca", "backend_client_cert_id": "betls-client"'
+before=$(rule_list); nr=$(refused)
+rc=$(post_rule ", $DMG"); echo "  POST -> $rc"
+[ "$rc" == "400" ] && pass "a policy change the data plane refuses is answered 400" || fail "a refused policy change was answered $rc, want 400"
+[ "$(refused)" -gt "$nr" ] && pass "the data plane refused the new context and kept the one in service" \
+  || fail "the data plane log shows no refused replacement: the request was stopped earlier, or not at all"
+[ "$(rule_list)" == "$before" ] && pass "the rule keeps the policy it had" || fail "a refused change is stored on the rule"
+expect_served "after the refused change"
+nr=$(refused); sleep 20
+[ "$(refused)" == "$nr" ] && pass "the refused policy is not pushed again behind the caller's back" \
+  || fail "the refused policy was pushed again $(( $(refused) - nr )) time(s) in 20s"
+ans=$(post_rule_at $((PORT + 1)) "$VIP" ", $DMG")
+[ "${ans##*$'\n'}" == "400" ] && pass "a new rule the data plane cannot install is answered 400" \
+  || fail "a new rule with a context that cannot be built was answered ${ans##*$'\n'}, want 400"
+[ "$(rule_list)" == "$before" ] && pass "the rule that was not installed is not kept" || fail "a rule the data plane refused is in the rule list"
+ans=$(post_rule_at $((PORT + 1)) "$VIP" ", $BE")
+[ "${ans##*$'\n'}" == "200" ] && pass "the same rule with a policy that can be built is installed" \
+  || fail "the rule could not be created after the refused attempt: ${ans:0:300}"
+[ "$(del_rule_at $((PORT + 1)) "$VIP")" == "200" ] || fail "the rule on the second port could not be deleted"
+del_cert betls-damagedca > /dev/null
 
 echo "A server name the endpoints' certificates do not carry"
 n=$(replaced)
@@ -163,11 +226,16 @@ n=$(replaced)
 rc=$(post_rule ", $BE"); echo "  POST -> $rc"
 expect_replaced $n
 expect_served "before the rotation"
+before=$(rule_list); n=$(replaced)
 [ "$(put_cert betls-ca ca otherca/minica.pem)" == "200" ] && pass "the CA entry is rotated to another CA" || fail "rotation refused"
-n=$(replaced)
-rc=$(post_rule ", $BE"', "name": "betls-rotated"'); echo "  POST (rule updated) -> $rc"
-expect_replaced $n
+[ "$(replaced)" -gt "$n" ] && pass "the rotation reached the listener before the call returned" \
+  || fail "the listener's backend context was not replaced by the rotation"
+[ "$(rule_list)" == "$before" ] && pass "the rule itself was not written" || fail "the rotation changed the rule"
 expect_refused "same IDs, rotated CA"
+n=$(replaced)
+[ "$(put_cert betls-ca ca minica.pem)" == "200" ] && pass "the CA entry is rotated back" || fail "rotation back refused"
+[ "$(replaced)" -gt "$n" ] && pass "the second rotation reached the listener" || fail "the second rotation did not reach the listener"
+expect_served "after the CA was rotated back"
 
 [ "$(gw_pid)" == "$pid0" ] && pass "gateway pid unchanged ($pid0)" || fail "gateway pid changed $pid0 -> $(gw_pid)"
 echo "  DELETE rule -> $(del_rule)"
