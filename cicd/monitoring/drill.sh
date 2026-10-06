@@ -28,7 +28,9 @@
 # publisher, no engines, no HA peer in this scenario): the loxilb-kv-events
 # and loxilb-pd groups, KvExact* attestation, LoxilbRestoreRollbackFailed
 # (would need fault injection mid-apply), LoxilbHaSyncFailing (needs an xsync
-# peer applying asymmetric state). They are covered by promtool unit tests
+# peer applying asymmetric state), the loxilb-halfclose group (needs a hold
+# rule, a half-closing client and a backend slower than the bound). They are
+# covered by promtool unit tests
 # (rules/tests/) and by the engine-matrix/HA-pair qualification runs.
 
 source ../common.sh
