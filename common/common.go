@@ -1349,6 +1349,12 @@ type LbServiceArg struct {
 	// carries the authoritative binding (including the allocation high-water
 	// mark that prevents generation reuse). In-memory only (json:"-").
 	RestoreReplay bool `json:"-"`
+	// BootReplay - set when this rule add replays the saved lbconfig.txt at
+	// start. Like a restore, the saved configuration is kept whole: a rule
+	// the data plane cannot install yet stays and is retried, and a rule
+	// that disagrees with its listener is admitted and logged. In-memory
+	// only (json:"-").
+	BootReplay bool `json:"-"`
 
 	// CHWBL/WRR_HASH configuration. Presence bits are wire-only metadata used to
 	// distinguish replace omission from an explicit reset to the public default.

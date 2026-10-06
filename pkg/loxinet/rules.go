@@ -4220,7 +4220,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if lBActs.mode == cmn.LBModeFullProxy {
 		if other, diff := R.lbListenerTLSConflict(eRule, &rt, listenerTLSOfServ(&serv)); other != nil {
 			conflict := listenerTLSConflictError(other, diff)
-			if !serv.RestoreReplay {
+			if !lbConfigReplay(&serv) {
 				return RuleArgsErr, &cmn.RuleArgumentError{Err: conflict}
 			}
 			tk.LogIt(tk.LogError, "lb-rule %s:%d restored on a listener it disagrees with, the listener's settings apply: %v\n",
@@ -5130,7 +5130,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	// taken back out, so the caller is told and nothing is left to be retried
 	// behind its back. A restored configuration is kept whole instead and the
 	// rule is retried, as before.
-	if lBActs.mode == cmn.LBModeFullProxy && r.sync != 0 && !serv.RestoreReplay {
+	if lBActs.mode == cmn.LBModeFullProxy && r.sync != 0 && !lbConfigReplay(&serv) {
 		tk.LogIt(tk.LogError, "lb-rule %s not installed by the data plane, removed (sync %d)\n",
 			r.tuples.String(), r.sync)
 		if _, derr := R.DeleteLbRule(serv); derr != nil {

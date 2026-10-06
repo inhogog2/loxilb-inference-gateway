@@ -130,3 +130,11 @@ func (R *RuleH) RefreshLbBackendCert(certID string) (int, []string) {
 		certID, len(rules), len(kept))
 	return len(rules), kept
 }
+
+// lbConfigReplay reports whether a rule add replays a saved configuration, a
+// snapshot restore or the lbconfig.txt read at start, and not a request. A
+// saved configuration is kept whole: what it holds ran before, and dropping
+// one of its rules would lose it from the next save as well.
+func lbConfigReplay(serv *cmn.LbServiceArg) bool {
+	return serv.RestoreReplay || serv.BootReplay
+}
