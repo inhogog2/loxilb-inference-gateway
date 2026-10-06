@@ -34,8 +34,8 @@ func dropRetiredLbKeys(lb *cmn.LbRuleMod) *cmn.LbRuleMod {
 		tk.LogIt(tk.LogWarning, "nlp: LB %s:%d/%s: mtls_backend keys no longer supported and ignored: %s\n",
 			lb.Serv.ServIP, lb.Serv.ServPort, lb.Serv.Proto, strings.Join(names, ", "))
 	}
-	if lb.Serv.MTLSBackend.ResetUnavailable() {
-		tk.LogIt(tk.LogWarning, "nlp: LB %s:%d/%s: mtls_backend.verify_server_cert is not available in this release and was reset to false; it had no effect\n",
+	if lb.Serv.MTLSBackend.ResetUnverifiable(lb.Serv.BackendCaCertId) {
+		tk.LogIt(tk.LogWarning, "nlp: LB %s:%d/%s: mtls_backend.verify_server_cert names no backend_ca_cert_id and was reset to false; it had no effect\n",
 			lb.Serv.ServIP, lb.Serv.ServPort, lb.Serv.Proto)
 	}
 	return lb

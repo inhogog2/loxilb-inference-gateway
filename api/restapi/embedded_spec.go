@@ -1523,9 +1523,19 @@ func init() {
           "type": "array"
         },
         "keyPem": {
-          "description": "Private key in PEM. Required on POST/PUT. Persisted 0600 (key-at-rest). Never returned on GET.",
+          "description": "Private key in PEM on POST/PUT for usage \"server\" and \"client\". For usage \"ca\" the member is still sent and must be the empty string; a key is refused. Persisted 0600 (key-at-rest). Never returned on GET.",
           "type": "string",
           "x-nullable": true
+        },
+        "usage": {
+          "default": "server",
+          "description": "What the entry is for, fixed when the ID is created. \"server\": a listener certificate and key, selected by SNI. \"ca\": a bundle of CA certificates that backend certificates are verified against; certPem (plus chainPem) is the bundle and keyPem is the empty string. \"client\": the certificate and key the gateway presents to backends. Only \"server\" entries are offered to clients. A load-balancer rule refers to a \"ca\" entry with backend_ca_cert_id and to a \"client\" entry with backend_client_cert_id; an entry a rule refers to cannot be deleted. A rotated \"ca\" or \"client\" entry takes effect on a rule when that rule is next updated.",
+          "enum": [
+            "server",
+            "ca",
+            "client"
+          ],
+          "type": "string"
         }
       },
       "required": [
@@ -4742,11 +4752,11 @@ func init() {
               "type": "string"
             },
             "backend_ca_cert_id": {
-              "description": "Certificate ID of the CA bundle the backend server certificate is verified against. Not available in this release: POST refuses a nonempty value with 400.",
+              "description": "Certificate ID of the CA bundle the backend server certificate is verified against. It must name a /config/cert entry with usage \"ca\". Required when mtls_backend.verify_server_cert is true, refused with 400 without it.",
               "type": "string"
             },
             "backend_client_cert_id": {
-              "description": "Certificate ID of the client certificate and key the gateway presents to backends. Not available in this release: POST refuses a nonempty value with 400.",
+              "description": "Certificate ID of the client certificate and key the gateway presents to backends that ask for one. It must name a /config/cert entry with usage \"client\". Without it the gateway presents no certificate. Needs mode=4 and security=2.",
               "type": "string"
             },
             "backend_keepalive_interval_sec": {
@@ -4765,6 +4775,11 @@ func init() {
                 "http2",
                 "both"
               ],
+              "type": "string"
+            },
+            "backend_tls_server_name": {
+              "description": "DNS host name sent as SNI to every endpoint of the rule. When mtls_backend.verify_server_cert is true the endpoint's certificate must carry it as a DNS subject alternative name. Empty: no SNI is sent and a verified endpoint must carry its own address. Never derived from the VIP or from a request's Host header. Needs mode=4 and security=2.",
+              "maxLength": 253,
               "type": "string"
             },
             "bgp": {
@@ -5373,7 +5388,7 @@ func init() {
               "type": "boolean"
             },
             "mtls_backend": {
-              "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. In this release backend certificate verification is not available: a POST that sets verify_server_cert to true is refused with 400. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
+              "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
               "properties": {
                 "backend_ca_path": {
                   "description": "Retired. POST refuses a nonempty value with 400. Never returned.",
@@ -5397,7 +5412,7 @@ func init() {
                 },
                 "verify_server_cert": {
                   "default": false,
-                  "description": "Requests backend server-certificate verification. Not available in this release - POST refuses true with 400. A configuration written by an earlier release that carries true is loaded with the value reset to false and a warning.",
+                  "description": "Verifies the certificate of every endpoint the rule connects to. Requires backend_ca_cert_id: the chain must end in that CA bundle, there is no default trust store. The certificate must also name the endpoint: its address as an IP subject alternative name, or backend_tls_server_name as a DNS one when that is set. An endpoint that fails is not connected to. Needs mode=4, security=2 and a build with client-certificate support; otherwise 400. A stored configuration that carries true without a CA ID is loaded with the value reset to false and a warning.",
                   "type": "boolean"
                 }
               },
@@ -36417,9 +36432,19 @@ func init() {
           }
         },
         "keyPem": {
-          "description": "Private key in PEM. Required on POST/PUT. Persisted 0600 (key-at-rest). Never returned on GET.",
+          "description": "Private key in PEM on POST/PUT for usage \"server\" and \"client\". For usage \"ca\" the member is still sent and must be the empty string; a key is refused. Persisted 0600 (key-at-rest). Never returned on GET.",
           "type": "string",
           "x-nullable": true
+        },
+        "usage": {
+          "description": "What the entry is for, fixed when the ID is created. \"server\": a listener certificate and key, selected by SNI. \"ca\": a bundle of CA certificates that backend certificates are verified against; certPem (plus chainPem) is the bundle and keyPem is the empty string. \"client\": the certificate and key the gateway presents to backends. Only \"server\" entries are offered to clients. A load-balancer rule refers to a \"ca\" entry with backend_ca_cert_id and to a \"client\" entry with backend_client_cert_id; an entry a rule refers to cannot be deleted. A rotated \"ca\" or \"client\" entry takes effect on a rule when that rule is next updated.",
+          "type": "string",
+          "default": "server",
+          "enum": [
+            "server",
+            "ca",
+            "client"
+          ]
         }
       }
     },
@@ -39645,11 +39670,11 @@ func init() {
               ]
             },
             "backend_ca_cert_id": {
-              "description": "Certificate ID of the CA bundle the backend server certificate is verified against. Not available in this release: POST refuses a nonempty value with 400.",
+              "description": "Certificate ID of the CA bundle the backend server certificate is verified against. It must name a /config/cert entry with usage \"ca\". Required when mtls_backend.verify_server_cert is true, refused with 400 without it.",
               "type": "string"
             },
             "backend_client_cert_id": {
-              "description": "Certificate ID of the client certificate and key the gateway presents to backends. Not available in this release: POST refuses a nonempty value with 400.",
+              "description": "Certificate ID of the client certificate and key the gateway presents to backends that ask for one. It must name a /config/cert entry with usage \"client\". Without it the gateway presents no certificate. Needs mode=4 and security=2.",
               "type": "string"
             },
             "backend_keepalive_interval_sec": {
@@ -39669,6 +39694,11 @@ func init() {
                 "http2",
                 "both"
               ]
+            },
+            "backend_tls_server_name": {
+              "description": "DNS host name sent as SNI to every endpoint of the rule. When mtls_backend.verify_server_cert is true the endpoint's certificate must carry it as a DNS subject alternative name. Empty: no SNI is sent and a verified endpoint must carry its own address. Never derived from the VIP or from a request's Host header. Needs mode=4 and security=2.",
+              "type": "string",
+              "maxLength": 253
             },
             "bgp": {
               "description": "Requests BGP advertisement of the service and flat secondary IPs after a successful add when the BGP component is available. This flag alone does not establish a BGP session or route advertisement; structured secondaryVIPs are not advertised by this hook.",
@@ -40276,7 +40306,7 @@ func init() {
               "type": "boolean"
             },
             "mtls_backend": {
-              "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. In this release backend certificate verification is not available: a POST that sets verify_server_cert to true is refused with 400. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
+              "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
               "type": "object",
               "properties": {
                 "backend_ca_path": {
@@ -40300,7 +40330,7 @@ func init() {
                   "type": "string"
                 },
                 "verify_server_cert": {
-                  "description": "Requests backend server-certificate verification. Not available in this release - POST refuses true with 400. A configuration written by an earlier release that carries true is loaded with the value reset to false and a warning.",
+                  "description": "Verifies the certificate of every endpoint the rule connects to. Requires backend_ca_cert_id: the chain must end in that CA bundle, there is no default trust store. The certificate must also name the endpoint: its address as an IP subject alternative name, or backend_tls_server_name as a DNS one when that is set. An endpoint that fails is not connected to. Needs mode=4, security=2 and a build with client-certificate support; otherwise 400. A stored configuration that carries true without a CA ID is loaded with the value reset to false and a warning.",
                   "type": "boolean",
                   "default": false
                 }
@@ -40737,11 +40767,11 @@ func init() {
           ]
         },
         "backend_ca_cert_id": {
-          "description": "Certificate ID of the CA bundle the backend server certificate is verified against. Not available in this release: POST refuses a nonempty value with 400.",
+          "description": "Certificate ID of the CA bundle the backend server certificate is verified against. It must name a /config/cert entry with usage \"ca\". Required when mtls_backend.verify_server_cert is true, refused with 400 without it.",
           "type": "string"
         },
         "backend_client_cert_id": {
-          "description": "Certificate ID of the client certificate and key the gateway presents to backends. Not available in this release: POST refuses a nonempty value with 400.",
+          "description": "Certificate ID of the client certificate and key the gateway presents to backends that ask for one. It must name a /config/cert entry with usage \"client\". Without it the gateway presents no certificate. Needs mode=4 and security=2.",
           "type": "string"
         },
         "backend_keepalive_interval_sec": {
@@ -40761,6 +40791,11 @@ func init() {
             "http2",
             "both"
           ]
+        },
+        "backend_tls_server_name": {
+          "description": "DNS host name sent as SNI to every endpoint of the rule. When mtls_backend.verify_server_cert is true the endpoint's certificate must carry it as a DNS subject alternative name. Empty: no SNI is sent and a verified endpoint must carry its own address. Never derived from the VIP or from a request's Host header. Needs mode=4 and security=2.",
+          "type": "string",
+          "maxLength": 253
         },
         "bgp": {
           "description": "Requests BGP advertisement of the service and flat secondary IPs after a successful add when the BGP component is available. This flag alone does not establish a BGP session or route advertisement; structured secondaryVIPs are not advertised by this hook.",
@@ -41368,7 +41403,7 @@ func init() {
           "type": "boolean"
         },
         "mtls_backend": {
-          "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. In this release backend certificate verification is not available: a POST that sets verify_server_cert to true is refused with 400. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
+          "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
           "type": "object",
           "properties": {
             "backend_ca_path": {
@@ -41392,7 +41427,7 @@ func init() {
               "type": "string"
             },
             "verify_server_cert": {
-              "description": "Requests backend server-certificate verification. Not available in this release - POST refuses true with 400. A configuration written by an earlier release that carries true is loaded with the value reset to false and a warning.",
+              "description": "Verifies the certificate of every endpoint the rule connects to. Requires backend_ca_cert_id: the chain must end in that CA bundle, there is no default trust store. The certificate must also name the endpoint: its address as an IP subject alternative name, or backend_tls_server_name as a DNS one when that is set. An endpoint that fails is not connected to. Needs mode=4, security=2 and a build with client-certificate support; otherwise 400. A stored configuration that carries true without a CA ID is loaded with the value reset to false and a warning.",
               "type": "boolean",
               "default": false
             }
@@ -42047,7 +42082,7 @@ func init() {
       "readOnly": true
     },
     "LoadbalanceEntryServiceArgumentsMtlsBackend": {
-      "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. In this release backend certificate verification is not available: a POST that sets verify_server_cert to true is refused with 400. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
+      "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
       "type": "object",
       "properties": {
         "backend_ca_path": {
@@ -42071,7 +42106,7 @@ func init() {
           "type": "string"
         },
         "verify_server_cert": {
-          "description": "Requests backend server-certificate verification. Not available in this release - POST refuses true with 400. A configuration written by an earlier release that carries true is loaded with the value reset to false and a warning.",
+          "description": "Verifies the certificate of every endpoint the rule connects to. Requires backend_ca_cert_id: the chain must end in that CA bundle, there is no default trust store. The certificate must also name the endpoint: its address as an IP subject alternative name, or backend_tls_server_name as a DNS one when that is set. An endpoint that fails is not connected to. Needs mode=4, security=2 and a build with client-certificate support; otherwise 400. A stored configuration that carries true without a CA ID is loaded with the value reset to false and a warning.",
           "type": "boolean",
           "default": false
         }

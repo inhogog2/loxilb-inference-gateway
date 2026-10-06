@@ -35,8 +35,8 @@ func dropRetiredLbFields(doc *Document) []string {
 		if names := serv.MTLSBackend.DropRetired(); len(names) > 0 {
 			warns = append(warns, rule+": mtls_backend keys no longer supported and ignored: "+strings.Join(names, ", "))
 		}
-		if serv.MTLSBackend.ResetUnavailable() {
-			warns = append(warns, rule+": mtls_backend.verify_server_cert is not available in this release and was reset to false; it had no effect")
+		if serv.MTLSBackend.ResetUnverifiable(serv.BackendCaCertId) {
+			warns = append(warns, rule+": mtls_backend.verify_server_cert names no backend_ca_cert_id and was reset to false; it had no effect")
 		}
 	}
 	return warns

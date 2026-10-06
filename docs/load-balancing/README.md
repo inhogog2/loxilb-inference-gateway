@@ -53,6 +53,7 @@ it*, *how to test it*, and *how to extend it*.
 | [`22-multi-llm-platform-operations-guide.ko.md`](22-multi-llm-platform-operations-guide.ko.md) | **Beginner AI Infra operator manual (Korean)**: Mermaid mode diagrams, vLLM/SGLang/TensorRT-LLM/llama.cpp concepts, converged vs P/D comparison, engine-specific deployment recipes, REST rule examples, verification, and troubleshooting |
 | [`23-ai-admission-flow-control.md`](23-ai-admission-flow-control.md) | **AI admission flow control**: the capacity gate's modes and ceilings, the bounded per-pool queue (`fc_max_queue_depth`, `fc_max_queue_wait_ms`, the depth × 1 MiB memory bound and its guards), the refusal contract (`429`/`503`/`504`, `Retry-After`, admission headers), the maintenance drain, and the `loxilb_ai_admission_*` metrics |
 | [`24-backend-tls-argument-changes.md`](24-backend-tls-argument-changes.md) | **Backend TLS argument changes**: which `mtls_backend` and backend cert-ID arguments a create request may no longer carry, what a read returns, and what happens to configuration persisted by an earlier release |
+| [`25-backend-tls-verification.md`](25-backend-tls-verification.md) | **Backend TLS verification and client certificates**: registering a CA bundle and a client certificate, referring to them from an `e2ehttps` rule, what a verified endpoint must present, changing the policy of a serving rule, rotation |
 
 ---
 

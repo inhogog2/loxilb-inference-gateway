@@ -106,9 +106,10 @@ func newBackendTLSCreateParams(edit func(*models.LoadbalanceEntryServiceArgument
 }
 
 // TestBackendTLSCreateRefusedBeforeRuleHook: each retired mtls_backend key,
-// and each argument that requests backend verification or a backend client
-// certificate, is refused with 400 before the rule layer is reached. The
-// error names the argument and never echoes its value.
+// and each backend TLS request that cannot be honoured (verification without
+// a CA, a certificate ID nothing is registered under), is refused with 400
+// before the rule layer is reached. The error names the argument and never
+// echoes its value.
 func TestBackendTLSCreateRefusedBeforeRuleHook(t *testing.T) {
 	prev := ApiHooks
 	defer func() { ApiHooks = prev }()
@@ -129,9 +130,21 @@ func TestBackendTLSCreateRefusedBeforeRuleHook(t *testing.T) {
 		{"mtls_backend.client_cert_data", backend(func(m *models.LoadbalanceEntryServiceArgumentsMtlsBackend) { m.ClientCertData = "SENTINEL-cert-data" })},
 		{"mtls_backend.client_key_data", backend(func(m *models.LoadbalanceEntryServiceArgumentsMtlsBackend) { m.ClientKeyData = "SENTINEL-key-data" })},
 		{"mtls_backend.verify_server_cert", backend(func(m *models.LoadbalanceEntryServiceArgumentsMtlsBackend) { m.VerifyServerCert = swag.Bool(true) })},
-		{"backend_ca_cert_id", func(sa *models.LoadbalanceEntryServiceArguments) { sa.BackendCaCertID = "SENTINEL-ca-id" }},
+		{"backend_ca_cert_id", func(sa *models.LoadbalanceEntryServiceArguments) {
+			sa.MtlsBackend = &models.LoadbalanceEntryServiceArgumentsMtlsBackend{VerifyServerCert: swag.Bool(true)}
+			sa.BackendCaCertID = "SENTINEL-ca-id"
+		}},
 		{"backend_client_cert_id", func(sa *models.LoadbalanceEntryServiceArguments) { sa.BackendClientCertID = "SENTINEL-client-id" }},
+		{"backend_tls_server_name", func(sa *models.LoadbalanceEntryServiceArguments) { sa.BackendTLSServerName = "SENTINEL not a name" }},
 	}
+	if !cmn.MTLSBuild {
+		// Without client-certificate support every backend request is refused
+		// by one message that names the build, not the argument.
+		cases = cases[:5]
+	}
+	prevDir := cmn.CertManagedDir
+	cmn.CertManagedDir = t.TempDir()
+	defer func() { cmn.CertManagedDir = prevDir }()
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			stub := &stubLbAddHook{}

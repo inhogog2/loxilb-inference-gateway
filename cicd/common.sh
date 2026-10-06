@@ -700,6 +700,29 @@ create_docker_host_cnbridge() {
   sudo ip -n $h1 link set br$h1 up
 }
 
+# Register backend TLS material with the gateway's certificate registry, for a
+# rule to refer to by ID (backend_ca_cert_id, backend_client_cert_id).
+#Arg1: loxilb container
+#Arg2: certificate ID
+#Arg3: usage: ca | client
+#Arg4: certificate (or CA bundle) PEM file
+#Arg5: private key PEM file (usage client only)
+function register_backend_cert() {
+  local dock=$1 code
+  shift
+  code=$(python3 -c '
+import json, sys
+d = {"certId": sys.argv[1], "usage": sys.argv[2], "certPem": open(sys.argv[3]).read()}
+d["keyPem"] = open(sys.argv[4]).read() if len(sys.argv) > 4 else ""
+print(json.dumps(d))' "$@" | sudo docker exec -i $dock curl -s -o /dev/null -w '%{http_code}' \
+    -X POST http://localhost:11111/netlox/v1/config/cert -H "Content-Type: application/json" -d @-)
+  if [[ "$code" != "201" ]]; then
+    echo "register_backend_cert $1 ($2): expected 201, got '$code'" >&2
+    return 1
+  fi
+  echo "Registered backend certificate $1 (usage $2)"
+}
+
 #Arg1: host name
 #Arg2: --<proto>:<iport>:<oport>
 #Arg3: --endpoints:<ip>:<weight>,..

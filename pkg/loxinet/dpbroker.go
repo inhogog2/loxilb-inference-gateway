@@ -421,6 +421,7 @@ type LBDpWorkQ struct {
 	HstsPreload           bool     // "; preload"
 	BackendCaCertId       string   // backend CA certId → backend_ca_cert_id
 	BackendClientCertId   string   // backend client certId → backend_client_cert_id
+	BackendTLSServerName  string   // backend SNI and expected DNS name → mtls_backend_server_name
 	CHWBLPrefixHashLevel  int      // CHWBL prefix hash level: 1=model, 2=model+prompt, 3=full
 	CHWBLMeanLoadFactor   int      // CHWBL bounded load factor % (100-300, default 175)
 	CHWBLReplication      int      // CHWBL virtual nodes per endpoint (1-1024, default 256)

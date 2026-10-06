@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "48b943d89aa6d9b6d0357b625bf7184c7890710cf76f5adc3ab9b564d6412022"
+    "swagger.yml": "474144a056ee3ef1b9b74ba7d0089fc2c9443ac0090c9a40d1896380e1f4f36b"
   },
   "fields": [
     {
@@ -357,7 +357,7 @@
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/backend_ca_cert_id",
       "required": false,
       "contract": {
-        "description": "Certificate ID of the CA bundle the backend server certificate is verified against. Not available in this release: POST refuses a nonempty value with 400.",
+        "description": "Certificate ID of the CA bundle the backend server certificate is verified against. It must name a /config/cert entry with usage \"ca\". Required when mtls_backend.verify_server_cert is true, refused with 400 without it.",
         "type": "string"
       }
     },
@@ -365,7 +365,7 @@
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/backend_client_cert_id",
       "required": false,
       "contract": {
-        "description": "Certificate ID of the client certificate and key the gateway presents to backends. Not available in this release: POST refuses a nonempty value with 400.",
+        "description": "Certificate ID of the client certificate and key the gateway presents to backends that ask for one. It must name a /config/cert entry with usage \"client\". Without it the gateway presents no certificate. Needs mode=4 and security=2.",
         "type": "string"
       }
     },
@@ -392,6 +392,15 @@
           "http2",
           "both"
         ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/backend_tls_server_name",
+      "required": false,
+      "contract": {
+        "description": "DNS host name sent as SNI to every endpoint of the rule. When mtls_backend.verify_server_cert is true the endpoint's certificate must carry it as a DNS subject alternative name. Empty: no SNI is sent and a verified endpoint must carry its own address. Never derived from the VIP or from a request's Host header. Needs mode=4 and security=2.",
+        "maxLength": 253,
         "type": "string"
       }
     },
@@ -1342,7 +1351,7 @@
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/mtls_backend",
       "required": false,
       "contract": {
-        "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. In this release backend certificate verification is not available: a POST that sets verify_server_cert to true is refused with 400. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
+        "description": "Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.",
         "type": "object"
       }
     },
@@ -1391,7 +1400,7 @@
       "required": false,
       "contract": {
         "default": false,
-        "description": "Requests backend server-certificate verification. Not available in this release - POST refuses true with 400. A configuration written by an earlier release that carries true is loaded with the value reset to false and a warning.",
+        "description": "Verifies the certificate of every endpoint the rule connects to. Requires backend_ca_cert_id: the chain must end in that CA bundle, there is no default trust store. The certificate must also name the endpoint: its address as an IP subject alternative name, or backend_tls_server_name as a DNS one when that is set. An endpoint that fails is not connected to. Needs mode=4, security=2 and a build with client-certificate support; otherwise 400. A stored configuration that carries true without a CA ID is loaded with the value reset to false and a warning.",
         "type": "boolean"
       }
     },
