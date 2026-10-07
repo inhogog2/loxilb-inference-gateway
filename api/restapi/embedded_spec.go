@@ -4734,7 +4734,7 @@ func init() {
           "type": "array"
         },
         "serviceArguments": {
-          "description": "Service configuration. Implementation warnings for this REST representation: POST does not copy adminStateUp or snat into the domain. GET omits privateIP, timeoutMemberConnect, timeoutMemberData, timeoutTcpInspect, vip_qos_policy_id, alpn_protocols, tls_ciphers, tls_versions, hsts_max_age, hsts_include_subdomains, hsts_preload, backend_ca_cert_id, backend_client_cert_id and mtls_frontend.client_crl_path. GET/edit/POST is therefore not a lossless configuration round trip. PATCH has a limited overlay and does not update arbitrary properties. Metadata-only POSTs can return an unchanged-rule error before applying metadata; managed is not assigned on the existing-rule update path. FullProxy replacement removes its pool but C retains the listener; reuse does not reliably restore listener arguments or rebuild TLS contexts, so updated TLS/HSTS/timeout settings are not established by stored state. Requested-security fail-closed behavior and LB-resource/listener policy ownership remain unresolved; these defects are not supported fallback or update semantics.",
+          "description": "Service configuration. Implementation warnings for this REST representation: POST does not copy adminStateUp or snat into the domain. GET omits privateIP and vip_qos_policy_id. GET/edit/POST is therefore not a lossless configuration round trip. PATCH has a limited overlay and does not update arbitrary properties. Metadata-only POSTs can return an unchanged-rule error before applying metadata; managed is not assigned on the existing-rule update path. FullProxy replacement removes its pool but C retains the listener; reuse does not reliably restore listener arguments or rebuild TLS contexts, so updated TLS/HSTS/timeout settings are not established by stored state. Requested-security fail-closed behavior and LB-resource/listener policy ownership remain unresolved; these defects are not supported fallback or update semantics.",
           "properties": {
             "adminStateUp": {
               "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
@@ -5501,7 +5501,7 @@ func init() {
                   "type": "string"
                 },
                 "client_crl_path": {
-                  "description": "Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes; normal GET omits this field.",
+                  "description": "Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes. GET returns the stored path.",
                   "type": "string"
                 },
                 "require_client_cn": {
@@ -5733,7 +5733,7 @@ func init() {
               "type": "integer"
             },
             "tls_ciphers": {
-              "description": "Cipher string passed to both the TLS 1.3 ciphersuite and TLS 1.2 cipher configuration calls for listener/backend contexts, regardless of the selected version range. Empty uses the built-in lists. Implementation warnings: the C copy limits the string to 255 bytes without admission rejection; either OpenSSL call can fail, and listener creation then reaches an SSL-context assertion. Invalid input is not guaranteed to produce a clean REST rejection. See shared readback/update warnings.",
+              "description": "Cipher string passed to both the TLS 1.3 ciphersuite and TLS 1.2 cipher configuration calls for listener/backend contexts, regardless of the selected version range. Empty uses the built-in lists. A string longer than 255 bytes, and a string either call does not take, is refused with 400 before the rule is stored, on a FullProxy rule that terminates TLS; any other rule stores the value and does not use it. Because one string goes to both calls, a string that names only TLS 1.2 ciphers or only TLS 1.3 ciphersuites is refused; a string that names both kinds is taken. GET returns the stored string.",
               "type": "string"
             },
             "tls_versions": {
@@ -15040,7 +15040,7 @@ func init() {
     },
     "/config/loadbalancer": {
       "post": {
-        "description": "Create a new load balancer service. A well-formed request can still be refused by this Gateway's own deployment state with 412 - a vLLM KV-exact rule without the launch seed or without a loadable tokenizer for its model_name, or allowedSources on a rule allocated a slot past the source-check range - and no request body can satisfy such a refusal; GET /status/capabilities reports the same verdicts before submission. A request for a rule that exists replaces it: a request that changes nothing is answered 409 lbrule-exists, and a field the request omits takes its default, except the fields a replace keeps when omitted - id, the administrative state, projectId, annotations, the secondary VIPs, api_key_auth, backend_protocol, half_close_mode, the fc_ fields, pd_cache_threshold and pd_balance_abs_threshold. A replace of a FullProxy rule keeps the listening socket. Unless the change is one the rule takes in place, its endpoint pool is built again: the requests waiting in its capacity queue are ended, and its session and conversation affinity and its counts start over.",
+        "description": "Create a new load balancer service. A well-formed request can still be refused by this Gateway's own deployment state with 412 - a vLLM KV-exact rule without the launch seed or without a loadable tokenizer for its model_name, or allowedSources on a rule allocated a slot past the source-check range - and no request body can satisfy such a refusal; GET /status/capabilities reports the same verdicts before submission. A request for a rule that exists replaces it: a request that changes nothing is answered 409 lbrule-exists, and a field the request omits takes its default, except the fields a replace keeps when omitted - id, the administrative state, projectId, annotations, the secondary VIPs, api_key_auth, backend_protocol, half_close_mode, the fc_ fields, pd_cache_threshold and pd_balance_abs_threshold. A replace the data plane refuses leaves the rule as it was: it reads back with its old values, it keeps serving, and the same request sent again is refused again. A replace of a FullProxy rule keeps the listening socket. Unless the change is one the rule takes in place, its endpoint pool is built again: the requests waiting in its capacity queue are ended, and its session and conversation affinity and its counts start over.",
         "parameters": [
           {
             "description": "Attributes for load balance service",
@@ -28393,7 +28393,7 @@ func init() {
     },
     "/config/loadbalancer": {
       "post": {
-        "description": "Create a new load balancer service. A well-formed request can still be refused by this Gateway's own deployment state with 412 - a vLLM KV-exact rule without the launch seed or without a loadable tokenizer for its model_name, or allowedSources on a rule allocated a slot past the source-check range - and no request body can satisfy such a refusal; GET /status/capabilities reports the same verdicts before submission. A request for a rule that exists replaces it: a request that changes nothing is answered 409 lbrule-exists, and a field the request omits takes its default, except the fields a replace keeps when omitted - id, the administrative state, projectId, annotations, the secondary VIPs, api_key_auth, backend_protocol, half_close_mode, the fc_ fields, pd_cache_threshold and pd_balance_abs_threshold. A replace of a FullProxy rule keeps the listening socket. Unless the change is one the rule takes in place, its endpoint pool is built again: the requests waiting in its capacity queue are ended, and its session and conversation affinity and its counts start over.",
+        "description": "Create a new load balancer service. A well-formed request can still be refused by this Gateway's own deployment state with 412 - a vLLM KV-exact rule without the launch seed or without a loadable tokenizer for its model_name, or allowedSources on a rule allocated a slot past the source-check range - and no request body can satisfy such a refusal; GET /status/capabilities reports the same verdicts before submission. A request for a rule that exists replaces it: a request that changes nothing is answered 409 lbrule-exists, and a field the request omits takes its default, except the fields a replace keeps when omitted - id, the administrative state, projectId, annotations, the secondary VIPs, api_key_auth, backend_protocol, half_close_mode, the fc_ fields, pd_cache_threshold and pd_balance_abs_threshold. A replace the data plane refuses leaves the rule as it was: it reads back with its old values, it keeps serving, and the same request sent again is refused again. A replace of a FullProxy rule keeps the listening socket. Unless the change is one the rule takes in place, its endpoint pool is built again: the requests waiting in its capacity queue are ended, and its session and conversation affinity and its counts start over.",
         "summary": "Create a new Load balancer service",
         "parameters": [
           {
@@ -39714,7 +39714,7 @@ func init() {
           }
         },
         "serviceArguments": {
-          "description": "Service configuration. Implementation warnings for this REST representation: POST does not copy adminStateUp or snat into the domain. GET omits privateIP, timeoutMemberConnect, timeoutMemberData, timeoutTcpInspect, vip_qos_policy_id, alpn_protocols, tls_ciphers, tls_versions, hsts_max_age, hsts_include_subdomains, hsts_preload, backend_ca_cert_id, backend_client_cert_id and mtls_frontend.client_crl_path. GET/edit/POST is therefore not a lossless configuration round trip. PATCH has a limited overlay and does not update arbitrary properties. Metadata-only POSTs can return an unchanged-rule error before applying metadata; managed is not assigned on the existing-rule update path. FullProxy replacement removes its pool but C retains the listener; reuse does not reliably restore listener arguments or rebuild TLS contexts, so updated TLS/HSTS/timeout settings are not established by stored state. Requested-security fail-closed behavior and LB-resource/listener policy ownership remain unresolved; these defects are not supported fallback or update semantics.",
+          "description": "Service configuration. Implementation warnings for this REST representation: POST does not copy adminStateUp or snat into the domain. GET omits privateIP and vip_qos_policy_id. GET/edit/POST is therefore not a lossless configuration round trip. PATCH has a limited overlay and does not update arbitrary properties. Metadata-only POSTs can return an unchanged-rule error before applying metadata; managed is not assigned on the existing-rule update path. FullProxy replacement removes its pool but C retains the listener; reuse does not reliably restore listener arguments or rebuild TLS contexts, so updated TLS/HSTS/timeout settings are not established by stored state. Requested-security fail-closed behavior and LB-resource/listener policy ownership remain unresolved; these defects are not supported fallback or update semantics.",
           "type": "object",
           "properties": {
             "adminStateUp": {
@@ -40483,7 +40483,7 @@ func init() {
                   "type": "string"
                 },
                 "client_crl_path": {
-                  "description": "Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes; normal GET omits this field.",
+                  "description": "Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes. GET returns the stored path.",
                   "type": "string"
                 },
                 "require_client_cn": {
@@ -40714,7 +40714,7 @@ func init() {
               "format": "uint32"
             },
             "tls_ciphers": {
-              "description": "Cipher string passed to both the TLS 1.3 ciphersuite and TLS 1.2 cipher configuration calls for listener/backend contexts, regardless of the selected version range. Empty uses the built-in lists. Implementation warnings: the C copy limits the string to 255 bytes without admission rejection; either OpenSSL call can fail, and listener creation then reaches an SSL-context assertion. Invalid input is not guaranteed to produce a clean REST rejection. See shared readback/update warnings.",
+              "description": "Cipher string passed to both the TLS 1.3 ciphersuite and TLS 1.2 cipher configuration calls for listener/backend contexts, regardless of the selected version range. Empty uses the built-in lists. A string longer than 255 bytes, and a string either call does not take, is refused with 400 before the rule is stored, on a FullProxy rule that terminates TLS; any other rule stores the value and does not use it. Because one string goes to both calls, a string that names only TLS 1.2 ciphers or only TLS 1.3 ciphersuites is refused; a string that names both kinds is taken. GET returns the stored string.",
               "type": "string"
             },
             "tls_versions": {
@@ -40855,7 +40855,7 @@ func init() {
       }
     },
     "LoadbalanceEntryServiceArguments": {
-      "description": "Service configuration. Implementation warnings for this REST representation: POST does not copy adminStateUp or snat into the domain. GET omits privateIP, timeoutMemberConnect, timeoutMemberData, timeoutTcpInspect, vip_qos_policy_id, alpn_protocols, tls_ciphers, tls_versions, hsts_max_age, hsts_include_subdomains, hsts_preload, backend_ca_cert_id, backend_client_cert_id and mtls_frontend.client_crl_path. GET/edit/POST is therefore not a lossless configuration round trip. PATCH has a limited overlay and does not update arbitrary properties. Metadata-only POSTs can return an unchanged-rule error before applying metadata; managed is not assigned on the existing-rule update path. FullProxy replacement removes its pool but C retains the listener; reuse does not reliably restore listener arguments or rebuild TLS contexts, so updated TLS/HSTS/timeout settings are not established by stored state. Requested-security fail-closed behavior and LB-resource/listener policy ownership remain unresolved; these defects are not supported fallback or update semantics.",
+      "description": "Service configuration. Implementation warnings for this REST representation: POST does not copy adminStateUp or snat into the domain. GET omits privateIP and vip_qos_policy_id. GET/edit/POST is therefore not a lossless configuration round trip. PATCH has a limited overlay and does not update arbitrary properties. Metadata-only POSTs can return an unchanged-rule error before applying metadata; managed is not assigned on the existing-rule update path. FullProxy replacement removes its pool but C retains the listener; reuse does not reliably restore listener arguments or rebuild TLS contexts, so updated TLS/HSTS/timeout settings are not established by stored state. Requested-security fail-closed behavior and LB-resource/listener policy ownership remain unresolved; these defects are not supported fallback or update semantics.",
       "type": "object",
       "properties": {
         "adminStateUp": {
@@ -41624,7 +41624,7 @@ func init() {
               "type": "string"
             },
             "client_crl_path": {
-              "description": "Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes; normal GET omits this field.",
+              "description": "Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes. GET returns the stored path.",
               "type": "string"
             },
             "require_client_cn": {
@@ -41855,7 +41855,7 @@ func init() {
           "format": "uint32"
         },
         "tls_ciphers": {
-          "description": "Cipher string passed to both the TLS 1.3 ciphersuite and TLS 1.2 cipher configuration calls for listener/backend contexts, regardless of the selected version range. Empty uses the built-in lists. Implementation warnings: the C copy limits the string to 255 bytes without admission rejection; either OpenSSL call can fail, and listener creation then reaches an SSL-context assertion. Invalid input is not guaranteed to produce a clean REST rejection. See shared readback/update warnings.",
+          "description": "Cipher string passed to both the TLS 1.3 ciphersuite and TLS 1.2 cipher configuration calls for listener/backend contexts, regardless of the selected version range. Empty uses the built-in lists. A string longer than 255 bytes, and a string either call does not take, is refused with 400 before the rule is stored, on a FullProxy rule that terminates TLS; any other rule stores the value and does not use it. Because one string goes to both calls, a string that names only TLS 1.2 ciphers or only TLS 1.3 ciphersuites is refused; a string that names both kinds is taken. GET returns the stored string.",
           "type": "string"
         },
         "tls_versions": {
@@ -42347,7 +42347,7 @@ func init() {
           "type": "string"
         },
         "client_crl_path": {
-          "description": "Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes; normal GET omits this field.",
+          "description": "Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes. GET returns the stored path.",
           "type": "string"
         },
         "require_client_cn": {
