@@ -1581,6 +1581,7 @@ const (
 	lbModelNameMaxBytes         = 127
 	lbJwtAuthProfileMaxBytes    = 63
 	lbEndpointHashKeyMaxBytes   = 511
+	lbTLSCiphersMaxBytes        = 255
 )
 
 func validateLBFixedCString(field, value string, maxBytes int) error {
@@ -1607,6 +1608,7 @@ func validateLBFixedCStringFields(serv cmn.LbServiceArg) error {
 		{name: "session_header_name", value: serv.SessionHeaderName, maxBytes: lbSessionHeaderNameMaxBytes},
 		{name: "model_name", value: serv.ModelName, maxBytes: lbModelNameMaxBytes},
 		{name: "jwt_auth_profile", value: serv.JwtAuthProfile, maxBytes: lbJwtAuthProfileMaxBytes},
+		{name: "tls_ciphers", value: serv.TlsCiphers, maxBytes: lbTLSCiphersMaxBytes},
 	} {
 		if err := validateLBFixedCString(field.name, field.value, field.maxBytes); err != nil {
 			return err
@@ -3913,6 +3915,11 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	// A rule that asks for backend verification or a client certificate is
 	// installed with it or not at all, whichever way it arrived.
 	if err := cmn.ValidateBackendTLS(&serv); err != nil {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+	}
+	// A cipher string the TLS library does not take is the caller's to
+	// correct, so it is refused here and never reaches the data plane.
+	if err := lbTLSCiphersErr(&serv); err != nil {
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
 	}
 
