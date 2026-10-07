@@ -414,6 +414,19 @@ func (na *NetAPIStruct) NetLbRuleDel(lm *cmn.LbRuleMod) (int, error) {
 	return ret, err
 }
 
+// NetLbBackendCertRefresh - Push again the load-balancer rules whose backend
+// leg refers to a certificate ID, after its material was replaced
+func (na *NetAPIStruct) NetLbBackendCertRefresh(certID string) (int, []string, error) {
+	if na.BgpPeerMode {
+		return 0, nil, errors.New("running in bgp only mode")
+	}
+	mh.mtx.Lock()
+	defer mh.mtx.Unlock()
+
+	pushed, kept := mh.zr.Rules.RefreshLbBackendCert(certID)
+	return pushed, kept, nil
+}
+
 // NetLbRuleGet - Get a load-balancer rule from loxinet
 func (na *NetAPIStruct) NetLbRuleGet() ([]cmn.LbRuleMod, error) {
 	if na.BgpPeerMode {

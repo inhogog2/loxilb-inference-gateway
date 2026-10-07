@@ -101,6 +101,9 @@ vllm/converged) KVT=""; EVX="--kv-events-config '$EVENTS'" ;;
 sglang/converged) DIS="--kv-events-config '{\"publisher\":\"zmq\",\"endpoint\":\"tcp://*:5557\"}'" ;;
 *) echo "engine must be vllm|sglang"; exit 64 ;;
 esac
+# SGLang builds its page-hash extension at the first prompt longer than one page and keeps the result in the
+# container; a node directory per image makes that one build per node instead of one per container.
+SGL_EXT_CACHE=${SGL_EXT_CACHE:-/root/.cache/sglang-torch-extensions/${SGL_IMAGE##*:}}
 if [ "$ENG" = vllm ]; then
   $SSH root@"$NODE" "docker rm -f $NAME >/dev/null 2>&1; docker run -d --name $NAME --gpus all --ipc=host --network host --ulimit memlock=-1 \
     -e UCX_TLS=tcp -e UCX_NET_DEVICES=all -e PYTHONHASHSEED=0 -e VLLM_KV_EVENTS_USE_INT_BLOCK_HASHES=1 -e HF_HUB_OFFLINE=1 \
@@ -111,13 +114,15 @@ if [ "$ENG" = vllm ]; then
     ${KVT:+--kv-transfer-config '$KVT'} $EVX $VLLM_PROFILE_ARGS ${VLLM_EXTRA:-}" >/dev/null
 else
   $SSH root@"$NODE" "docker rm -f $NAME >/dev/null 2>&1; docker run -d --name $NAME --gpus all --network host --ipc=host --shm-size 16g \
-    -v $HF_CACHE:$HF_CACHE $TOKMNT -e HF_HOME=$HF_CACHE -e HF_HUB_OFFLINE=1 $SGL_IMAGE \
+    -v $HF_CACHE:$HF_CACHE -v $SGL_EXT_CACHE:/root/.cache/torch_extensions $TOKMNT -e HF_HOME=$HF_CACHE -e HF_HUB_OFFLINE=1 $SGL_IMAGE \
     python3 -m sglang.launch_server --model-path $SNAP --revision $REV --served-model-name $MODEL --host 0.0.0.0 --port $EPORT \
     --page-size 16 --enable-metrics --context-length 4096 --mem-fraction-static ${SGL_MEM:-0.70} $DIS $SGL_PROFILE_ARGS ${SGL_EXTRA:-}" >/dev/null
 fi
 # Ready = the SERVED model id answers on /v1/models (a 200 from a stray engine on the port is not readiness).
 for _ in $(seq 1 120); do
-  if curl -s -m 3 "http://$NODE:$EPORT/v1/models" | grep -qF "\"id\":\"$MODEL\""; then
+  # SGLang answers /v1/models before its own start-up warm-up has run; it is ready when it says so.
+  if curl -s -m 3 "http://$NODE:$EPORT/v1/models" | grep -qF "\"id\":\"$MODEL\"" &&
+     { [ "$ENG" != sglang ] || $SSH root@"$NODE" "docker logs $NAME 2>&1 | grep -q \"The server is fired up\""; }; then
     if [ -n "$TOKMNT" ]; then
       got=$($SSH root@"$NODE" "docker exec $NAME sha256sum $SGL_TOKPATCH_TARGET" | cut -c1-64)
       [ "$got" = "$SGL_TOKPATCH_FILE_SHA" ] || { echo "TOKENIZE_PATCH_NOT_MOUNTED $NAME ${got:-unreadable}"; exit 1; }

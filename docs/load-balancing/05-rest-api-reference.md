@@ -63,9 +63,11 @@ IPv6 in the path: bracket the literal — `…/externalipaddress/[2001:db8:aa::1
 | `hsts_max_age` | uint32 | — | seconds; `0`=off |
 | `hsts_include_subdomains`, `hsts_preload` | bool | — | |
 | `vip_qos_policy_id` | string | — | ref to `/config/policy` |
-| `backend_ca_cert_id`, `backend_client_cert_id` | string | — | backend re-encryption |
+| `backend_ca_cert_id`, `backend_client_cert_id` | string | — | backend CA bundle (`/config/cert` usage `ca`, required with `mtls_backend.verify_server_cert`) / backend client certificate (usage `client`) by certId. An unknown ID or an entry of the wrong usage is refused (`400`). See [Backend TLS verification](25-backend-tls-verification.md) |
+| `backend_tls_server_name` | string | — | DNS host name sent as SNI to the endpoints and, with verification on, required among the DNS names of their certificate. Empty: no SNI, a verified endpoint must carry its own address |
+| `backend_tls_effective` | object | — | read-only, `mode=4` rules with `security=2`: the backend TLS policy the listener has installed, read from the data plane on every `GET` (`status` `applied` · `pending` · `failed` · `unsupported`, `verify`, `ca`, `client_cert`, `client_cert_id`, `server_name`, `generation`). Ignored on input. See [Backend TLS verification](25-backend-tls-verification.md#6-reading-what-is-installed) |
 | `mtls_frontend` | object | — | frontend (client → gateway) mTLS: client-cert mode, CA/CRL paths, CN/SAN pattern |
-| `mtls_backend` | object | — | backend (gateway → backend) mTLS: server-cert verification, CA bundle, client cert/key |
+| `mtls_backend` | object | — | backend (gateway → backend) TLS request: `verify_server_cert` only. `true` requires `backend_ca_cert_id` (`400` without it). The former path and inline-material keys are retired: refused on POST, never returned |
 | `backend_protocol` | string | — | backend ALPN capability: `http1` (default) · `http2` · `both` |
 | `half_close_mode` | string | — | fullproxy: a client that half-closes after its request. `hold` keeps it open until its answer is out (plaintext connections the kernel was never given to carry; with `sockMapMode` set, a client whose FIN comes before acceleration is not accelerated); `off` cuts it at its FIN; `inherit`/omitted runs on the process default (`defaultMode` at [`/config/halfclose`](#half-close-holds), `off` unless set) where the service could take `hold` itself, and `off` elsewhere. The bound and the allow/block switch are there too; GET's read-only `half_close_effective` says the mode in force and where it came from. `hold+parked` is refused (`400`) until available; `hold` is refused on other modes, on TLS services (`security` 1 or 2) and on P/D services (`pd_disagg_mode`), judged on the rule as a replace leaves it. Replace and `null` semantics as `fc_mode`; a change of this field alone applies in place. |
 
@@ -255,9 +257,22 @@ Metrics: `loxilb_proxy_halfclose_held` (held now), `loxilb_proxy_halfclose_held_
 `backend_first`, `expired`, `released`, `reset` — a client that reset while held, i.e. a cancel
 that was waited on — `other`), `loxilb_proxy_halfclose_hold_expired_total{answer_started,stream}`,
 `loxilb_proxy_halfclose_hold_refused_total{reason}`, `loxilb_proxy_halfclose_accel_skipped_total`
-(connections left unaccelerated so that they could be held), and the settings as
-`loxilb_proxy_halfclose_hold_allowed` / `loxilb_proxy_halfclose_hold_cap_seconds` /
+(connections left unaccelerated so that they could be held),
+`loxilb_proxy_halfclose_hold_spurious_wakeups_total{kind}` (`eof_reentry` should stay 0), and the
+settings as `loxilb_proxy_halfclose_hold_allowed` / `loxilb_proxy_halfclose_hold_cap_seconds` /
 `loxilb_proxy_halfclose_hold_default_mode` (1 while the default is `hold`).
+
+The L7 Proxy dashboard's collapsed "Half-close holds" row plots them, with the client FINs that
+had an answer owed (`loxilb_proxy_halfclose_fin_total{outcome="owed"}`: the clients a hold is
+for). Its first stats count over the dashboard's time range: holds taken, FINs with an answer
+owed, holds that expired before their answer began, and EOF re-entries. The shipped alert rules
+(`deploy/monitoring/prometheus/rules/loxilb-alerts.yml`, group `loxilb-halfclose`) fire on:
+
+| Alert | Fires on | Do |
+|---|---|---|
+| `LoxilbHalfCloseHoldExpiredBeforeAnswer` | A held client closed by the bound before any byte of its answer reached it | The first byte is slower than the bound (raise `capSeconds`), or the FIN was a cancel; do not set `defaultMode` to `hold` while it fires |
+| `LoxilbHalfCloseHoldEofReentry` | A held client's EOF handled a second time | A defect: report it with the gateway log; block and release if it repeats |
+| `LoxilbHalfCloseHoldLongLived` | The oldest hold older than an hour and twice the bound, for 5m | A client fed very slowly, or a hold that does not end; block and release if the held count keeps rising |
 
 ---
 

@@ -85,6 +85,13 @@ cp 33.33.33.1/certs/server.key 33.33.33.1/key.pem
 
 sleep 5
 cli_preflight llb1 && USE_CLI=1 || USE_CLI=0
+
+# The HTTP/2 backends of this scenario require a client certificate in their
+# strict phase. The gateway presents one only when the rule names it. The
+# certificate and those rules go through loxicmd when it has the arguments,
+# over REST when the image's CLI predates them.
+backend_tls_cli_preflight llb1 || true
+register_backend_cert llb1 e2e-backend-client client 10.10.10.254/certs/server.crt 10.10.10.254/certs/server.key || exit 1
 # port 2020 -> /v1/users (endpoints 31/32)
 if [[ "$USE_CLI" == "1" ]]; then
   create_lb_rule llb1 10.10.10.254 --tcp=2020:8080 --endpoints=31.31.31.1:1,32.32.32.1:1 --mode=fullproxy --security=e2ehttps --host=10.10.10.254 --path-prefix=/v1/users --path-match-mode=prefix
@@ -133,8 +140,8 @@ $dexec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
 fi
 
 # port 2021 -> /v1/users (endpoints 31/32, backend http2)
-if [[ "$USE_CLI" == "1" ]]; then
-  create_lb_rule llb1 10.10.10.254 --tcp=2021:8081 --endpoints=31.31.31.1:1,32.32.32.1:1 --mode=fullproxy --security=e2ehttps --host=10.10.10.254 --backend-protocol=http2 --path-prefix=/v1/users --path-match-mode=prefix
+if [[ "$BACKEND_TLS_CLI" == "1" ]]; then
+  create_lb_rule llb1 10.10.10.254 --tcp=2021:8081 --endpoints=31.31.31.1:1,32.32.32.1:1 --mode=fullproxy --security=e2ehttps --host=10.10.10.254 --backend-protocol=http2 --backend-client-cert-id=e2e-backend-client --path-prefix=/v1/users --path-match-mode=prefix
 else
 $dexec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
   -H "Content-Type: application/json" \
@@ -145,6 +152,7 @@ $dexec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
     "protocol": "tcp",
     "security": 2,
     "mode": 4,
+    "backend_client_cert_id": "e2e-backend-client",
     "host": "10.10.10.254",
     "backend_protocol": "http2",
     "path_prefix": "/v1/users",
@@ -158,8 +166,8 @@ $dexec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
 fi
 
 # port 2021 -> /v1/orders (endpoint 33, backend http2)
-if [[ "$USE_CLI" == "1" ]]; then
-  create_lb_rule llb1 10.10.10.254 --tcp=2021:8081 --endpoints=33.33.33.1:1 --mode=fullproxy --security=e2ehttps --host=10.10.10.254 --backend-protocol=http2 --path-prefix=/v1/orders --path-match-mode=prefix
+if [[ "$BACKEND_TLS_CLI" == "1" ]]; then
+  create_lb_rule llb1 10.10.10.254 --tcp=2021:8081 --endpoints=33.33.33.1:1 --mode=fullproxy --security=e2ehttps --host=10.10.10.254 --backend-protocol=http2 --backend-client-cert-id=e2e-backend-client --path-prefix=/v1/orders --path-match-mode=prefix
 else
 $dexec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
   -H "Content-Type: application/json" \
@@ -170,6 +178,7 @@ $dexec llb1 curl -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
     "protocol": "tcp",
     "security": 2,
     "mode": 4,
+    "backend_client_cert_id": "e2e-backend-client",
     "host": "10.10.10.254",
     "backend_protocol": "http2",
     "path_prefix": "/v1/orders",

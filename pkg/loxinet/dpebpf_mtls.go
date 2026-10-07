@@ -34,7 +34,22 @@ import (
 // so that llb_conv_nat2proxy can read them when creating the proxy entry.
 // This is called in the DpCreate path before llb_add_map_elem.
 func DpLBRuleSetMTLS(dat *proxyActs, w *LBDpWorkQ) {
-	if w.NatType != DpFullProxy || w.MTLSFrontend == nil {
+	if w.NatType != DpFullProxy {
+		return
+	}
+
+	// The backend leg's request rides every push, with or without a frontend
+	// client-certificate configuration.
+	if w.MTLSBackend != nil && w.MTLSBackend.VerifyServerCert {
+		dat.mtls_backend_verify = 1
+	}
+	if w.BackendTLSServerName != "" {
+		cName := C.CString(w.BackendTLSServerName)
+		C.strncpy(&dat.mtls_backend_server_name[0], cName, 255)
+		C.free(unsafe.Pointer(cName))
+	}
+
+	if w.MTLSFrontend == nil {
 		return
 	}
 

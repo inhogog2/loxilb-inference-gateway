@@ -58,32 +58,6 @@ int proxy_update_qos_config(struct proxy_ent *key, uint64_t cir_bps, uint64_t pi
 int proxy_set_service_catalog(uint32_t xip, uint16_t xport, uint8_t protocol, uint16_t catalog_id);
 // Note: chwbl_prefix_hash_level is now propagated via dp_proxy_tacts.chwbl_prefix_hash_level during proxy_add_entry
 
-// mTLS configuration structures (matching proxy_arg_t fields)
-struct mtls_frontend_config {
-  uint8_t mode;                      // 0=disabled, 1=optional, 2=required
-  char client_ca_path[256];          // Client CA bundle path
-  char client_ca_cert_data[4096];    // Client CA certificate data (PEM)
-  uint8_t require_client_cn;         // 1=require CN pattern match
-  char client_cn_pattern[256];       // CN pattern (e.g., "*.corp.example.com")
-};
-
-struct mtls_backend_config {
-  uint8_t verify_server_cert;        // 1=verify server cert
-  char backend_ca_path[256];         // Backend CA bundle path
-  char client_cert_path[256];        // Client cert for backend
-  char client_key_path[256];         // Client key for backend
-  char client_cert_data[4096];       // Client cert data (PEM)
-  char client_key_data[4096];        // Client key data (PEM)
-};
-
-// Function to update proxy mTLS configuration after proxy entry is created
-int proxy_update_mtls_config(struct proxy_ent *key,
-                              struct mtls_frontend_config *frontend,
-                              struct mtls_backend_config *backend);
-
-// Function to clean up mTLS configuration when rule is deleted
-int proxy_cleanup_mtls_config(struct proxy_ent *key);
-
 // (-10..13): certId registry entry points (declared in
 // loxilb-ebpf/common/sockproxy_ssl.h). Prototyped inline here — like struct proxy_ent
 // above — to avoid pulling sockproxy.h/uthash into this preamble. These persist-free
@@ -100,7 +74,7 @@ int proxy_delete_cert(const char *certId);
 //
 // A SEPARATE CGO attach call carries the variable-length ordered route array to
 // the running sockproxy — NEVER inline on proxy_arg (the 4096-byte _Static_assert
-// forbids it). Modeled on proxy_update_mtls_config. The l7_route_t IR below is an
+// forbids it). The l7_route_t IR below is an
 // ABI-IDENTICAL mirror of the canonical definition in
 // loxilb-ebpf/common/sockproxy_l7policy.h — we mirror it here (instead of including
 // that header) for the SAME reason this preamble mirrors struct proxy_ent: pulling
@@ -1995,11 +1969,6 @@ func DpLBRuleMod(w *LBDpWorkQ) int {
 			for _, ep := range w.endPoints {
 				_ = mh.dp.DpHooks.DeleteEndpointFromGPUIndexMap(ep.XIP, ep.XPort)
 			}
-		}
-
-		// Clean up mTLS configuration when rule is deleted
-		if w.NatType == DpFullProxy {
-			DpProxyCleanupMTLS(w.ServiceIP, w.L4Port, w.Proto)
 		}
 
 		C.llb_del_map_elem_wval(C.LL_DP_NAT_MAP,
@@ -5875,153 +5844,6 @@ func (e *DpEbpfH) NetTraceCatalogParserDelete(catalogID uint16) error {
 	return nil
 }
 
-// DpProxyConfigureMTLS - Configure mTLS for a sockproxy rule
-// This function updates the proxy_arg for an existing rule to add mTLS configuration.
-// mTLS config is not stored in eBPF maps since it's only needed by sockproxy userspace code.
-func DpProxyConfigureMTLS(serviceIP net.IP, port uint16, proto uint8, frontendCfg *cmn.MTLSFrontendConfig, backendCfg *cmn.MTLSBackendConfig) int {
-	tk.LogIt(tk.LogInfo, "[DP] Configuring mTLS for %s:%d proto=%d\n", serviceIP.String(), port, proto)
-
-	// Build proxy key to identify the rule
-	var proxyKey C.struct_proxy_ent
-	if serviceIP.To4() != nil {
-		proxyKey.xip = C.uint(tk.IPtonl(serviceIP))
-	} else {
-		tk.LogIt(tk.LogError, "[DP] mTLS: IPv6 not yet supported\n")
-		return -1
-	}
-	proxyKey.xport = C.ushort(tk.Htons(port))
-	proxyKey.protocol = C.uchar(proto)
-
-	// Prepare frontend mTLS config
-	var frontendC *C.struct_mtls_frontend_config
-	if frontendCfg != nil {
-		frontendC = (*C.struct_mtls_frontend_config)(C.malloc(C.sizeof_struct_mtls_frontend_config))
-		defer C.free(unsafe.Pointer(frontendC))
-
-		C.memset(unsafe.Pointer(frontendC), 0, C.sizeof_struct_mtls_frontend_config)
-
-		// Map client_cert_mode string to numeric value
-		switch frontendCfg.ClientCertMode {
-		case "required":
-			frontendC.mode = 2
-		case "optional":
-			frontendC.mode = 1
-		default: // "disabled" or empty
-			frontendC.mode = 0
-		}
-
-		if frontendCfg.ClientCAPath != "" {
-			cPath := C.CString(frontendCfg.ClientCAPath)
-			defer C.free(unsafe.Pointer(cPath))
-			C.strncpy(&frontendC.client_ca_path[0], cPath, 255)
-		}
-
-		if frontendCfg.ClientCACertData != "" {
-			cData := C.CString(frontendCfg.ClientCACertData)
-			defer C.free(unsafe.Pointer(cData))
-			C.strncpy(&frontendC.client_ca_cert_data[0], cData, 4095)
-		}
-
-		if frontendCfg.RequireClientCN {
-			frontendC.require_client_cn = 1
-		}
-
-		if frontendCfg.ClientCNPattern != "" {
-			cPattern := C.CString(frontendCfg.ClientCNPattern)
-			defer C.free(unsafe.Pointer(cPattern))
-			C.strncpy(&frontendC.client_cn_pattern[0], cPattern, 255)
-		}
-
-		tk.LogIt(tk.LogInfo, "[DP] Frontend mTLS: mode=%s ca_path=%s require_cn=%v pattern=%s\n",
-			frontendCfg.ClientCertMode, frontendCfg.ClientCAPath, frontendCfg.RequireClientCN, frontendCfg.ClientCNPattern)
-	}
-
-	// Prepare backend mTLS config
-	var backendC *C.struct_mtls_backend_config
-	if backendCfg != nil {
-		backendC = (*C.struct_mtls_backend_config)(C.malloc(C.sizeof_struct_mtls_backend_config))
-		defer C.free(unsafe.Pointer(backendC))
-
-		C.memset(unsafe.Pointer(backendC), 0, C.sizeof_struct_mtls_backend_config)
-
-		if backendCfg.VerifyServerCert {
-			backendC.verify_server_cert = 1
-		}
-
-		if backendCfg.BackendCAPath != "" {
-			cPath := C.CString(backendCfg.BackendCAPath)
-			defer C.free(unsafe.Pointer(cPath))
-			C.strncpy(&backendC.backend_ca_path[0], cPath, 255)
-		}
-
-		if backendCfg.ClientCertPath != "" {
-			cPath := C.CString(backendCfg.ClientCertPath)
-			defer C.free(unsafe.Pointer(cPath))
-			C.strncpy(&backendC.client_cert_path[0], cPath, 255)
-		}
-
-		if backendCfg.ClientKeyPath != "" {
-			cPath := C.CString(backendCfg.ClientKeyPath)
-			defer C.free(unsafe.Pointer(cPath))
-			C.strncpy(&backendC.client_key_path[0], cPath, 255)
-		}
-
-		if backendCfg.ClientCertData != "" {
-			cData := C.CString(backendCfg.ClientCertData)
-			defer C.free(unsafe.Pointer(cData))
-			C.strncpy(&backendC.client_cert_data[0], cData, 4095)
-		}
-
-		if backendCfg.ClientKeyData != "" {
-			cData := C.CString(backendCfg.ClientKeyData)
-			defer C.free(unsafe.Pointer(cData))
-			C.strncpy(&backendC.client_key_data[0], cData, 4095)
-		}
-
-		tk.LogIt(tk.LogInfo, "[DP] Backend mTLS: verify=%v ca_path=%s client_cert=%s\n",
-			backendCfg.VerifyServerCert, backendCfg.BackendCAPath, backendCfg.ClientCertPath)
-	}
-
-	// Call C function to update proxy entry's mTLS configuration
-	ret := C.proxy_update_mtls_config(&proxyKey, frontendC, backendC)
-	if ret != 0 {
-		tk.LogIt(tk.LogError, "[DP] Failed to configure mTLS for %s:%d - ret=%d\n",
-			serviceIP.String(), port, int(ret))
-		return -1
-	}
-
-	tk.LogIt(tk.LogInfo, "[DP] mTLS configuration applied successfully for %s:%d\n",
-		serviceIP.String(), port)
-	return 0
-}
-
-// DpProxyCleanupMTLS - Clean up mTLS configuration when a rule is deleted
-// This prevents memory leaks by removing stored mTLS config from the bridge storage
-func DpProxyCleanupMTLS(serviceIP net.IP, port uint16, proto uint8) int {
-	tk.LogIt(tk.LogDebug, "[DP] Cleaning up mTLS config for %s:%d proto=%d\n",
-		serviceIP.String(), port, proto)
-
-	// Build proxy key to identify the rule
-	var proxyKey C.struct_proxy_ent
-	if serviceIP.To4() != nil {
-		proxyKey.xip = C.uint(tk.IPtonl(serviceIP))
-	} else {
-		// IPv6 not yet supported, but don't fail cleanup
-		return 0
-	}
-	proxyKey.xport = C.ushort(tk.Htons(port))
-	proxyKey.protocol = C.uchar(proto)
-
-	// Call C function to remove stored mTLS configuration
-	ret := C.proxy_cleanup_mtls_config(&proxyKey)
-	if ret != 0 {
-		// Don't treat cleanup failure as critical error
-		tk.LogIt(tk.LogDebug, "[DP] mTLS cleanup returned %d (may not exist)\n", int(ret))
-	}
-
-	return 0
-}
-
 // --- certId registry bridge (13) --------------------
 //
 // DpProxyRegisterCert / DpProxyRotateCert / DpProxyDeleteCert bridge the Go control
@@ -6103,8 +5925,8 @@ func DpSockMapDropAccelConns(serviceIP net.IP, port uint16, proto uint8) (int, e
 }
 
 // DpProxyAttachL7Policy / DpProxyDetachL7Policy carry the validated L7 route IR to
-// the running sockproxy via a SEPARATE CGO call (proxy_attach_l7_policy), modeled on
-// DpProxyConfigureMTLS — NEVER inline on proxy_arg (the 4096-byte _Static_assert).
+// the running sockproxy via a SEPARATE CGO call (proxy_attach_l7_policy)
+// — NEVER inline on proxy_arg (the 4096-byte _Static_assert).
 // The Go side builds a contiguous C l7_route_t array from the cmn IR and hands
 // ownership to the C side (which deep-copies, regcomp's each REGEX ONCE, sorts by
 // position, and populates the proxy_map_ent has_l7_policy/l7_routes/n_l7_routes
@@ -6314,7 +6136,7 @@ func DpProxyAttachL7Policy(serviceIP net.IP, port uint16, proto uint8, routes []
 }
 
 // DpProxyDetachL7Policy - detach the L7 policy from a rule (regfrees every compiled
-// REGEX program on the C side). Mirrors DpProxyCleanupMTLS.
+// REGEX program on the C side).
 func DpProxyDetachL7Policy(serviceIP net.IP, port uint16, proto uint8) int {
 	tk.LogIt(tk.LogDebug, "[DP] Detaching L7 policy for %s:%d proto=%d\n",
 		serviceIP.String(), port, proto)

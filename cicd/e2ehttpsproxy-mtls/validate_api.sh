@@ -1,7 +1,8 @@
 #!/bin/bash
 # validate_api.sh — REST API validation for mTLS (e2ehttpsproxy-mtls).
-# Verifies that mTLS LB rule fields (mtls_frontend, mtls_backend, SNI certs) are
-# stored and retrievable via the loxilb management REST API.
+# Verifies that mTLS LB rule fields (mtls_frontend, SNI certs) are stored and
+# retrievable via the loxilb management REST API, and that backend TLS
+# arguments a rule may not carry are refused.
 #
 # Called from validation.sh after the TLS functional tests.
 # Sources ../common.sh for $hexec helper.
@@ -156,12 +157,6 @@ resp5=$($hexec llb1 curl -s -o /dev/null -w "%{http_code}" -X POST \
       "mtls_frontend": {
         "client_cert_mode": "optional",
         "client_ca_path":   "/opt/loxilb/cert/client_ca.crt"
-      },
-      "mtls_backend": {
-        "backend_ca_path":  "/opt/loxilb/cert/backend_ca.crt",
-        "client_cert_path": "/opt/loxilb/cert/backend_client.crt",
-        "client_key_path":  "/opt/loxilb/cert/backend_client.key",
-        "verify_server_cert": true
       }
     },
     "endpoints": [
@@ -208,12 +203,6 @@ $hexec llb1 curl -s -o /dev/null -X POST "$LLB_API/config/loadbalancer" \
         "client_ca_path":   "/opt/loxilb/cert/client_ca.crt",
         "require_client_cn": true,
         "client_cn_pattern": "*.internal.corp.com"
-      },
-      "mtls_backend": {
-        "backend_ca_path":  "/opt/loxilb/cert/backend_ca.crt",
-        "client_cert_path": "/opt/loxilb/cert/backend_client.crt",
-        "client_key_path":  "/opt/loxilb/cert/backend_client.key",
-        "verify_server_cert": true
       }
     },
     "endpoints": [
@@ -223,6 +212,78 @@ $hexec llb1 curl -s -o /dev/null -X POST "$LLB_API/config/loadbalancer" \
     ]
   }' 2>/dev/null
 echo "  API-T5 restored required mode rule [OK]"
+
+# ── API-T6: backend TLS arguments a create request may not carry ──────────────
+# Each one alone must be refused with 400, and the rule list must read the
+# same before and after: a refused request changes nothing.
+echo ""
+echo "API-T6: retired mtls_backend keys and backend verification arguments are refused"
+# The configured rules only: endpoint state and counters are runtime values
+# and may move between two reads on their own.
+lb_list() {
+  $hexec llb1 curl -s "$LLB_API/config/loadbalancer/all" | python3 -c "
+import sys, json
+rules = json.load(sys.stdin).get('lbAttr') or []
+for r in rules:
+    for ep in r.get('endpoints') or []:
+        ep.pop('state', None)
+        ep.pop('counter', None)
+print(len(rules))
+print(json.dumps(sorted(json.dumps(r, sort_keys=True) for r in rules)))
+" 2>/dev/null
+}
+t6_post() {
+  $hexec llb1 curl -s -o /dev/null -w "%{http_code}" -X POST \
+    "$LLB_API/config/loadbalancer" -H "Content-Type: application/json" \
+    -d '{
+      "serviceArguments": {
+        "externalIP": "'"$VIP"'", "port": 2029, "protocol": "tcp",
+        "security": 2, "mode": 4, "host": "'"$VIP"'", '"$1"'
+      },
+      "endpoints": [{"endpointIP": "31.31.31.1", "targetPort": 8443, "weight": 1}]
+    }'
+}
+t6_before=$(lb_list)
+if [[ -z "$t6_before" || "$(echo "$t6_before" | head -1)" -lt 1 ]]; then
+  echo "  API-T6 rule list unreadable or empty before the requests [FAIL]"; exit 1
+fi
+t6_args=(
+  '"mtls_backend": {"backend_ca_path": "/opt/loxilb/cert/backend_ca.crt"}'
+  '"mtls_backend": {"client_cert_path": "/opt/loxilb/cert/backend_client.crt"}'
+  '"mtls_backend": {"client_key_path": "/opt/loxilb/cert/backend_client.key"}'
+  '"mtls_backend": {"client_cert_data": "LS0tLS1CRUdJTg=="}'
+  '"mtls_backend": {"client_key_data": "LS0tLS1CRUdJTg=="}'
+  '"mtls_backend": {"verify_server_cert": true}'
+  '"backend_ca_cert_id": "backend-ca"'
+  '"backend_client_cert_id": "backend-client"'
+)
+for arg in "${t6_args[@]}"; do
+  t6_code=$(t6_post "$arg")
+  if [[ "$t6_code" == "400" ]]; then
+    echo "  API-T6 $arg → 400 [OK]"
+  else
+    echo "  API-T6 $arg → expected 400, got '$t6_code' [FAIL]"; exit 1
+  fi
+done
+# The same request without any of those arguments is accepted, so the 400s
+# above are about the argument and not about the rest of the body.
+t6_code=$(t6_post '"name": "api-t6-control"')
+if [[ "$t6_code" == "200" || "$t6_code" == "201" ]]; then
+  echo "  API-T6 control request without backend TLS arguments ($t6_code) [OK]"
+else
+  echo "  API-T6 control request expected 200/201, got '$t6_code' [FAIL]"; exit 1
+fi
+$hexec llb1 curl -s -o /dev/null -X DELETE \
+  "$LLB_API/config/loadbalancer/hosturl/$VIP/externalipaddress/$VIP/port/2029/protocol/tcp" 2>/dev/null
+sleep 1
+t6_after=$(lb_list)
+if [[ "$t6_before" == "$t6_after" ]]; then
+  echo "  API-T6 rule list unchanged by the refused requests [OK]"
+else
+  echo "  API-T6 rule list changed by the refused requests [FAIL]"
+  diff <(echo "$t6_before") <(echo "$t6_after") | head -20
+  exit 1
+fi
 
 echo ""
 echo "=== REST API Validation (mTLS): All API tests passed ==="

@@ -9206,14 +9206,14 @@ definitions:
     properties:
       name:
         type: string
-        description: 'Stable capability identifier. Deliberately not an enum: a build that gains a capability must not become unparseable to an older client. Known values - "kv_exact_vllm": admission of vLLM KV-exact (Tier 1.5) rules, kvExactMode 1 or 3 with kvEngineType vllm; "lb_allowed_sources": admission of allowedSources on the next load-balancer rule created.'
+        description: 'Stable capability identifier. Deliberately not an enum: a build that gains a capability must not become unparseable to an older client. Known values - "kv_exact_vllm": admission of vLLM KV-exact (Tier 1.5) rules, kvExactMode 1 or 3 with kvEngineType vllm; "lb_allowed_sources": admission of allowedSources on the next load-balancer rule created; "backend_tls_verify": admission of mtls_backend.verify_server_cert, backend_ca_cert_id, backend_client_cert_id and backend_tls_server_name on a load-balancer rule.'
         example: kv_exact_vllm
       ready:
         type: boolean
         description: True when this Gateway can currently admit use of the capability. False means every attempt is refused with 412 until the deployment is changed - no request body can satisfy it. For kv_exact_vllm the verdict is complete for a model only when the request carried model_name; without it the tokenizer precondition is not evaluated.
       reason_code:
         type: string
-        description: 'Stable machine-readable code for why the capability is not ready, for clients that must branch without matching prose. Absent when ready. Known values - "KV_EXACT_SEED_UNSET": the Gateway was launched without a non-empty LLB_KV_NONE_HASH_SEED; "KV_EXACT_SEED_TOO_LONG": the seed exceeds the 23-byte representable bound; "KV_EXACT_TOKENIZER_UNLOADABLE": no tokenizer can be loaded for the model_name asked about (nothing staged under /etc/loxilb/tokenizers/<model-slug>/ and no published model profile carries one); "LB_SOURCE_CHECK_SLOTS_EXHAUSTED": every load-balancer rule slot able to carry source checks is held by an existing rule; "LB_RULES_UNAVAILABLE": this Gateway is not serving load-balancer rules (bgp-only mode).'
+        description: 'Stable machine-readable code for why the capability is not ready, for clients that must branch without matching prose. Absent when ready. Known values - "KV_EXACT_SEED_UNSET": the Gateway was launched without a non-empty LLB_KV_NONE_HASH_SEED; "KV_EXACT_SEED_TOO_LONG": the seed exceeds the 23-byte representable bound; "KV_EXACT_TOKENIZER_UNLOADABLE": no tokenizer can be loaded for the model_name asked about (nothing staged under /etc/loxilb/tokenizers/<model-slug>/ and no published model profile carries one); "LB_SOURCE_CHECK_SLOTS_EXHAUSTED": every load-balancer rule slot able to carry source checks is held by an existing rule; "LB_RULES_UNAVAILABLE": this Gateway is not serving load-balancer rules (bgp-only mode); "BACKEND_TLS_NOT_BUILT": this Gateway was built without client-certificate support.'
         example: KV_EXACT_SEED_UNSET
       reason:
         type: string
@@ -11320,37 +11320,42 @@ definitions:
           mtls_backend:
             type: object
             description: >-
-              Requested backend verification and client-certificate settings for
-              FullProxy re-encryption (mode=4, security=2) with mTLS support.
-              Implementation warning: REST stores and returns this object, but the
-              active create encoder does not wire its verification flag or legacy
-              path/inline material into the backend TLS configuration. The separate
-              configuration bridge has no caller in the reviewed path. These fields
-              therefore do not establish backend authentication, even after a
-              successful POST. Backend cert-ID fields have separate C consumers;
-              their existence does not repair this missing verification wiring.
-              Requested-security fail-closed behavior and material precedence remain
-              pending policy decisions, not supported fallback guarantees.
+              Backend TLS request for FullProxy re-encryption (mode=4, security=2).
+              The object carries verify_server_cert only. Backend trust anchors and
+              the backend client identity are named by certificate ID
+              (backend_ca_cert_id, backend_client_cert_id), never by a path or by
+              inline material. The remaining properties are retired. They are kept in the
+              schema only so that a request that still sends one is refused with a
+              400 that names it; they are never stored and never returned.
             properties:
               verify_server_cert:
                 type: boolean
                 default: false
-                description: Requests backend server-certificate verification. False leaves verification unrequested. Implementation gap - true is stored but does not reach the active backend_verify_cert flag through this intake; it must not be displayed as effective verification.
+                description: >-
+                  Verifies the certificate of every endpoint the rule connects to.
+                  Requires backend_ca_cert_id: the chain must end in that CA bundle,
+                  there is no default trust store. The certificate must also name
+                  the endpoint: its address as an IP subject alternative name, or
+                  backend_tls_server_name as a DNS one when that is set. An endpoint
+                  that fails is not connected to. Needs mode=4, security=2 and a
+                  build with client-certificate support; otherwise 400. A stored
+                  configuration that carries true without a CA ID is loaded with
+                  the value reset to false and a warning.
               backend_ca_path:
                 type: string
-                description: Requested gateway-local backend PEM CA bundle path. Stored/read back, but not wired into the active backend TLS material path; see mtls_backend. Omitting it does not by itself establish system-CA verification.
+                description: Retired. POST refuses a nonempty value with 400. Never returned.
               client_cert_path:
                 type: string
-                description: Requested gateway-local client certificate path for backend mTLS, paired with client_key_path. Stored/read back but not wired into the active backend TLS material path.
+                description: Retired. POST refuses a nonempty value with 400. Never returned.
               client_key_path:
                 type: string
-                description: Requested gateway-local client private-key path paired with client_cert_path. Stored/read back but not wired into the active backend TLS material path.
+                description: Retired. POST refuses a nonempty value with 400. Never returned.
               client_cert_data:
                 type: string
-                description: Requested inline client certificate declared as base64-encoded PEM. Stored/read back but not an effective substitute for a backend client certificate through the current active path.
+                description: Retired. POST refuses a nonempty value with 400. Never returned.
               client_key_data:
                 type: string
-                description: Requested inline client private key declared as base64-encoded PEM. Stored/read back with the object; active backend material wiring is missing. Treat the input and readback as sensitive key material.
+                description: Retired. POST refuses a nonempty value with 400. Never returned.
           vip_qos_policy_id:
             type: string
             description: >-
@@ -11408,22 +11413,77 @@ definitions:
           backend_ca_cert_id:
             type: string
             description: >-
-              Reference used by the backend TLS material resolver for a managed CA
-              bundle. It does not enable verification by itself; mtls_backend has
-              missing verification-flag wiring. The C copy limits IDs to 63 bytes
-              without admission rejection. Missing material can resolve to an empty
-              path and select system CA paths if verification is otherwise enabled.
-              Requested-security fail-closed semantics and material precedence are
-              unresolved; this fallback is not an authenticated-backend guarantee.
+              Certificate ID of the CA bundle the backend server certificate is
+              verified against. It must name a /config/cert entry with usage "ca".
+              Required when mtls_backend.verify_server_cert is true, refused with
+              400 without it.
           backend_client_cert_id:
             type: string
             description: >-
-              Reference for backend client certificate/key material. The resolver
-              consults this ID when it did not obtain client material from the CA-ID
-              directory. Missing material can leave no client certificate; the ID
-              alone does not establish mTLS or server verification. IDs are copied
-              into 63-byte payload capacity without admission rejection. Strict
-              missing-material handling and precedence remain unresolved.
+              Certificate ID of the client certificate and key the gateway presents
+              to backends that ask for one. It must name a /config/cert entry with
+              usage "client". Without it the gateway presents no certificate.
+              Needs mode=4 and security=2.
+          backend_tls_server_name:
+            type: string
+            maxLength: 253
+            description: >-
+              DNS host name sent as SNI to every endpoint of the rule. When
+              mtls_backend.verify_server_cert is true the endpoint's certificate
+              must carry it as a DNS subject alternative name. Empty: no SNI is
+              sent and a verified endpoint must carry its own address. Never
+              derived from the VIP or from a request's Host header. Needs mode=4
+              and security=2.
+          backend_tls_effective:
+            type: object
+            readOnly: true
+            description: >-
+              What the data plane has installed for the TLS leg to the
+              endpoints, beside what the rule asks for in
+              mtls_backend.verify_server_cert, backend_ca_cert_id,
+              backend_client_cert_id and backend_tls_server_name. Present on GET
+              for mode=4 rules with security=2; ignored on input. Every member
+              but status describes the installed policy, never the request. It
+              is the policy new backend connections are made under, and does
+              not say that any connection was verified. The listener of an
+              address, port and protocol has one such policy, so rules that
+              share a listener report the same one.
+            properties:
+              status:
+                type: string
+                enum: [applied, pending, failed, unsupported]
+                description: >-
+                  applied: the listener runs what the rule asks for. pending:
+                  the rule has no listener in the data plane yet and nothing is
+                  installed. failed: the listener runs something else than the
+                  rule asks for, which the other members describe; this is the
+                  state of a rule whose listener could not load a certificate
+                  replaced under the same ID, and of a restored rule that
+                  disagrees with the rules on its listener. unsupported: this
+                  Gateway was built without client-certificate support, see the
+                  backend_tls_verify capability; the leg is TLS without
+                  verification or a client certificate.
+              verify:
+                type: boolean
+                x-omitempty: false
+                description: Endpoint certificates are verified. Always present, false included.
+              ca:
+                type: string
+                description: Certificate ID of the CA bundle in use, or "none".
+              client_cert:
+                type: boolean
+                x-omitempty: false
+                description: A client certificate is presented to endpoints. Always present, false included.
+              client_cert_id:
+                type: string
+                description: Certificate ID of that client certificate. Absent when none is presented.
+              server_name:
+                type: string
+                description: The name sent as SNI and expected of an endpoint's certificate. Absent when the endpoint address is expected.
+              generation:
+                type: integer
+                x-omitempty: false
+                description: How many times the listener's backend context was replaced in place since the listener was created.
 
       endpoints:
         type: array
@@ -14820,6 +14880,22 @@ definitions:
       - certPem
       - keyPem
     properties:
+      usage:
+        type: string
+        enum: [server, ca, client]
+        default: server
+        description: >-
+          What the entry is for, fixed when the ID is created. "server": a
+          listener certificate and key, selected by SNI. "ca": a bundle of CA
+          certificates that backend certificates are verified against; certPem
+          (plus chainPem) is the bundle and keyPem is the empty string. "client": the
+          certificate and key the gateway presents to backends. Only "server"
+          entries are offered to clients. A load-balancer rule refers to a "ca"
+          entry with backend_ca_cert_id and to a "client" entry with
+          backend_client_cert_id; an entry a rule refers to cannot be deleted.
+          Rotating a "ca" or "client" entry with PUT updates every rule that
+          refers to it before the call returns; 400 names the rules whose
+          listener could not load the new material and kept what it had.
       certId:
         type: string
         x-nullable: true
@@ -14831,7 +14907,7 @@ definitions:
       keyPem:
         type: string
         x-nullable: true
-        description: Private key in PEM. Required on POST/PUT. Persisted 0600 (key-at-rest). Never returned on GET.
+        description: Private key in PEM on POST/PUT for usage "server" and "client". For usage "ca" the member is still sent and must be the empty string; a key is refused. Persisted 0600 (key-at-rest). Never returned on GET.
       chainPem:
         type: string
         description: Optional intermediate-chain PEM appended after the leaf.

@@ -17,6 +17,8 @@
 package common
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"net"
 	"time"
@@ -844,33 +846,118 @@ type MTLSFrontendConfig struct {
 	ClientCRLPath string `json:"client_crl_path,omitempty"`
 }
 
-// MTLSBackendConfig - Backend server certificate verification + client cert
+// MTLSBackendConfig - Backend server certificate verification request.
+// Backend trust anchors and the client identity are named by certificate ID
+// on the rule (BackendCaCertId, BackendClientCertId); this object carries no
+// certificate or key material.
 type MTLSBackendConfig struct {
 	// VerifyServerCert - Enable backend server certificate verification
 	// true = verify backend server cert (SSL_VERIFY_PEER)
 	// false = skip verification (SSL_VERIFY_NONE, default for backward compatibility)
 	VerifyServerCert bool `json:"verify_server_cert"`
 
-	// BackendCAPath - Path to backend CA bundle (PEM format)
-	// Empty = use system CA store (etc/ssl/certs)
-	// Example: "/opt/loxilb/cert/backend_ca_bundle.crt"
-	BackendCAPath string `json:"backend_ca_path,omitempty"`
+	// retired holds the path and inline-material keys this object used to
+	// carry, when a document written by an earlier release still has them.
+	// They are kept only so that document re-encodes to the bytes its
+	// checksum was computed over; the loader then calls DropRetired. They are
+	// never applied, stored on a rule or returned.
+	retired *mtlsBackendRetired
+}
 
-	// ClientCertPath - Path to loxilb's client certificate for backend mTLS
-	// Example: "/opt/loxilb/cert/loxilb_client.crt"
+// mtlsBackendRetired is the set of keys MTLSBackendConfig no longer carries.
+type mtlsBackendRetired struct {
+	BackendCAPath  string `json:"backend_ca_path,omitempty"`
 	ClientCertPath string `json:"client_cert_path,omitempty"`
-
-	// ClientKeyPath - Path to loxilb's private key for backend mTLS
-	// Example: "/opt/loxilb/cert/loxilb_client.key"
-	ClientKeyPath string `json:"client_key_path,omitempty"`
-
-	// ClientCertData - Inline client certificate (base64-encoded PEM)
-	// Alternative to ClientCertPath
+	ClientKeyPath  string `json:"client_key_path,omitempty"`
 	ClientCertData string `json:"client_cert_data,omitempty"`
+	ClientKeyData  string `json:"client_key_data,omitempty"`
+}
 
-	// ClientKeyData - Inline client key (base64-encoded PEM)
-	// Alternative to ClientKeyPath
-	ClientKeyData string `json:"client_key_data,omitempty"`
+// mtlsBackendDoc is the on-disk shape of MTLSBackendConfig, in the key order
+// earlier releases wrote.
+type mtlsBackendDoc struct {
+	VerifyServerCert bool `json:"verify_server_cert"`
+	mtlsBackendRetired
+}
+
+// UnmarshalJSON accepts the current object and the one earlier releases
+// wrote. Any other key is refused, so a strict document decoder stays strict
+// for this object.
+func (m *MTLSBackendConfig) UnmarshalJSON(b []byte) error {
+	var doc mtlsBackendDoc
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&doc); err != nil {
+		return err
+	}
+	m.VerifyServerCert = doc.VerifyServerCert
+	m.retired = nil
+	if doc.mtlsBackendRetired != (mtlsBackendRetired{}) {
+		retired := doc.mtlsBackendRetired
+		m.retired = &retired
+	}
+	return nil
+}
+
+// MarshalJSON writes verify_server_cert only, unless retired keys decoded
+// from an earlier document have not been dropped yet.
+func (m MTLSBackendConfig) MarshalJSON() ([]byte, error) {
+	doc := mtlsBackendDoc{VerifyServerCert: m.VerifyServerCert}
+	if m.retired != nil {
+		doc.mtlsBackendRetired = *m.retired
+	}
+	// Escaping is left to the caller's encoder, which re-escapes this output
+	// when it is configured to.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(doc); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+// DropRetired discards the retired keys decoded from an earlier document and
+// returns their names (never their values), nil when there were none.
+func (m *MTLSBackendConfig) DropRetired() []string {
+	if m == nil || m.retired == nil {
+		return nil
+	}
+	var names []string
+	for _, f := range []struct{ name, val string }{
+		{"backend_ca_path", m.retired.BackendCAPath},
+		{"client_cert_path", m.retired.ClientCertPath},
+		{"client_key_path", m.retired.ClientKeyPath},
+		{"client_cert_data", m.retired.ClientCertData},
+		{"client_key_data", m.retired.ClientKeyData},
+	} {
+		if f.val != "" {
+			names = append(names, f.name)
+		}
+	}
+	m.retired = nil
+	return names
+}
+
+// ResetUnverifiable clears a verification request that names no CA, as a
+// document written by an earlier release can carry, and reports whether there
+// was one. Such a request never had an effect and cannot be honoured: there is
+// nothing to verify against. A create request with the same shape is refused;
+// a stored rule is loaded as it behaved, unverified, and says so.
+func (m *MTLSBackendConfig) ResetUnverifiable(caCertID string) bool {
+	if m == nil || !m.VerifyServerCert || caCertID != "" {
+		return false
+	}
+	m.VerifyServerCert = false
+	return true
+}
+
+// Stored returns the copy of m a rule keeps: the request fields only.
+func (m *MTLSBackendConfig) Stored() *MTLSBackendConfig {
+	if m == nil {
+		return nil
+	}
+	return &MTLSBackendConfig{VerifyServerCert: m.VerifyServerCert}
 }
 
 // CertArg - (11/12/13/16): the canonical TLS-material handle.
@@ -891,6 +978,9 @@ type CertArg struct {
 	KeyPEM string `json:"keyPem"`
 	// ChainPEM - optional intermediate-chain PEM appended after the leaf.
 	ChainPEM string `json:"chainPem,omitempty"`
+	// Usage - what the entry is for: CertUsageServer (default), CertUsageCA or
+	// CertUsageClient. Set on POST and fixed for the life of the ID.
+	Usage string `json:"usage,omitempty"`
 	// Hostnames - SAN-DNS/CN auto-derived hostnames the certId registered into the SNI
 	// store. Output-only — populated on GET, ignored on POST/PUT.
 	Hostnames []string `json:"hostnames,omitempty"`
@@ -1111,6 +1201,10 @@ type LbServiceArg struct {
 	// where it came from, for a FullProxy service: GET only. Never
 	// persisted, never read on input.
 	HalfCloseEffective *HalfCloseEffectiveArg `json:"-"`
+	// BackendTLSEffective - what the data plane has installed for the
+	// backend TLS leg of the rule's listener. A read model filled on GET,
+	// never stored and never replayed into a POST.
+	BackendTLSEffective *BackendTLSEffectiveArg `json:"-"`
 	// MustExist - Octavia PATCH must-exist semantics. When true, AddLbRule
 	// refuses to CREATE an absent rule and returns the RuleNotExistsErr sentinel so the
 	// PATCH handler can map it to 404. POST callers leave this false (default), preserving
@@ -1259,6 +1353,12 @@ type LbServiceArg struct {
 	// carries the authoritative binding (including the allocation high-water
 	// mark that prevents generation reuse). In-memory only (json:"-").
 	RestoreReplay bool `json:"-"`
+	// BootReplay - set when this rule add replays the saved lbconfig.txt at
+	// start. Like a restore, the saved configuration is kept whole: a rule
+	// the data plane cannot install yet stays and is retried, and a rule
+	// that disagrees with its listener is admitted and logged. In-memory
+	// only (json:"-").
+	BootReplay bool `json:"-"`
 
 	// CHWBL/WRR_HASH configuration. Presence bits are wire-only metadata used to
 	// distinguish replace omission from an explicit reset to the public default.
@@ -1339,6 +1439,10 @@ type LbServiceArg struct {
 	// BackendClientCertId - (16): certId of loxilb's backend client cert+key.
 	// Empty ⇒ no backend client cert (today's behaviour).
 	BackendClientCertId string `json:"backend_client_cert_id,omitempty"`
+	// BackendTLSServerName - name sent as SNI to the endpoints and, when the
+	// endpoint's certificate is verified, expected among its DNS names.
+	// Empty ⇒ no SNI, and a verified endpoint must carry its own address.
+	BackendTLSServerName string `json:"backend_tls_server_name,omitempty"`
 }
 
 // LbEndPointArg - Information related to load-balancer end-point
@@ -2293,6 +2397,7 @@ type NetHookInterface interface {
 	NetLbRuleAdd(*LbRuleMod) (int, error)
 	NetLbRuleDel(*LbRuleMod) (int, error)
 	NetLbRuleGet() ([]LbRuleMod, error)
+	NetLbBackendCertRefresh(certID string) (int, []string, error)
 	NetKvExactBindingGet() ([]KvExactBindingMod, error)
 	NetKvExactBindingAdd(*KvExactBindingMod) (int, error)
 	NetKvExactBindingDel(*KvExactBindingMod) (int, error)

@@ -84,6 +84,9 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if err := pres.validateHalfCloseMode(params.Attr.ServiceArguments); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
+	if err := validateBackendTLSArguments(params.Attr.ServiceArguments); err != nil {
+		return errorResponseWithCode(http.StatusBadRequest, err.Error())
+	}
 
 	var lbRules cmn.LbRuleMod
 
@@ -260,13 +263,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 
 	// mTLS Backend Configuration
 	if params.Attr.ServiceArguments.MtlsBackend != nil {
-		lbRules.Serv.MTLSBackend = &cmn.MTLSBackendConfig{
-			BackendCAPath:  params.Attr.ServiceArguments.MtlsBackend.BackendCaPath,
-			ClientCertPath: params.Attr.ServiceArguments.MtlsBackend.ClientCertPath,
-			ClientKeyPath:  params.Attr.ServiceArguments.MtlsBackend.ClientKeyPath,
-			ClientCertData: params.Attr.ServiceArguments.MtlsBackend.ClientCertData,
-			ClientKeyData:  params.Attr.ServiceArguments.MtlsBackend.ClientKeyData,
-		}
+		lbRules.Serv.MTLSBackend = &cmn.MTLSBackendConfig{}
 		// Convert pointer field to value
 		if params.Attr.ServiceArguments.MtlsBackend.VerifyServerCert != nil {
 			lbRules.Serv.MTLSBackend.VerifyServerCert = *params.Attr.ServiceArguments.MtlsBackend.VerifyServerCert
@@ -294,6 +291,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	lbRules.Serv.HstsPreload = params.Attr.ServiceArguments.HstsPreload                     //
 	lbRules.Serv.BackendCaCertId = params.Attr.ServiceArguments.BackendCaCertID             //
 	lbRules.Serv.BackendClientCertId = params.Attr.ServiceArguments.BackendClientCertID     //
+	lbRules.Serv.BackendTLSServerName = params.Attr.ServiceArguments.BackendTLSServerName
 
 	if lbRules.Serv.Proto == "sctp" {
 		for _, data := range params.Attr.SecondaryIPs {
@@ -356,6 +354,12 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 
 	if lbRules.Serv.Mode == cmn.LBModeDSR && lbRules.Serv.Sel != cmn.LbSelHash {
 		return &ResultResponse{Result: "Error: Only Hash Selection criteria allowed for DSR mode"}
+	}
+
+	// The rule layer makes the same check for every way a rule arrives; here
+	// it turns a refused request away before anything is touched.
+	if err := cmn.ValidateBackendTLS(&lbRules.Serv); err != nil {
+		return &ErrorResponse{Payload: ResultErrorResponseError(&cmn.RuleArgumentError{Err: err})}
 	}
 
 	tk.LogIt(tk.LogDebug, "api: lbRules : %v\n", lbRules)
@@ -824,13 +828,24 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 		verifyServerCert := lb.Serv.MTLSBackend.VerifyServerCert
 		mtlsBackend := &models.LoadbalanceEntryServiceArgumentsMtlsBackend{
 			VerifyServerCert: &verifyServerCert,
-			BackendCaPath:    lb.Serv.MTLSBackend.BackendCAPath,
-			ClientCertPath:   lb.Serv.MTLSBackend.ClientCertPath,
-			ClientKeyPath:    lb.Serv.MTLSBackend.ClientKeyPath,
-			ClientCertData:   lb.Serv.MTLSBackend.ClientCertData,
-			ClientKeyData:    lb.Serv.MTLSBackend.ClientKeyData,
 		}
 		tmpSvc.MtlsBackend = mtlsBackend
+	}
+	// What the rule asks of its backend leg, by name only: the certificate
+	// IDs, never the material behind them.
+	tmpSvc.BackendCaCertID = lb.Serv.BackendCaCertId
+	tmpSvc.BackendClientCertID = lb.Serv.BackendClientCertId
+	tmpSvc.BackendTLSServerName = lb.Serv.BackendTLSServerName
+	if eff := lb.Serv.BackendTLSEffective; eff != nil {
+		tmpSvc.BackendTLSEffective = &models.LoadbalanceEntryServiceArgumentsBackendTLSEffective{
+			Status:       eff.Status,
+			Verify:       eff.Verify,
+			Ca:           eff.CA,
+			ClientCert:   eff.ClientCert,
+			ClientCertID: eff.ClientCertID,
+			ServerName:   eff.ServerName,
+			Generation:   int64(eff.Generation),
+		}
 	}
 
 	tmpLB.ServiceArguments = &tmpSvc

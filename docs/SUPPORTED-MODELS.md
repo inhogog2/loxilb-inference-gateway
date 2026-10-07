@@ -125,6 +125,7 @@ Arguments beyond the engine's usual KV-event settings. A row without an entry ne
 | OLMo-2-0425-1B-Instruct | sglang v0.5.18 | `--disable-cuda-graph` (CUDA-graph capture fails for this architecture; in a prefill/decode pair the decode member exits) |
 | gemma-3-1b-it | sglang v0.5.18 | SGLang 0.5.12–0.5.18 answer `/v1/tokenize` with HTTP 500 for this model (`model_max_length` beyond 64 bits): mount the fixed `serving_tokenize.py` from `cicd/kv-model-compat-pd/sglang-tokenize-fix/` (0.5.19 and later need nothing) |
 | gemma-3-1b-it | sglang v0.5.18 | `--disable-cuda-graph` converged on a 24 GB GPU; `--cuda-graph-backend-prefill=disabled` on both members of a prefill/decode pair (the prefill CUDA graph crashes the prefill member) |
+| gemma-4-E2B-it | sglang v0.5.18 | prefill/decode: start the decode engines without `--disaggregation-decode-enable-radix-cache`; SGLang refuses it for this model (sliding-window attention) and the decode engine exits at start |
 | EXAONE-4.0-1.2B | sglang v0.5.18 | `--attention-backend triton` on Ada-generation GPUs |
 | granite-4.2-3b | sglang v0.5.18 | SGLang 0.5.12–0.5.18 answer `/v1/tokenize` with HTTP 500 for this model (`model_max_length` beyond 64 bits): mount the fixed `serving_tokenize.py` from `cicd/kv-model-compat-pd/sglang-tokenize-fix/` (0.5.19 and later need nothing) |
 | granite-4.2-3b | sglang v0.5.18 | on a 24 GB GPU run it alone with `--mem-fraction-static` above 0.5 |
@@ -134,6 +135,7 @@ Arguments beyond the engine's usual KV-event settings. A row without an entry ne
 | Qwen3.6-27B-FP8 | trtllm 1.3.0rc24 | `--max_batch_size 16` on one 48 GB GPU |
 | Qwen3.8-27B-FP8 | vllm v0.28.0 | `--max-num-seqs 64` on one 48 GB GPU |
 | Qwen3.8-27B-FP8 | vllm v0.28.0 | `VLLM_SSM_CONV_STATE_LAYOUT=DS` on both members of a prefill/decode pair |
+| Qwen3.8-27B-FP8 | sglang v0.5.18 | prefill/decode: start the decode engines without `--disaggregation-decode-enable-radix-cache`; SGLang refuses it for this model (state-space layers) and the decode engine exits at start |
 | Qwen3.8-27B-FP8 | trtllm 1.3.0rc24 | `--max_batch_size 16` on one 48 GB GPU |
 | gpt-oss-20b | sglang v0.5.18 | SGLang 0.5.12–0.5.18 answer `/v1/tokenize` with HTTP 500 for this model (`model_max_length` beyond 64 bits): mount the fixed `serving_tokenize.py` from `cicd/kv-model-compat-pd/sglang-tokenize-fix/` (0.5.19 and later need nothing) |
 | gpt-oss-20b | sglang v0.5.18 | 48 GB GPU per member; alone on the GPU with `--mem-fraction-static` above 0.5 |
@@ -144,6 +146,10 @@ Every engine, every model:
 - Models whose chat template prints the date (Llama-3.2, gpt-oss): run the engine in UTC — no `TZ`, no host `/etc/localtime` mount.
 - SGLang: `--model-path <snapshot path> --revision <revision>`. A hub id makes the engine load a different tokenizer pre-tokenizer on some models, and a path without `--revision` fails the gateway's identity probe.
 - KV block size 16 (`--block-size 16` on vLLM, page size 16 on SGLang), matching the rule's `kvBlockSize`.
+- SGLang: wait for the engine's `The server is fired up` log line before sending traffic; `/v1/models` answers earlier. The first prompt longer than one 16-token page after a start in a fresh container compiles a hashing extension (about 8 s on a 4-core node) and requests wait for it: mount a host directory at `/root/.cache/torch_extensions` so it is built once per node and image, and send one long prompt to every engine before taking traffic.
+- SGLang prefill/decode: start the decode engines with `--disaggregation-decode-enable-radix-cache` (recommended). A decode engine then keeps the prefixes it received, and a request whose prefix it holds transfers about 1 MB instead of the whole prefix (93 MB without it, 0.7 MB with it, measured on DeepSeek-R1-Distill-Qwen-1.5B with a long shared prefix). SGLang v0.5.18 refuses the argument at start for models with sliding-window attention or state-space layers: the rows above name the models it was refused for. Not measured for Qwen3.6-27B-FP8 and gpt-oss-20b.
+- Prefill/decode, every engine: the prompt's KV travels from the prefill node to the decode node, so the sending node's network egress bounds the rate of requests whose prefix the decode engine does not hold: (prefill nodes x egress bytes per second) / (KV bytes of one prompt). Measured: 424 MB per prompt from two prefill nodes limited to 2 Gbit/s each gave 1.08 requests per second.
+- Prefill/decode, every engine: the gateway chooses the decode engine without regard to which one holds a prefix, so a shared prefix is transferred whole once per decode engine, not once per fleet. A conversation whose client sends `X-Conversation-Id` stays on one prefill/decode pair and pays one whole transfer (such a request is routed by the conversation, not by KV-exact selection). Sending each shared prefix once through every decode engine before taking traffic removes the cost.
 
 ## Request features a strict rule refuses
 

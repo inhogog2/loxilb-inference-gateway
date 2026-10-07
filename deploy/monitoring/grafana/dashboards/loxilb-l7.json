@@ -639,6 +639,818 @@
         },
         "overrides": []
       }
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "collapsed": true,
+      "title": "Half-close holds (only on services whose half_close_mode, or the default mode, is hold)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "panels": [
+        {
+          "id": 13,
+          "type": "stat",
+          "title": "Holds taken",
+          "description": "Clients held after a half-close instead of being cut at their FIN, over the dashboard's time range. Set the range to the window being judged.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 0,
+            "y": 37
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "round(sum(increase(loxilb_proxy_halfclose_hold_total{instance=~\"$instance\"}[$__range])))"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No data",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 14,
+          "type": "stat",
+          "title": "Client FINs with an answer owed",
+          "description": "Client FINs that arrived while an answer was still owed, on plaintext connections the kernel never carried, on every fullproxy service whether it holds or not, over the dashboard's time range: the clients a hold is for. Near zero means holding changes little here.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 4,
+            "y": 37
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "round(sum(increase(loxilb_proxy_halfclose_fin_total{instance=~\"$instance\",outcome=\"owed\"}[$__range])))"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No data",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 15,
+          "type": "stat",
+          "title": "Holds expired before the answer began",
+          "description": "Held clients closed by the idle bound before any answer byte reached them, over the dashboard's time range: a first byte slower than the bound, or a cancel that was waited on as a half-close. Should be 0.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 8,
+            "y": 37
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "round(sum(increase(loxilb_proxy_halfclose_hold_expired_total{instance=~\"$instance\",answer_started=\"false\"}[$__range])))"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No data",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 16,
+          "type": "stat",
+          "title": "Held clients' EOF re-entries",
+          "description": "Times a held client's EOF was handled again, over the dashboard's time range. Should stay 0: anything else is a defect to report.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 12,
+            "y": 37
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "round(sum(increase(loxilb_proxy_halfclose_hold_spurious_wakeups_total{instance=~\"$instance\",kind=\"eof_reentry\"}[$__range])))"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No data",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 17,
+          "type": "stat",
+          "title": "Held now",
+          "description": "Clients held open now after a half-close, waiting for their answers to go out.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 16,
+            "y": 37
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(loxilb_proxy_halfclose_held{instance=~\"$instance\"})"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No data",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 18,
+          "type": "stat",
+          "title": "Oldest hold",
+          "description": "How long the oldest client held now has been held; 0 when none is. A hold ends on idleness, not age, so a long answer that keeps coming holds a client well past the bound.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 20,
+            "y": 37
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max(loxilb_proxy_halfclose_held_oldest_seconds{instance=~\"$instance\"})"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "noValue": "No data",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 19,
+          "type": "stat",
+          "title": "Holds allowed",
+          "description": "Whether new holds may be taken (/config/halfclose allow). Blocking leaves the clients already held to finish.",
+          "gridPos": {
+            "h": 4,
+            "w": 8,
+            "x": 0,
+            "y": 41
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "loxilb_proxy_halfclose_hold_allowed{instance=~\"$instance\"}",
+              "legendFormat": "{{instance}}"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No data",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "orange",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "blocked"
+                    },
+                    "1": {
+                      "text": "allowed"
+                    }
+                  }
+                }
+              ]
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 20,
+          "type": "stat",
+          "title": "Default half-close mode",
+          "description": "The mode of the fullproxy services that leave their own half_close_mode unset and could take hold (/config/halfclose defaultMode).",
+          "gridPos": {
+            "h": 4,
+            "w": 8,
+            "x": 8,
+            "y": 41
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "loxilb_proxy_halfclose_hold_default_mode{instance=~\"$instance\"}",
+              "legendFormat": "{{instance}}"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No data",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "off"
+                    },
+                    "1": {
+                      "text": "hold"
+                    }
+                  }
+                }
+              ]
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 21,
+          "type": "stat",
+          "title": "Hold idle bound",
+          "description": "A held client to which no answer byte has been written for this long is closed (/config/halfclose capSeconds).",
+          "gridPos": {
+            "h": 4,
+            "w": 8,
+            "x": 16,
+            "y": 41
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "loxilb_proxy_halfclose_hold_cap_seconds{instance=~\"$instance\"}",
+              "legendFormat": "{{instance}}"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "noValue": "No data",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 22,
+          "type": "timeseries",
+          "title": "Held clients",
+          "description": "Clients held now, per gateway. Holds come and go with half-closing clients; a floor that keeps rising is holds that do not end.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 45
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (instance) (loxilb_proxy_halfclose_held{instance=~\"$instance\"})",
+              "legendFormat": "{{instance}}"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No data"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 23,
+          "type": "timeseries",
+          "title": "Oldest hold vs idle bound",
+          "description": "The age of the oldest hold against the idle bound. A hold with no answer byte for the bound ends there; one older than the bound is still being answered (a long answer, or a client reading slowly).",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 45
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max by (instance) (loxilb_proxy_halfclose_held_oldest_seconds{instance=~\"$instance\"})",
+              "legendFormat": "oldest {{instance}}"
+            },
+            {
+              "refId": "B",
+              "expr": "max by (instance) (loxilb_proxy_halfclose_hold_cap_seconds{instance=~\"$instance\"})",
+              "legendFormat": "bound {{instance}}"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "noValue": "No data"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 24,
+          "type": "timeseries",
+          "title": "Holds taken and ended by reason",
+          "description": "answered: every answer owed went out. backend_first: the connection carrying the answer ended first. expired: no answer byte for the bound. released: /config/halfclose/release. reset: the client reset while held (a cancel that was waited on). other: torn down for another reason.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 53
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(rate(loxilb_proxy_halfclose_hold_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "legendFormat": "taken"
+            },
+            {
+              "refId": "B",
+              "expr": "sum by (reason) (rate(loxilb_proxy_halfclose_hold_ended_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "legendFormat": "ended {{reason}}"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "noValue": "No data"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 25,
+          "type": "timeseries",
+          "title": "Hold expiries by answer and stream",
+          "description": "Holds ended by the idle bound. answer_started=false: no answer byte had reached the client (a slow first byte, or a cancel taken for a half-close). answer_started=true: the backend stopped, or the answer came slower than the bound and was cut short.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 53
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (answer_started, stream) (rate(loxilb_proxy_halfclose_hold_expired_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "legendFormat": "started={{answer_started}} stream={{stream}}"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "noValue": "No data"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 26,
+          "type": "timeseries",
+          "title": "Client FINs by outcome",
+          "description": "Every fullproxy client FIN, once each, by what was in flight: owed (an answer was still owed: the clients a hold is for), idle (nothing owed: an ordinary close), partial (the request was not complete, or its reads were paused), residue (an answer was owed and the next request was still arriving), tls, accel (the kernel was given a direction of the connection).",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 61
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (outcome) (rate(loxilb_proxy_halfclose_fin_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "legendFormat": "{{outcome}}"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "noValue": "No data"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 27,
+          "type": "timeseries",
+          "title": "Client FIN gap p50/p95 (answer owed)",
+          "description": "Time from a complete request to the client's FIN when an answer was owed, on plaintext connections the kernel never carried, by the request's stream field (unknown where the proxy did not read the body). Under 0.1 s is an early FIN: a half-close follows its request within milliseconds, a cancel comes after at least a time to first token.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 61
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.5, sum by (le, stream) (rate(loxilb_proxy_halfclose_fin_gap_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+              "legendFormat": "p50 stream={{stream}}"
+            },
+            {
+              "refId": "B",
+              "expr": "histogram_quantile(0.95, sum by (le, stream) (rate(loxilb_proxy_halfclose_fin_gap_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+              "legendFormat": "p95 stream={{stream}}"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "noValue": "No data"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 28,
+          "type": "timeseries",
+          "title": "Held-client wake-ups, refusals, acceleration skipped",
+          "description": "wakeup eof_reentry: a held client's EOF handled again; should stay 0. wakeup empty_out: woken to write with nothing to write; about one each time its answer queue fills and empties, growth with the time held is a busy loop. refused: would-be holds cut at their FIN because the next request was still arriving. accel skipped: connections left unaccelerated so that they could be held.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 69
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (kind) (rate(loxilb_proxy_halfclose_hold_spurious_wakeups_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "legendFormat": "wakeup {{kind}}"
+            },
+            {
+              "refId": "B",
+              "expr": "sum by (reason) (rate(loxilb_proxy_halfclose_hold_refused_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "legendFormat": "refused {{reason}}"
+            },
+            {
+              "refId": "C",
+              "expr": "sum(rate(loxilb_proxy_halfclose_accel_skipped_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "legendFormat": "accel skipped"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "noValue": "No data"
+            },
+            "overrides": []
+          }
+        }
+      ]
     }
   ]
 }

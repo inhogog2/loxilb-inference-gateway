@@ -667,10 +667,10 @@ type LoadbalanceEntryServiceArguments struct {
 	// Enum: [disabled required jwt apikey-or-jwt]
 	APIKeyAuth string `json:"api_key_auth,omitempty"`
 
-	// Reference used by the backend TLS material resolver for a managed CA bundle. It does not enable verification by itself; mtls_backend has missing verification-flag wiring. The C copy limits IDs to 63 bytes without admission rejection. Missing material can resolve to an empty path and select system CA paths if verification is otherwise enabled. Requested-security fail-closed semantics and material precedence are unresolved; this fallback is not an authenticated-backend guarantee.
+	// Certificate ID of the CA bundle the backend server certificate is verified against. It must name a /config/cert entry with usage "ca". Required when mtls_backend.verify_server_cert is true, refused with 400 without it.
 	BackendCaCertID string `json:"backend_ca_cert_id,omitempty"`
 
-	// Reference for backend client certificate/key material. The resolver consults this ID when it did not obtain client material from the CA-ID directory. Missing material can leave no client certificate; the ID alone does not establish mTLS or server verification. IDs are copied into 63-byte payload capacity without admission rejection. Strict missing-material handling and precedence remain unresolved.
+	// Certificate ID of the client certificate and key the gateway presents to backends that ask for one. It must name a /config/cert entry with usage "client". Without it the gateway presents no certificate. Needs mode=4 and security=2.
 	BackendClientCertID string `json:"backend_client_cert_id,omitempty"`
 
 	// Sets SO_KEEPALIVE + TCP_KEEPIDLE on backend socket in seconds. Keeps TCP CT entries alive through cloud NAT during long SSE streams. 0 = disabled. Recommended value 60 for most cloud environments.
@@ -680,6 +680,13 @@ type LoadbalanceEntryServiceArguments struct {
 	// FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. GET reports this field only for FullProxy.
 	// Enum: [http1 http2 both]
 	BackendProtocol *string `json:"backend_protocol,omitempty"`
+
+	// backend tls effective
+	BackendTLSEffective *LoadbalanceEntryServiceArgumentsBackendTLSEffective `json:"backend_tls_effective,omitempty"`
+
+	// DNS host name sent as SNI to every endpoint of the rule. When mtls_backend.verify_server_cert is true the endpoint's certificate must carry it as a DNS subject alternative name. Empty: no SNI is sent and a verified endpoint must carry its own address. Never derived from the VIP or from a request's Host header. Needs mode=4 and security=2.
+	// Max Length: 253
+	BackendTLSServerName string `json:"backend_tls_server_name,omitempty"`
 
 	// Requests BGP advertisement of the service and flat secondary IPs after a successful add when the BGP component is available. This flag alone does not establish a BGP session or route advertisement; structured secondaryVIPs are not advertised by this hook.
 	Bgp bool `json:"bgp,omitempty"`
@@ -1019,6 +1026,14 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 		res = append(res, err)
 	}
 
+	if err := m.validateBackendTLSEffective(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateBackendTLSServerName(formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.validateChwblMeanLoadFactor(formats); err != nil {
 		res = append(res, err)
 	}
@@ -1304,6 +1319,37 @@ func (m *LoadbalanceEntryServiceArguments) validateBackendProtocol(formats strfm
 
 	// value enum
 	if err := m.validateBackendProtocolEnum("serviceArguments"+"."+"backend_protocol", "body", *m.BackendProtocol); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateBackendTLSEffective(formats strfmt.Registry) error {
+	if swag.IsZero(m.BackendTLSEffective) { // not required
+		return nil
+	}
+
+	if m.BackendTLSEffective != nil {
+		if err := m.BackendTLSEffective.Validate(formats); err != nil {
+			if ve, ok := err.(*errors.Validation); ok {
+				return ve.ValidateName("serviceArguments" + "." + "backend_tls_effective")
+			} else if ce, ok := err.(*errors.CompositeError); ok {
+				return ce.ValidateName("serviceArguments" + "." + "backend_tls_effective")
+			}
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateBackendTLSServerName(formats strfmt.Registry) error {
+	if swag.IsZero(m.BackendTLSServerName) { // not required
+		return nil
+	}
+
+	if err := validate.MaxLength("serviceArguments"+"."+"backend_tls_server_name", "body", m.BackendTLSServerName, 253); err != nil {
 		return err
 	}
 
@@ -2468,6 +2514,10 @@ func (m *LoadbalanceEntryServiceArguments) validateSockMapMode(formats strfmt.Re
 func (m *LoadbalanceEntryServiceArguments) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
 	var res []error
 
+	if err := m.contextValidateBackendTLSEffective(ctx, formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.contextValidateFcEffective(ctx, formats); err != nil {
 		res = append(res, err)
 	}
@@ -2487,6 +2537,22 @@ func (m *LoadbalanceEntryServiceArguments) ContextValidate(ctx context.Context, 
 	if len(res) > 0 {
 		return errors.CompositeValidationError(res...)
 	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) contextValidateBackendTLSEffective(ctx context.Context, formats strfmt.Registry) error {
+
+	if m.BackendTLSEffective != nil {
+		if err := m.BackendTLSEffective.ContextValidate(ctx, formats); err != nil {
+			if ve, ok := err.(*errors.Validation); ok {
+				return ve.ValidateName("serviceArguments" + "." + "backend_tls_effective")
+			} else if ce, ok := err.(*errors.CompositeError); ok {
+				return ce.ValidateName("serviceArguments" + "." + "backend_tls_effective")
+			}
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -2565,6 +2631,124 @@ func (m *LoadbalanceEntryServiceArguments) MarshalBinary() ([]byte, error) {
 // UnmarshalBinary interface implementation
 func (m *LoadbalanceEntryServiceArguments) UnmarshalBinary(b []byte) error {
 	var res LoadbalanceEntryServiceArguments
+	if err := swag.ReadJSON(b, &res); err != nil {
+		return err
+	}
+	*m = res
+	return nil
+}
+
+// LoadbalanceEntryServiceArgumentsBackendTLSEffective What the data plane has installed for the TLS leg to the endpoints, beside what the rule asks for in mtls_backend.verify_server_cert, backend_ca_cert_id, backend_client_cert_id and backend_tls_server_name. Present on GET for mode=4 rules with security=2; ignored on input. Every member but status describes the installed policy, never the request. It is the policy new backend connections are made under, and does not say that any connection was verified. The listener of an address, port and protocol has one such policy, so rules that share a listener report the same one.
+//
+// swagger:model LoadbalanceEntryServiceArgumentsBackendTLSEffective
+type LoadbalanceEntryServiceArgumentsBackendTLSEffective struct {
+
+	// Certificate ID of the CA bundle in use, or "none".
+	Ca string `json:"ca,omitempty"`
+
+	// A client certificate is presented to endpoints. Always present, false included.
+	ClientCert bool `json:"client_cert"`
+
+	// Certificate ID of that client certificate. Absent when none is presented.
+	ClientCertID string `json:"client_cert_id,omitempty"`
+
+	// How many times the listener's backend context was replaced in place since the listener was created.
+	Generation int64 `json:"generation"`
+
+	// The name sent as SNI and expected of an endpoint's certificate. Absent when the endpoint address is expected.
+	ServerName string `json:"server_name,omitempty"`
+
+	// applied: the listener runs what the rule asks for. pending: the rule has no listener in the data plane yet and nothing is installed. failed: the listener runs something else than the rule asks for, which the other members describe; this is the state of a rule whose listener could not load a certificate replaced under the same ID, and of a restored rule that disagrees with the rules on its listener. unsupported: this Gateway was built without client-certificate support, see the backend_tls_verify capability; the leg is TLS without verification or a client certificate.
+	// Enum: [applied pending failed unsupported]
+	Status string `json:"status,omitempty"`
+
+	// Endpoint certificates are verified. Always present, false included.
+	Verify bool `json:"verify"`
+}
+
+// Validate validates this loadbalance entry service arguments backend TLS effective
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) Validate(formats strfmt.Registry) error {
+	var res []error
+
+	if err := m.validateStatus(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if len(res) > 0 {
+		return errors.CompositeValidationError(res...)
+	}
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsBackendTlsEffectiveTypeStatusPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["applied","pending","failed","unsupported"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsBackendTlsEffectiveTypeStatusPropEnum = append(loadbalanceEntryServiceArgumentsBackendTlsEffectiveTypeStatusPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusApplied captures enum value "applied"
+	LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusApplied string = "applied"
+
+	// LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusPending captures enum value "pending"
+	LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusPending string = "pending"
+
+	// LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusFailed captures enum value "failed"
+	LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusFailed string = "failed"
+
+	// LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusUnsupported captures enum value "unsupported"
+	LoadbalanceEntryServiceArgumentsBackendTLSEffectiveStatusUnsupported string = "unsupported"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) validateStatusEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsBackendTlsEffectiveTypeStatusPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) validateStatus(formats strfmt.Registry) error {
+	if swag.IsZero(m.Status) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateStatusEnum("serviceArguments"+"."+"backend_tls_effective"+"."+"status", "body", m.Status); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ContextValidate validate this loadbalance entry service arguments backend TLS effective based on the context it is used
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
+	var res []error
+
+	if len(res) > 0 {
+		return errors.CompositeValidationError(res...)
+	}
+	return nil
+}
+
+// MarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) MarshalBinary() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return swag.WriteJSON(m)
+}
+
+// UnmarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) UnmarshalBinary(b []byte) error {
+	var res LoadbalanceEntryServiceArgumentsBackendTLSEffective
 	if err := swag.ReadJSON(b, &res); err != nil {
 		return err
 	}
@@ -3806,27 +3990,27 @@ func (m *LoadbalanceEntryServiceArgumentsHalfCloseEffective) UnmarshalBinary(b [
 	return nil
 }
 
-// LoadbalanceEntryServiceArgumentsMtlsBackend Requested backend verification and client-certificate settings for FullProxy re-encryption (mode=4, security=2) with mTLS support. Implementation warning: REST stores and returns this object, but the active create encoder does not wire its verification flag or legacy path/inline material into the backend TLS configuration. The separate configuration bridge has no caller in the reviewed path. These fields therefore do not establish backend authentication, even after a successful POST. Backend cert-ID fields have separate C consumers; their existence does not repair this missing verification wiring. Requested-security fail-closed behavior and material precedence remain pending policy decisions, not supported fallback guarantees.
+// LoadbalanceEntryServiceArgumentsMtlsBackend Backend TLS request for FullProxy re-encryption (mode=4, security=2). The object carries verify_server_cert only. Backend trust anchors and the backend client identity are named by certificate ID (backend_ca_cert_id, backend_client_cert_id), never by a path or by inline material. The remaining properties are retired. They are kept in the schema only so that a request that still sends one is refused with a 400 that names it; they are never stored and never returned.
 //
 // swagger:model LoadbalanceEntryServiceArgumentsMtlsBackend
 type LoadbalanceEntryServiceArgumentsMtlsBackend struct {
 
-	// Requested gateway-local backend PEM CA bundle path. Stored/read back, but not wired into the active backend TLS material path; see mtls_backend. Omitting it does not by itself establish system-CA verification.
+	// Retired. POST refuses a nonempty value with 400. Never returned.
 	BackendCaPath string `json:"backend_ca_path,omitempty"`
 
-	// Requested inline client certificate declared as base64-encoded PEM. Stored/read back but not an effective substitute for a backend client certificate through the current active path.
+	// Retired. POST refuses a nonempty value with 400. Never returned.
 	ClientCertData string `json:"client_cert_data,omitempty"`
 
-	// Requested gateway-local client certificate path for backend mTLS, paired with client_key_path. Stored/read back but not wired into the active backend TLS material path.
+	// Retired. POST refuses a nonempty value with 400. Never returned.
 	ClientCertPath string `json:"client_cert_path,omitempty"`
 
-	// Requested inline client private key declared as base64-encoded PEM. Stored/read back with the object; active backend material wiring is missing. Treat the input and readback as sensitive key material.
+	// Retired. POST refuses a nonempty value with 400. Never returned.
 	ClientKeyData string `json:"client_key_data,omitempty"`
 
-	// Requested gateway-local client private-key path paired with client_cert_path. Stored/read back but not wired into the active backend TLS material path.
+	// Retired. POST refuses a nonempty value with 400. Never returned.
 	ClientKeyPath string `json:"client_key_path,omitempty"`
 
-	// Requests backend server-certificate verification. False leaves verification unrequested. Implementation gap - true is stored but does not reach the active backend_verify_cert flag through this intake; it must not be displayed as effective verification.
+	// Verifies the certificate of every endpoint the rule connects to. Requires backend_ca_cert_id: the chain must end in that CA bundle, there is no default trust store. The certificate must also name the endpoint: its address as an IP subject alternative name, or backend_tls_server_name as a DNS one when that is set. An endpoint that fails is not connected to. Needs mode=4, security=2 and a build with client-certificate support; otherwise 400. A stored configuration that carries true without a CA ID is loaded with the value reset to false and a warning.
 	VerifyServerCert *bool `json:"verify_server_cert,omitempty"`
 }
 

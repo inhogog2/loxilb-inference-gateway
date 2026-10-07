@@ -700,6 +700,77 @@ create_docker_host_cnbridge() {
   sudo ip -n $h1 link set br$h1 up
 }
 
+# Register backend TLS material with the gateway's certificate registry, for a
+# rule to refer to by ID (--backend-ca-cert-id, --backend-client-cert-id).
+# Goes through loxicmd when backend_tls_cli_preflight found the arguments
+# (BACKEND_TLS_CLI=1), over REST otherwise.
+#Arg1: loxilb container
+#Arg2: certificate ID
+#Arg3: usage: ca | client
+#Arg4: certificate (or CA bundle) PEM file
+#Arg5: private key PEM file (usage client only)
+function register_backend_cert() {
+  local dock=$1 code
+  shift
+  if [[ "$BACKEND_TLS_CLI" == "1" ]]; then
+    local args="--usage=$2 --cert-id=$1 --cert-file=/tmp/$1.crt"
+    sudo docker cp "$3" $dock:/tmp/$1.crt || return 1
+    if [[ -n "$4" ]]; then
+      sudo docker cp "$4" $dock:/tmp/$1.key || return 1
+      args="$args --key-file=/tmp/$1.key"
+    fi
+    echo "$dock: loxicmd create cert $args"
+    $dexec $dock loxicmd create cert $args
+    code=$?
+    $dexec $dock rm -f /tmp/$1.crt /tmp/$1.key
+    if [[ $code != 0 ]]; then
+      echo "register_backend_cert $1 ($2): loxicmd create cert failed, rc=$code" >&2
+      return 1
+    fi
+    echo "Registered backend certificate $1 (usage $2)"
+    return 0
+  fi
+  code=$(python3 -c '
+import json, sys
+d = {"certId": sys.argv[1], "usage": sys.argv[2], "certPem": open(sys.argv[3]).read()}
+d["keyPem"] = open(sys.argv[4]).read() if len(sys.argv) > 4 else ""
+print(json.dumps(d))' "$@" | sudo docker exec -i $dock curl -s -o /dev/null -w '%{http_code}' \
+    -X POST http://localhost:11111/netlox/v1/config/cert -H "Content-Type: application/json" -d @-)
+  if [[ "$code" != "201" ]]; then
+    echo "register_backend_cert $1 ($2): expected 201, got '$code'" >&2
+    return 1
+  fi
+  echo "Registered backend certificate $1 (usage $2)"
+}
+
+# backend_tls_cli_preflight <container>
+# Returns 0 and sets BACKEND_TLS_CLI=1 when the packaged loxicmd can name backend
+# certificates by ID (create cert --usage, create lb --backend-ca-cert-id);
+# returns 1 and sets BACKEND_TLS_CLI=0 otherwise, so the caller configures over
+# REST. CLI_TESTS=skip forces REST; CLI_TESTS=required makes a CLI without the
+# arguments a failure instead of a fallback.
+function backend_tls_cli_preflight() {
+  local cont="${1:-llb1}"
+  local mode="${CLI_TESTS:-auto}"
+  BACKEND_TLS_CLI=0
+  if [[ "$mode" == "skip" ]]; then
+    echo "  Backend TLS CLI preflight: CLI_TESTS=skip -> REST"
+    return 1
+  fi
+  if $dexec "$cont" loxicmd create lb --help 2>&1 | grep -q -- '--backend-ca-cert-id' \
+     && $dexec "$cont" loxicmd create cert --help 2>&1 | grep -q -- '--usage'; then
+    BACKEND_TLS_CLI=1
+    echo "  Backend TLS CLI preflight: loxicmd names backend certificates by ID (CLI_TESTS=$mode) [OK]"
+    return 0
+  fi
+  if [[ "$mode" == "required" ]]; then
+    echo "  Backend TLS CLI preflight: CLI_TESTS=required but loxicmd lacks --backend-ca-cert-id [FAIL]"
+    exit 1
+  fi
+  echo "  SKIP: loxicmd lacks --backend-ca-cert-id (image predates it) -> REST; set CLI_TESTS=required to enforce"
+  return 1
+}
+
 #Arg1: host name
 #Arg2: --<proto>:<iport>:<oport>
 #Arg3: --endpoints:<ip>:<weight>,..

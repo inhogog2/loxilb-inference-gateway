@@ -7,7 +7,9 @@ Every case states the verdict it expects, including the ones where the tool must
 """
 import http.server
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -125,6 +127,37 @@ def main():
         rc, s = analyze(tmp, "c3", rows([100, 110, 105], [300, 320, 310]), {"exact": (None, sg.format(7800))})
         check("C3 an after scrape without its before scrape -> no computed share", rc == 0 and s and
               s["arms"]["exact"]["computed_prompt_token_percent"] is None, (rc, s and s["arms"]["exact"]))
+        # KV transfers of a prefill/decode fleet, from the same scrapes. The helper writes one engine's pair into
+        # each of the three repetitions, so an arm's totals are three times one pair's difference. A series whose
+        # name only starts the same moves too: counting it doubles the count.
+        nx = ('vllm:nixl_bytes_transferred_count{{engine="0"}} {0}\n'
+              'vllm:nixl_bytes_transferred_count_other{{engine="0"}} {0}\n'
+              'vllm:nixl_bytes_transferred_sum{{engine="0"}} {1}\n'
+              'vllm:nixl_xfer_time_seconds_sum{{engine="0"}} {2}\n'
+              'vllm:nixl_num_failed_transfers_total{{engine="0"}} {3}\n')
+        mk = ('sglang:kv_transfer_total_mb_count{{engine_type="prefill"}} {0}\n'
+              'sglang:kv_transfer_total_mb_count_other{{engine_type="prefill"}} {0}\n'
+              'sglang:kv_transfer_total_mb_sum{{engine_type="prefill"}} {1}\n'
+              'sglang:kv_transfer_latency_ms_sum{{engine_type="prefill"}} {2}\n'
+              'sglang:num_transfer_failed_reqs_total{{engine_type="prefill"}} {3}\n')
+        mib = 2 ** 20
+        for label, before, after in (("T1 vLLM", nx.format(10, 930 * mib, 1.0, 1), nx.format(30, 2790 * mib, 3.0, 2)),
+                                     ("T2 SGLang", mk.format(10, 930, 1000, 1), mk.format(30, 2790, 3000, 2))):
+            rc, s = analyze(tmp, label[:2].lower(), rows([100, 110, 105], [300, 320, 310]),
+                            {"exact": (before, after), "baseline": (before, before)})
+            e, b = (s["arms"][x] for x in ("exact", "baseline")) if s else ({}, {})
+            check(f"{label} transfer counters: 20 transfers a repetition of 93.0 MB and 100.0 ms each, 1 failed -> 60, 5580.0 MB, 3 failed",
+                  rc == 0 and (e.get("kv_transfers"), e.get("kv_transfer_mb"), e.get("kv_transfer_mb_each"),
+                               e.get("kv_transfer_ms_each"), e.get("kv_transfer_failed")) == (60, 5580.0, 93.0, 100.0, 3) and
+                  e["per_run"][0]["kv_transfers"] == 20, (rc, e))
+            check(f"{label} counters that did not move -> 0 transfers, no size or time each (not 0.0)",
+                  rc == 0 and (b.get("kv_transfers"), b.get("kv_transfer_mb_each"), b.get("kv_transfer_ms_each")) == (0, None, None), (rc, b))
+        rc, s = analyze(tmp, "t3", rows([100, 110, 105], [300, 320, 310]), {"exact": (None, mk.format(30, 2790, 3000, 2))})
+        check("T3 transfer counters in an after scrape without its before scrape -> no transfer reading", rc == 0 and s and
+              s["arms"]["exact"]["kv_transfers"] is None and s["arms"]["exact"]["kv_transfer_mb"] is None, (rc, s and s["arms"]["exact"]))
+        rc, s = analyze(tmp, "t4", rows([100, 110, 105], [300, 320, 310]), {"exact": (sg.format(1000), sg.format(7800))})
+        check("T4 engine scrapes with no transfer counter (one pool of engines) -> no transfer reading", rc == 0 and s and
+              s["arms"]["exact"]["kv_transfers"] is None and s["arms"]["baseline"]["kv_transfers"] is None, (rc, s and s["arms"]["exact"]))
         rc, s = analyze(tmp, "a2", rows([100, 330, 105], [300, 320, 310]))
         check("A2 one exact repetition above a baseline one -> overlap, no claim", rc == 0 and s and
               s["effects"]["ttft_p95_separation"] == "overlap", (rc, s))
@@ -324,6 +357,60 @@ def main():
               rc == 1 and [r["completed"] for r in rec].count(False) == 2, (rc, rec))
         for srv in (p0, p1, d, bad):
             srv.shutdown()
+
+    # The decode engines' launch arguments. validation.sh itself is run, beside a stand-in for the engine
+    # launcher that records what each engine would have been started with.
+    print("decode-side prefix cache")
+    arg = "--disaggregation-decode-enable-radix-cache"
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = pathlib.Path(tmp)
+        ab, compat, prof = tmp / "cicd/kv-model-ab-perf", tmp / "cicd/kv-model-compat-pd", tmp / "cicd/common/kv_hash/fixtures/profiles"
+        for d in (ab, compat, prof):
+            d.mkdir(parents=True)
+        for f in ("validation.sh", "env.sh"):
+            shutil.copy(HERE / f, ab / f)
+        shutil.copy(HERE.parent / "kv-model-compat-pd/env.sh", compat / "env.sh")
+        (compat / "engine.sh").write_text('#!/bin/bash\necho "$3 $4 [${SGL_EXTRA:-}]" >> "$STARTS"\n')
+        (compat / "engine.sh").chmod(0o755)
+        for name in ("r1-distill-qwen-15b-v1", "gemma4-e2b-it-v1", "qwen38-27b-fp8-v1", "never-started-v1"):
+            (prof / f"{name}.yaml").write_text(f"profileId: {name}\nbaseModel: org/{name}\n")
+        def fleet(eng, name, topology="pd", **env):
+            starts = tmp / "starts.txt"
+            starts.unlink(missing_ok=True)
+            e = {"PATH": os.environ["PATH"], "TOPOLOGY": topology, "VIP": "10.0.0.12", "LOGD": str(tmp), "ABROOT": str(tmp / "ev"),
+                 "STARTS": str(starts), **env}
+            e.update({"PREFILLS": "10.0.0.7 10.0.0.8", "DECODES": "10.0.0.10 10.0.0.11"} if topology == "pd" else {"ENGINES": "10.0.0.7 10.0.0.8"})
+            r = subprocess.run(["bash", str(ab / "validation.sh"), "fleet-up", eng, name], capture_output=True, text=True, env=e)
+            lines = starts.read_text().splitlines() if starts.exists() else []
+            return r.returncode, r.stdout, [x for x in lines if x.startswith("decode ")], [x for x in lines if not x.startswith("decode ")]
+        def state(n):
+            f = tmp / "ev" / f"sglang-{n}" / "decode-cache.txt"
+            return f.read_text().strip() if f.exists() else "(no file)"
+        rc, out, dec, pre = fleet("sglang", "r1-distill-qwen-15b-v1")
+        check("D1 SGLang prefill/decode, a measured model: both decode engines get the argument, no prefill engine does",
+              rc == 0 and len(dec) == 2 and all(arg in x for x in dec) and len(pre) == 2 and not any(arg in x for x in pre)
+              and "DECODE_CACHE_" not in out, (rc, out, dec, pre))
+        for name, why in (("gemma4-e2b-it-v1", "refused"), ("qwen38-27b-fp8-v1", "refused"), ("never-started-v1", "unmeasured")):
+            rc, out, dec, pre = fleet("sglang", name)
+            check(f"D2 {name}: no decode engine gets the argument, and the run says DECODE_CACHE_SKIPPED {why}",
+                  rc == 0 and len(dec) == 2 and not any(arg in x for x in dec + pre) and f"DECODE_CACHE_SKIPPED {why}" in out, (rc, out, dec))
+        rc, out, dec, pre = fleet("sglang", "r1-distill-qwen-15b-v1", SGL_DECODE_CACHE="0")
+        check("D3 SGL_DECODE_CACHE=0: off for a measured model too, and the run says DECODE_CACHE_OFF",
+              rc == 0 and len(dec) == 2 and not any(arg in x for x in dec) and "DECODE_CACHE_OFF" in out, (rc, out, dec))
+        rc, out, dec, pre = fleet("sglang", "never-started-v1", SGL_EXTRA_DECODE=arg)
+        check("D4 SGL_EXTRA_DECODE still reaches the decode engines only; the argument in it is recorded as forced",
+              len(dec) == 2 and all(arg in x for x in dec) and not any(arg in x for x in pre)
+              and state("never-started-v1") == "forced" and "DECODE_CACHE_" not in out, (out, dec, pre))
+        fleet("sglang", "never-started-v1")
+        rc, out, dec, pre = fleet("vllm", "r1-distill-qwen-15b-v1")
+        rc2, out2, dec2, pre2 = fleet("sglang", "r1-distill-qwen-15b-v1", topology="converged")
+        check("D5 vLLM, and SGLang converged: no engine gets the argument and no line is printed",
+              rc == rc2 == 0 and len(dec) == 2 and not dec2 and len(pre2) == 2 and not any(arg in x for x in dec + pre + pre2)
+              and "DECODE_CACHE_" not in out + out2 and "decode-side" not in out + out2, (out, out2, dec, pre2))
+        rc, out, dec, pre = fleet("sglang", "r1-distill-qwen-15b-v1", SGL_DECODE_CACHE="yes")
+        check("D6 SGL_DECODE_CACHE other than 0 or 1 is refused before any engine starts", rc == 64 and not dec and not pre, (rc, dec, pre))
+        check("D7 the state is kept with the evidence",
+              (state("gemma4-e2b-it-v1"), state("never-started-v1")) == ("refused", "unmeasured"), state("gemma4-e2b-it-v1"))
     print(f"SELFTEST kv-model-ab-perf: {'PASS' if not failed else f'FAIL ({failed})'}")
     return 1 if failed else 0
 

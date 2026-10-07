@@ -143,7 +143,7 @@ func applyLoadBalancerConfig() bool {
 		return false
 	}
 	for _, lb := range resp.Attr {
-		hooks.NetLbRuleAdd(&lb)
+		replaySavedLbRule(dropRetiredLbKeys(&lb))
 	}
 	return true
 }

@@ -114,16 +114,25 @@ must carry `Strict-Transport-Security: max-age=31536000; includeSubDomains`.
 > `keyUsage=critical,keyCertSign,cRLSign`. Check with
 > `openssl x509 -in ca.crt -text | grep -A1 'Key Usage'`.
 
-### 4.3 Backend re-encryption (pool → backend mTLS)
+### 4.3 Backend re-encryption (gateway → backend TLS)
 
-Reference uploaded material by **certId** (not inline paths — this reclaimed the `proxy_arg` budget):
+With `security: 2` (`e2ehttps`) the gateway opens a TLS connection to each backend. By default that
+leg is **encrypted but not authenticated**: the gateway does not verify the backend's certificate
+and presents no client certificate.
 
-| Field | Meaning |
+A rule changes that by certificate ID:
+
+| Argument | Effect |
 |---|---|
-| `backend_ca_cert_id` | certId of the CA bundle that validates the backend's cert |
-| `backend_client_cert_id` | certId of LoxiLB's client cert+key presented to the backend |
+| `mtls_backend.verify_server_cert: true` with `backend_ca_cert_id` | the backend's certificate must chain to that CA bundle **and** name the endpoint (its address, or `backend_tls_server_name`) |
+| `backend_client_cert_id` | the gateway presents that client certificate to backends that ask for one |
+| `backend_tls_server_name` | sent as SNI; with verification on, required among the certificate's DNS names |
+| `mtls_backend.backend_ca_path`, `client_cert_path`, `client_key_path`, `client_cert_data`, `client_key_data` | retired; refused on POST, never stored, never returned |
 
-Resolved at backend `SSL_CTX` build time by the certId registry.
+The material is uploaded through `/config/cert` with `usage: ca` or `usage: client`. See
+[Backend TLS verification and client certificates](25-backend-tls-verification.md) for the full
+procedure, and [Backend TLS argument changes](24-backend-tls-argument-changes.md) for what changes
+on upgrade.
 
 ---
 

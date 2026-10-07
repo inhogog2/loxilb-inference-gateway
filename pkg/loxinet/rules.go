@@ -628,6 +628,8 @@ type ruleEnt struct {
 	hstsPreload                 bool                    // "; preload"
 	backendCaCertId             string                  // backend CA certId (empty=system default)
 	backendClientCertId         string                  // backend client certId (empty=none)
+	backendTLSServerName        string                  // backend SNI and expected DNS name (empty=endpoint address)
+	backendTLSKept              bool                    // the listener kept a backend context older than the rule's certificates
 	pdDisaggMode                bool                    // P/D disaggregation mode: orchestrate prefill→decode flow
 	pdCacheAwareMode            bool                    // P/D cache-aware routing: session + trie + min-load (US-PD801)
 	pdSessionTTLSec             uint32                  // Session stickiness TTL in seconds (0 = no expiry)
@@ -1232,6 +1234,12 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.HstsPreload = data.hstsPreload
 		ret.Serv.BackendCaCertId = data.backendCaCertId
 		ret.Serv.BackendClientCertId = data.backendClientCertId
+		ret.Serv.BackendTLSServerName = data.backendTLSServerName
+		if mh.dpEbpf != nil && data.hasBackendTLSLeg() {
+			st, listening := mh.dpEbpf.DpBackendTLSStateGet(data.tuples.l3Dst.addr.IP,
+				data.tuples.l4Dst.valMin, uint8(data.tuples.l4Prot.val))
+			ret.Serv.BackendTLSEffective = data.backendTLSEffective(st, listening, cmn.MTLSBuild)
+		}
 		ret.Serv.PDDisaggMode = data.pdDisaggMode         // P/D disaggregation mode
 		ret.Serv.PDCacheAwareMode = data.pdCacheAwareMode // P/D cache-aware routing (US-PD801)
 		ret.Serv.PDSessionTTLSec = data.pdSessionTTLSec
@@ -3810,6 +3818,11 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if err := validateLBFixedCStringFields(serv); err != nil {
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
 	}
+	// A rule that asks for backend verification or a client certificate is
+	// installed with it or not at all, whichever way it arrived.
+	if err := cmn.ValidateBackendTLS(&serv); err != nil {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+	}
 
 	// Validate service args
 	service := ""
@@ -4206,6 +4219,21 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 	eRule := R.tables[RtLB].eMap[rt.ruleKey()]
 
+	// The data plane keeps the security mode and the backend TLS contexts once
+	// per listener, so a rule that asks for something else than the rules
+	// already on its listener would silently run with theirs. A restored
+	// configuration is kept whole and the disagreement is logged instead.
+	if lBActs.mode == cmn.LBModeFullProxy {
+		if other, diff := R.lbListenerTLSConflict(eRule, &rt, listenerTLSOfServ(&serv)); other != nil {
+			conflict := listenerTLSConflictError(other, diff)
+			if !lbConfigReplay(&serv) {
+				return RuleArgsErr, &cmn.RuleArgumentError{Err: conflict}
+			}
+			tk.LogIt(tk.LogError, "lb-rule %s:%d restored on a listener it disagrees with, the listener's settings apply: %v\n",
+				serv.ServIP, serv.ServPort, conflict)
+		}
+	}
+
 	// Resolve the credential-policy pair the rule will end up with BEFORE
 	// any state is touched, on create and replace alike. The profile rides
 	// the same preserve-on-omit replace semantics as api_key_auth (they are
@@ -4342,8 +4370,6 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.hstsMaxAge != serv.HstsMaxAge ||
 			eRule.hstsIncludeSubdomains != serv.HstsIncludeSubdomains ||
 			eRule.hstsPreload != serv.HstsPreload ||
-			eRule.backendCaCertId != serv.BackendCaCertId ||
-			eRule.backendClientCertId != serv.BackendClientCertId ||
 			!strSliceEqual(eRule.alpnProtocols, serv.AlpnProtocols) ||
 			!strSliceEqual(eRule.tlsVersions, serv.TlsVersions) ||
 			eRule.name != serv.Name {
@@ -4415,6 +4441,21 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.halfCloseMode != nextHalfClose) {
 			ruleChg = true
 			inPlaceOnlyChg = true
+		}
+
+		// A full-proxy listener takes a new backend TLS policy in place: the
+		// new context is built first and the old one stays in service when
+		// that fails. So a replace that changes nothing a listener must be
+		// re-created for keeps the entry, and the policy the rule held is
+		// kept at hand until the data plane has answered.
+		backendTLSStaged := false
+		backendTLSBefore := backendTLSFieldsOf(eRule)
+		if backendTLSChanged(eRule, &serv) {
+			if (!ruleChg || inPlaceOnlyChg) && lBActs.mode == cmn.LBModeFullProxy {
+				inPlaceOnlyChg = true
+				backendTLSStaged = true
+			}
+			ruleChg = true
 		}
 
 		if !ruleChg {
@@ -4523,6 +4564,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		eRule.hstsPreload = serv.HstsPreload
 		eRule.backendCaCertId = serv.BackendCaCertId
 		eRule.backendClientCertId = serv.BackendClientCertId
+		eRule.backendTLSServerName = serv.BackendTLSServerName
 		// update the per-service connectionLimit (0 = unlimited).
 		// Assigned like maxStreamDurationSec so an explicit 0 can clear a previously-set limit;
 		// the change is detected above and re-pushed to the dataplane conn_limit gate.
@@ -4552,7 +4594,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		eRule.chwblReplication = serv.CHWBLReplication
 		eRule.chwblEnableCacheSalt = serv.CHWBLEnableCacheSalt
 		eRule.mtlsFrontend = serv.MTLSFrontend
-		eRule.mtlsBackend = serv.MTLSBackend
+		eRule.mtlsBackend = serv.MTLSBackend.Stored()
 
 		// Re-apply tracing catalog if trace_type changed
 		if serv.Mode == cmn.LBModeFullProxy && serv.TraceType != "" {
@@ -4683,6 +4725,21 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			}
 		}
 		DpBrokerSyncBarrier(mh.dp)
+		if lBActs.mode == cmn.LBModeFullProxy && eRule.sync != 0 {
+			if !backendTLSStaged {
+				return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(false)}
+			}
+			// The listener still runs the policy the rule had. Put the
+			// rule back to it and push once more, so that what is stored,
+			// what is reported and what is installed agree again.
+			backendTLSBefore.restore(eRule)
+			eRule.DP(DpCreate)
+			DpBrokerSyncBarrier(mh.dp)
+			tk.LogIt(tk.LogError, "lb-rule %s backend TLS policy not replaced, the previous policy stays (sync %d)\n",
+				eRule.tuples.String(), eRule.sync)
+			return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(true)}
+		}
+		eRule.backendTLSKept = false
 		if chwblTxn {
 			R.flushLBCtEntries(eRule, CtFlushRidMatchOrZero)
 		}
@@ -4846,6 +4903,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	r.hstsPreload = serv.HstsPreload
 	r.backendCaCertId = serv.BackendCaCertId
 	r.backendClientCertId = serv.BackendClientCertId
+	r.backendTLSServerName = serv.BackendTLSServerName
 
 	// Store P/D disaggregation configuration
 	r.pdDisaggMode = serv.PDDisaggMode
@@ -4896,7 +4954,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 	// Store mTLS configuration
 	r.mtlsFrontend = serv.MTLSFrontend
-	r.mtlsBackend = serv.MTLSBackend
+	r.mtlsBackend = serv.MTLSBackend.Stored()
 
 	// Per LB end-point health-check is supposed to be handled at kube-loxilb/CCM,
 	// but it certain cases like stand-alone mode, loxilb can do its own
@@ -5075,6 +5133,19 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	R.flushLBCtEntries(r, CtFlushRidMatchOrZero)
 	r.DP(DpCreate)
 	DpBrokerSyncBarrier(mh.dp)
+	// A full-proxy rule the data plane did not install has no listener. It is
+	// taken back out, so the caller is told and nothing is left to be retried
+	// behind its back. A restored configuration is kept whole instead and the
+	// rule is retried, as before.
+	if lBActs.mode == cmn.LBModeFullProxy && r.sync != 0 && !lbConfigReplay(&serv) {
+		tk.LogIt(tk.LogError, "lb-rule %s not installed by the data plane, removed (sync %d)\n",
+			r.tuples.String(), r.sync)
+		if _, derr := R.DeleteLbRule(serv); derr != nil {
+			tk.LogIt(tk.LogError, "lb-rule %s could not be removed after a refused install: %v\n",
+				r.tuples.String(), derr)
+		}
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(false)}
+	}
 	R.flushLBCtEntries(r, CtFlushRidZeroOnly)
 
 	// Install the contract word now that the DP worker is creating the
@@ -6681,6 +6752,7 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.HstsPreload = r.hstsPreload
 	nWork.BackendCaCertId = r.backendCaCertId
 	nWork.BackendClientCertId = r.backendClientCertId
+	nWork.BackendTLSServerName = r.backendTLSServerName
 	nWork.PDDisaggMode = r.pdDisaggMode         // P/D disaggregation mode
 	nWork.PDCacheAwareMode = r.pdCacheAwareMode // P/D cache-aware routing (US-PD801)
 	nWork.PDSessionTTLSec = r.pdSessionTTLSec

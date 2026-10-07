@@ -23,11 +23,28 @@ MODEL=$(profile_field "$PROF" baseModel)
 [ "$TOPOLOGY" = pd ] && BASE=${ABROOT}/${ENG}-${PROF} || BASE=${ABROOT}/${ENG}-${PROF}-${TOPOLOGY}
 mkdir -p "$BASE"; export AB_BASE=$BASE
 code=0
+DCACHE=$(sgl_decode_cache_plan "$ENG" "$TOPOLOGY" "$PROF"); DCACHE_ARG=""
+[ "$DCACHE" = on ] && DCACHE_ARG=$SGL_DECODE_CACHE_ARG
+# The argument handed in by SGL_EXTRA_DECODE for a profile that would run without it: recorded as what ran.
+case "$DCACHE/ ${SGL_EXTRA_DECODE:-} " in off/*" $SGL_DECODE_CACHE_ARG "*|refused/*" $SGL_DECODE_CACHE_ARG "*|unmeasured/*" $SGL_DECODE_CACHE_ARG "*) DCACHE=forced ;; esac
+# A fleet that starts without the cache says so, and why: never a silent off.
+decode_cache_line() {
+  case $DCACHE in
+  on) echo "  decode-side prefix cache: on ($SGL_DECODE_CACHE_ARG on every decode engine)" ;;
+  forced) echo "  decode-side prefix cache: on, from SGL_EXTRA_DECODE" ;;
+  off) echo "DECODE_CACHE_OFF SGL_DECODE_CACHE=0: the decode engines start without the decode-side prefix cache" ;;
+  refused) echo "DECODE_CACHE_SKIPPED refused: SGLang $SGL_VERSION does not start a decode engine of $PROF with $SGL_DECODE_CACHE_ARG; the decode engines start without it" ;;
+  unmeasured) echo "DECODE_CACHE_SKIPPED unmeasured: no decode engine of $PROF was started with $SGL_DECODE_CACHE_ARG on SGLang $SGL_VERSION (sgl_decode_cache_plan, env.sh); the decode engines start without it" ;;
+  esac
+}
 
 fleet_up() {
   local n pids=() rc=0
   for n in "${PNODES[@]}"; do PREFILL=$n CONVERGED=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" start "$ENG" "$ROLE1" "$PROF" & pids+=($!); done
-  for n in "${DNODES[@]}"; do DECODE=$n EVROOT=$BASE/node-$n "$COMPAT/engine.sh" start "$ENG" decode "$PROF" & pids+=($!); done
+  # The decode engines' own SGLang arguments: the decode-side prefix cache when this model takes it (env.sh),
+  # then SGL_EXTRA_DECODE. The state is kept with the evidence: points with and without it are not comparable.
+  echo "$DCACHE" > "$BASE/decode-cache.txt"
+  for n in "${DNODES[@]}"; do DECODE=$n EVROOT=$BASE/node-$n SGL_EXTRA="${SGL_EXTRA:-} $DCACHE_ARG ${SGL_EXTRA_DECODE:-}" "$COMPAT/engine.sh" start "$ENG" decode "$PROF" & pids+=($!); done
   for p in "${pids[@]}"; do wait "$p" || rc=1; done
   return $rc
 }
@@ -55,6 +72,7 @@ corpora() {
   python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-long.jsonl" --families "$FAMILIES" --owners "${#PNODES[@]}" --prefix-repetitions "$reps"
   python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-short.jsonl" --families "$FAMILIES" --owners "${#PNODES[@]}" --shape short
 }
+cal_snapshot() { local n; for n in "${PNODES[@]}" "${DNODES[@]}"; do curl -s -m 10 "http://$n:$EPORT/metrics" > "$BASE/$1-engine-$n.prom"; done; }
 calibrate() {
   [ -s "$BASE/calibration.json" ] && { echo "  calibration already banked"; return 0; }
   local enc; enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MODEL")
@@ -76,13 +94,22 @@ calibrate() {
         --prefix-repetitions "$(cat "$BASE/prefix-repetitions.txt")" --salt "warm$c-$(date +%s)-"
       python3 "$AB_DIR/seed.py" --corpus "$BASE/corpus-cal-warmup.jsonl" --output "$BASE/cal-warmup-c$c.receipt.jsonl" --model "$MODEL" \
         "${w[@]}" $(pair_decode "${DNODES[0]:-}") || { echo "CAL_WARMUP_FAILED"; return 1; }
+      # A decode engine that keeps its own prefix cache has a first long request of its own: warm the others too.
+      for n in "${DNODES[@]:1}"; do
+        python3 "$AB_DIR/seed.py" --corpus "$BASE/corpus-cal-warmup.jsonl" --output "$BASE/cal-warmup-c$c-decode-$n.receipt.jsonl" --model "$MODEL" \
+          "${w[@]}" $(pair_decode "$n") || { echo "CAL_WARMUP_FAILED decode $n"; return 1; }
+      done
     fi
     http=$(curl -s -m 10 -o "$BASE/cal-rule-create.json" -w "%{http_code}" -X POST "${LB}" -H 'Content-Type: application/json' --data-binary "@$BASE/cal-rule.json")
     [ "$http" = 200 ] || { echo "CAL_RULE_CREATE_FAILED $http"; return 1; }
     sleep 5
+    # The engines' counters around the calibration run are kept: a rate that came out low is read from them
+    # (transfers, queue, computed tokens), not guessed. No gate reads them.
+    cal_snapshot "cal-c$c-before"
     python3 "$AB_DIR/bench.py" --corpus "$BASE/corpus-cal.jsonl" --output "$BASE/cal-requests.jsonl" --url "http://${VIP}:${PORT}" \
       --model "$MODEL" --arm baseline --repetition 0 --max-tokens "$MAX_TOKENS" --concurrency "$c" --timeout 120
     rc=$?
+    cal_snapshot "cal-c$c-after"
     curl -s -m 10 -o /dev/null -X DELETE "${LB}/hosturl/${VIP}/externalipaddress/${VIP}/port/${PORT}/protocol/tcp?model_name=${enc}"
     [ $rc = 0 ] && { echo "$c" > "$BASE/cal-concurrency.txt"; break; }
     cp "$BASE/cal-requests.jsonl" "$BASE/cal-requests-c$c-incomplete.jsonl"
@@ -98,6 +125,7 @@ cal() { python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[sys.argv
 repeat_for() { python3 -c "import math,sys; print(max(3, math.ceil(float(sys.argv[1]) * $ARM_SECONDS / $FAMILIES)))" "$1"; }
 point() { "$AB_DIR/point.sh" "$ENG" "$PROF" "$1" "$2" "$3" "$(repeat_for "$3")" "${4:-chat}" || { code=1; return 1; }; }
 report() {
+  [ -s "$BASE/decode-cache.txt" ] && [ "$(cat "$BASE/decode-cache.txt")" != none ] && echo "# decode-side prefix cache: $(cat "$BASE/decode-cache.txt")"
   python3 - "$BASE" "$ENG" <<'PY'
 import glob, json, os, sys
 base, eng = sys.argv[1:]
@@ -112,6 +140,9 @@ for f in sorted(glob.glob(base + "/*/ab-summary.json")):
         na = lambda v: "n/a" if v is None else f"{v}%"
         print(f"#   slow requests (TTFT >= {s['slow_request_ttft_ms']} ms) {na(e['slow_request_percent'])} exact vs {na(b['slow_request_percent'])} baseline; "
               f"prompt tokens computed {na(e['computed_prompt_token_percent'])} exact vs {na(b['computed_prompt_token_percent'])} baseline")
+    if e.get("kv_transfers") is not None and b.get("kv_transfers") is not None:
+        kv = lambda a: f"{a['kv_transfers']} of {a['kv_transfer_mb_each']} MB and {a['kv_transfer_ms_each']} ms each, {a['kv_transfer_failed']} failed"
+        print(f"#   KV transfers: exact {kv(e)}; baseline {kv(b)}")
     print(f"- {{topology: {topo}, surface: {meta['api']}, corpus: {os.path.basename(d).split('-')[0]}, rateRps: {meta['rate']}, "
           f"requestsPerArm: {e['requests']}, exactTtftP95Ms: {e['ttft_p95_ms']}, baselineTtftP95Ms: {b['ttft_p95_ms']}, "
           f"exactTtftP50Ms: {e['ttft_p50_ms']}, baselineTtftP50Ms: {b['ttft_p50_ms']}, date: \"{os.popen('date -r ' + f + ' +%F').read().strip()}\"}}")
@@ -119,11 +150,12 @@ PY
 }
 
 case $MODE in
-  fleet-up) fleet_up || code=1 ;;
+  fleet-up) decode_cache_line; fleet_up || code=1 ;;
   fleet-down) fleet_down ;;
   report) report ;;
   model)
     echo "=== A/B $ENG x $PROF ($MODEL), $TOPOLOGY: ${#PNODES[@]} $ROLE1 [$PREFILLS] + ${#DNODES[@]} decode [$DECODES] ==="
+    decode_cache_line
     if fleet_up && corpora && calibrate; then
       lo=$(cal rate_low); hi=$(cal rate_high)
       point "long-r$lo" "$BASE/corpus-long.jsonl" "$lo"

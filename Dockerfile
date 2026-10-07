@@ -5,7 +5,7 @@ FROM ubuntu:22.04 as build
 ARG DEBIAN_FRONTEND=noninteractive
 
 ARG TAG=main
-ARG LOXICMD_TAG=8a0afac8bb879d8bb53152e20587900c7a06b473
+ARG LOXICMD_TAG=d8cbabbbc131d18d36cc26a14ef5a6121a9de7dd
 ARG OPENSSL_BUILD_CPUS=0
 ARG USE_DOCKER_BUILDX_ARM64=false
 
@@ -64,6 +64,8 @@ RUN mkdir -p /opt/loxilb && \
     # commit SHA and the checkout must resolve to exactly it: a build-arg
     # override with a branch or tag name would silently reintroduce a moving
     # ref, so the build fails closed instead.
+    # The CLI's Makefile reads its gateway contract with a ruby script.
+    apt-get update && apt-get install -y --no-install-recommends ruby && \
     echo "$LOXICMD_TAG" | grep -Eq '^[0-9a-f]{40}$' || { echo "LOXICMD_TAG must be a full 40-hex commit SHA, got '$LOXICMD_TAG'" >&2; exit 1; } && \
     git clone https://github.com/loxilb-io/loxicmd-inference-gateway.git loxicmd && cd loxicmd && git fetch --all --tags && \
     git checkout $LOXICMD_TAG && \

@@ -9,6 +9,7 @@
 #   Firewall drop surge .................... 100/s  (LoxilbFwDropSurge)
 #   CPU/Mem high ........................... 90%    Disk high/critical ... 90% / 95%
 #   Conntrack utilization warn/critical .... 80% / 95%
+#   Half-close oldest hold ................. max(1h, 2 x the idle bound)  (LoxilbHalfCloseHoldLongLived)
 
 groups:
   - name: loxilb-availability
@@ -377,3 +378,46 @@ groups:
           description: "A capacity unit was released that was never taken (underflow) or an executing request had no pool (unknown_permit). This is a defect, not load: report it with the gateway log."
           dashboard: "LoxiLB / AI Gateway"
           panel: "Gate accounting anomalies"
+
+  # Half-close holds: a client that half-closes after its request is held
+  # open until its answer is out (half_close_mode hold, or the default mode).
+  # Every family is emitted from start at zero on every gateway, so a gateway
+  # where nothing is held never fires.
+  - name: loxilb-halfclose
+    rules:
+      # A held client that never got a byte of its answer: the first byte was
+      # slower than the idle bound, or the FIN was a cancel that was waited on.
+      - alert: LoxilbHalfCloseHoldExpiredBeforeAnswer
+        expr: sum by (instance) (increase(loxilb_proxy_halfclose_hold_expired_total{answer_started="false"}[15m])) > 0
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: "Half-closed client cut by the idle bound before its answer began on {{ $labels.instance }}"
+          description: "A client held after its half-close got no byte of its answer for the whole idle bound (loxilb_proxy_halfclose_hold_cap_seconds) and was closed without it. Either the backend's first byte is slower than the bound (raise capSeconds on /config/halfclose) or the client's FIN was a cancel that was waited on as a half-close. Do not set defaultMode to hold while this happens (runbook: docs/load-balancing/05-rest-api-reference.md, Half-close holds)."
+          dashboard: "LoxiLB / L7 Proxy"
+          panel: "Hold expiries by answer and stream"
+
+      # Should stay 0: a held client is never armed for reads.
+      - alert: LoxilbHalfCloseHoldEofReentry
+        expr: sum by (instance) (increase(loxilb_proxy_halfclose_hold_spurious_wakeups_total{kind="eof_reentry"}[15m])) > 0
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: "Held client's EOF handled again on {{ $labels.instance }}"
+          description: "A client held after its half-close was woken for its EOF a second time: some path armed it for reads again. This is a defect, not load: report it with the gateway log. Block new holds (POST /netlox/v1/config/halfclose with allow false) and close the held ones (POST /netlox/v1/config/halfclose/release) if it repeats."
+          dashboard: "LoxiLB / L7 Proxy"
+          panel: "Held-client wake-ups, refusals, acceleration skipped"
+
+      # A hold ends on idleness, not age, so only an answer that keeps coming
+      # outlives the bound. One that also outlives an hour (and twice the
+      # bound, for a site that raised it) is a slow reader being fed a byte at
+      # a time, or a hold that does not end; either keeps a connection open.
+      - alert: LoxilbHalfCloseHoldLongLived
+        expr: max by (instance) (loxilb_proxy_halfclose_held_oldest_seconds) > on (instance) clamp_min(2 * max by (instance) (loxilb_proxy_halfclose_hold_cap_seconds), 3600)
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "A half-closed client held for over an hour on {{ $labels.instance }}"
+          description: "The oldest held client has been held longer than an hour and twice the idle bound. The bound restarts with every byte written, so the client is being answered very slowly, or its hold is not ending. If the held count keeps rising too, block new holds (POST /netlox/v1/config/halfclose with allow false) and close the held ones (POST /netlox/v1/config/halfclose/release)."
+          dashboard: "LoxiLB / L7 Proxy"
+          panel: "Oldest hold vs idle bound"
