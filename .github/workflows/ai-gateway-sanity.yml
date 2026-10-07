@@ -276,3 +276,31 @@ jobs:
           ./validation_apikey_response.sh
           ./rmconfig.sh
           cd -
+
+  # A client that half-closes after its request, on a service whose
+  # half_close_mode is hold: it gets its whole answer, and a reset lets it go
+  # at once - while it waits, when only the reset reported on its disarmed fd
+  # can end it, and while its answer is still being written to it. The service
+  # is not accelerated, so the kernel defect above does not apply.
+  sockmap-hold-sanity:
+    name: sockmap-hold-sanity
+    runs-on: ubuntu-22.04
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
+      - uses: actions/setup-python@v5
+      - run: sudo apt-get update
+      - run: sudo apt-get -y install linux-tools-$(uname -r) linux-tools-common nodejs
+      - run: loxilb-ebpf/utils/mkllb_bpffs.sh
+      - name: Build the image the sockmap testbed starts (Dockerfile defaults)
+        run: docker build -t ghcr.io/loxilb-io/loxilb-inference-gateway:latest .
+      - name: A half-closed client is held for its answer and let go on a reset
+        run: |
+          cd cicd/sockmap-fullproxy/
+          ./config.sh
+          ./validation_hold.sh
+          ./rmconfig.sh
+          cd -

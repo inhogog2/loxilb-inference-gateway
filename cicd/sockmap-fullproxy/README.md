@@ -5,11 +5,12 @@ acceleration on FullProxy). The feature itself is documented in
 [`docs/sockmap-acceleration.md`](../../docs/sockmap-acceleration.md) — read its
 **kernel requirement** section before believing any result from this directory.
 
-One suite here runs in CI: `validation_apikey_response.sh`, as the
-`sockmap-apikey-response-sanity` job of `.github/workflows/ai-gateway-sanity.yml`.
-It drives a handful of small echoes through a response-accelerated service, well
-under the volume where the kernel defect below shows. **Every other suite is run
-by hand**: the acceleration suites need a patched kernel the hosted runners do
+Two suites here run in CI, as jobs of `.github/workflows/ai-gateway-sanity.yml`:
+`validation_apikey_response.sh` (`sockmap-apikey-response-sanity`), which drives a
+handful of small echoes through a response-accelerated service, well under the
+volume where the kernel defect below shows; and `validation_hold.sh`
+(`sockmap-hold-sanity`), whose service is not accelerated at all. **Every other
+suite is run by hand**: the acceleration suites need a patched kernel the hosted runners do
 not have. Unlike the other `cicd/` scenarios, this directory holds many
 `validation_*.sh` scripts over one shared testbed rather than a single
 `validation.sh`.
@@ -67,6 +68,7 @@ cd cicd/sockmap-fullproxy
 |---|---|
 | `validation.sh` | assets attach, R1 registers and R2 does not, portset cleanup on delete, and the configuration-time refusals (cases R-1..R-16) |
 | `validation_apikey_response.sh` | a service declaring `api_key_auth` is refused `both` and `request` naming the request direction and accepted for `response`; the data plane honours the same split: the subject's response-redirect counter moves and its request counter does not, six keyed requests are admitted over one connection with `X-Api-Key` stripped on every echo, a keyed-then-unkeyed run is refused from the second request on with each denial closing the connection, and a control rule with the mode off redirects nothing. Needs `SOCKMAP_AI_KEY_STORE=1 ./config.sh`. Runs in CI |
+| `validation_hold.sh` | a client that half-closes after its request, on a service whose `half_close_mode` is `hold`: it gets its whole answer (H-1); a reset 200 ms after its FIN, while its answer is held back 8 s, lets it go within a second (H-2 — nothing is written to it, so only the reset reported on its disarmed fd can end it); so does a reset while its 32 MiB answer is still being written to it (H-3). The backend (`hold_backend.py`) times each teardown, which the client cannot see. The holds end answered, reset, reset; none expires. Self-contained, not accelerated. Runs in CI |
 | `validation_directional.sh` | `request` / `response` modes, the unaccelerated direction skipping the verdict, portset cleanup, mode change on a reused listener, and one endpoint shared by an accelerated and an `off` rule |
 | `validation_refcount.sh` | portset refcounts across in-place updates, mode changes and shared endpoints |
 | `validation_concurrent.sh` | concurrent connections over one rule |
@@ -136,10 +138,11 @@ enforces it, and a collision shows up as a rule replace, not as an error.
 | 2080–2083 | `validation_equivalence.sh` |
 | 2090–2092 | `validation_control.sh` (2099 is deliberately ruleless) |
 | 2100–2105 | `validation_observability.sh` |
+| 2110 | `validation_hold.sh` (self-contained: creates and deletes its own rule) |
 
 Backend ports: 8080 (`config.sh`), 8260/8261 (`validation.sh`, no listener
 needed), 9080–9083 (perf and CPU), 9090/9091 (directional), 9092/9093 (request
-path, equivalence, control, observability), 9100–9106 (refcount), 9160–9170 (integrity).
+path, equivalence, control, observability), 9100–9106 (refcount), 9110 (`validation_hold.sh`, `hold_backend.py`), 9160–9170 (integrity).
 
 ## Reading a result
 
