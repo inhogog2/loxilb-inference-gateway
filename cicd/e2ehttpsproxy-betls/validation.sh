@@ -11,7 +11,20 @@
 #              not connect to, within the time a handshake takes, the gateway
 #              logged a failed handshake with that backend for this request,
 #              AND the nonce is in no receipt file. A request that only timed
-#              out is not a rejection.
+#              out is not a rejection;
+#   turned away = the same answer, for a backend that accepted the gateway's
+#              handshake and closed the connection afterwards (it wanted a
+#              client certificate it was not shown, or does not accept the
+#              one it was shown). The gateway logs that failure under its
+#              own line, and the nonce is in no receipt file.
+#
+# An answer the gateway writes itself must also be whole: curl has to end
+# with exit 0. A status line followed by a cut connection is not an answer
+# a client can rely on. curl is not the whole test of that: a recent curl
+# accepts an HTTP/1.1 response that ends without a TLS close_notify and an
+# older one ends with exit 56. So an HTTP/1.1 answer is also read by a client
+# that accepts nothing less: its Content-Length is the size of its body, and
+# the TLS stream ends with a close_notify.
 #
 # A backend that must be rejected is first reached through the same rule
 # without verification: what turns it away afterwards is the policy, not a
@@ -38,6 +51,8 @@ replaced() { dp_log | grep -c ":$1 rule [0-9]* backend TLS policy replaced"; }
 kept() { dp_log | grep -c ":$1 rule [0-9]* backend TLS policy not replaced"; }
 # Failed TLS handshakes of the gateway with one backend.
 hs_failed() { dp_log | grep -cF "ssl-connect $1:$2(failed)"; }
+# Backend legs that failed after their handshake, before any response.
+late_failed() { dp_log | grep -cF "ssl-read $1:$2(failed after handshake, before any response)"; }
 fp() { cat pki/$1.fp; }
 receipts() { cat pki/receipts/*.txt 2>/dev/null | grep -cx "$1"; }
 receipt_of() { grep -cx "$2" pki/receipts/$1.txt 2>/dev/null; }
@@ -94,18 +109,27 @@ expect_replaced() { # port, count before
     || fail "the data plane did not replace the backend policy of the listener on $1"
 }
 
-# One request on a connection of its own. Sets R_NONCE, R_CODE, R_TIME, R_BODY.
+# One request on a connection of its own. Sets R_NONCE, R_CODE, R_TIME, R_BODY
+# and R_EXIT, curl's own verdict on the exchange.
 request() { # port, http1.1 | http2
   local out
   seq=$((seq + 1)); R_NONCE="q$RUN-$seq"
   out=$($hexec l3h1 curl -s --$2 --cacert pki/ca-a.crt --max-time 15 \
     -w '\n%{http_code} %{time_total}' "https://$VIP:$1/?nonce=$R_NONCE" 2>/dev/null)
+  R_EXIT=$?
   R_BODY=${out%$'\n'*}
   R_CODE=${out##*$'\n'}; R_TIME=${R_CODE#* }; R_CODE=${R_CODE% *}
 }
 field() { local f; for f in $R_BODY; do [[ "$f" == $1=* ]] && echo "${f#*=}"; done; }
 record() { # case, port, expected fingerprint, result
-  echo "  record: case='$1' nonce=$R_NONCE generation=$(generation $2) expected_peer=$3 result=$4 http=$R_CODE time=${R_TIME}s receipts=$(receipts $R_NONCE) answer='${R_BODY:0:200}'"
+  echo "  record: case='$1' nonce=$R_NONCE generation=$(generation $2) expected_peer=$3 result=$4 http=$R_CODE curl_exit=$R_EXIT time=${R_TIME}s receipts=$(receipts $R_NONCE) answer='${R_BODY:0:200}'"
+}
+# The gateway's own answer reached the client whole.
+expect_whole() { # case
+  [ "$R_EXIT" == "0" ] && pass "$1: the answer is whole (curl exit 0)" \
+    || fail "$1: curl ended with exit $R_EXIT, the answer was cut or never came"
+  [[ "$R_BODY" == *backend_unreachable* ]] && pass "$1: the body says backend_unreachable" \
+    || fail "$1: the body does not say backend_unreachable: '${R_BODY:0:160}'"
 }
 
 # The request is answered by the named backend, which saw the named client
@@ -132,6 +156,51 @@ expect_served() { # case, port, protocol, backend, client certificate | none, se
   [ "$(field sni)" == "$6" ] && pass "$1: the backend was asked for server name '$6'" \
     || fail "$1: the backend was asked for server name '$(field sni)', want '$6'"
 }
+# One HTTP/1.1 request read to the end of the TLS stream by a client that does
+# not forgive a missing close_notify. Prints "status content-length body-bytes
+# end", where end is "clean" for a close_notify.
+STRICT_CLIENT='
+import socket, ssl, sys
+host, port, ca, nonce = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+ctx = ssl.create_default_context(cafile=ca)
+ctx.set_alpn_protocols(["http/1.1"])
+tls = ctx.wrap_socket(socket.create_connection((host, port), timeout=10),
+                      server_hostname=host, suppress_ragged_eofs=False)
+tls.sendall(("GET /?nonce=%s HTTP/1.1\r\nHost: %s:%d\r\nAccept: */*\r\n\r\n" % (nonce, host, port)).encode())
+data, end = b"", "clean"
+try:
+    while True:
+        chunk = tls.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+except ssl.SSLEOFError:
+    end = "no-close-notify"
+except Exception as e:
+    end = "error-" + type(e).__name__
+head, _, body = data.partition(b"\r\n\r\n")
+lines = head.split(b"\r\n")
+status = lines[0].split()[1].decode() if len(lines[0].split()) > 1 else "000"
+length = "none"
+for line in lines[1:]:
+    if line.lower().startswith(b"content-length:"):
+        length = line.split(b":", 1)[1].strip().decode()
+print(status, length, len(body), end)'
+expect_strict() { # case, port
+  local got n
+  seq=$((seq + 1)); n="q$RUN-$seq"
+  got=$($hexec l3h1 python3 -c "$STRICT_CLIENT" $VIP $2 pki/ca-a.crt $n 2>&1 | tail -1)
+  set -- "$1" $got
+  echo "  record: case='$1' nonce=$n strict client: status=$2 content-length=$3 body=$4 end=$5 receipts=$(receipts $n)"
+  [ "$2" == "502" ] && pass "$1: a strict client got the 502" || fail "$1: a strict client got status '$2'"
+  [[ "$3" != "none" && "$3" == "$4" && "$4" -gt 0 ]] && pass "$1: Content-Length is the size of the body ($4 bytes)" \
+    || fail "$1: Content-Length '$3' against a body of '$4' bytes"
+  [ "$5" == "clean" ] && pass "$1: the TLS stream ended with a close_notify" \
+    || fail "$1: the TLS stream ended with '$5', not a close_notify"
+  [ "$(receipts $n)" == "0" ] && pass "$1: no backend has that request either" \
+    || fail "$1: the strict client's request reached a backend"
+}
+
 # The request is turned away by the gateway and reaches no backend.
 expect_rejected() { # case, port, protocol, endpoint address, endpoint port
   local want=502 before
@@ -141,25 +210,35 @@ expect_rejected() { # case, port, protocol, endpoint address, endpoint port
   record "$1" $2 - rejected
   [ "$R_CODE" == "$want" ] && pass "$1: the client got the gateway's $want" \
     || fail "$1: the client got '$R_CODE', want the gateway's $want"
+  expect_whole "$1"
   python3 -c "import sys; sys.exit(0 if float('${R_TIME:-99}') < 5 else 1)" \
     && pass "$1: answered in ${R_TIME}s, not by a timeout" || fail "$1: took ${R_TIME}s, a timeout is not a rejection"
   [ "$(hs_failed $4 $5)" -gt "$before" ] && pass "$1: the gateway dialled $4:$5 anew and the handshake failed" \
     || fail "$1: the gateway logged no failed handshake with $4:$5 for this request"
   [ "$(receipts $R_NONCE)" == "0" ] && pass "$1: no backend has the request" \
     || fail "$1: the request reached a backend ($(receipts $R_NONCE) receipt)"
+  [ "$3" == "http1.1" ] && expect_strict "$1" $2
 }
 
-# The request is not served because the backend turns the gateway away, after
-# the gateway accepted the backend. What the client is told is not asserted.
-expect_unserved() { # case, port, protocol
+# The request is turned away by the gateway because the backend closed the
+# connection after the handshake. The client gets the answer of a backend that
+# could not be connected to, and the gateway's log names the endpoint.
+expect_turned_away() { # case, port, protocol, endpoint address, endpoint port
+  local want=502 before
+  [ "$3" == "http2" ] && want=503
+  before=$(late_failed $4 $5)
   request $2 $3
-  record "$1" $2 - unserved
-  [ "$R_CODE" != "200" ] && pass "$1: the client got no answer from a backend (status $R_CODE)" \
-    || fail "$1: the client got a 200"
+  record "$1" $2 - turned-away
+  [ "$R_CODE" == "$want" ] && pass "$1: the client got the gateway's $want" \
+    || fail "$1: the client got '$R_CODE', want the gateway's $want"
+  expect_whole "$1"
   python3 -c "import sys; sys.exit(0 if float('${R_TIME:-99}') < 5 else 1)" \
-    && pass "$1: ended in ${R_TIME}s, not by a timeout" || fail "$1: took ${R_TIME}s"
+    && pass "$1: answered in ${R_TIME}s, not by a timeout" || fail "$1: took ${R_TIME}s"
+  [ "$(late_failed $4 $5)" -gt "$before" ] && pass "$1: the gateway logged that $4:$5 closed after the handshake" \
+    || fail "$1: the gateway logged no failure after the handshake with $4:$5"
   [ "$(receipts $R_NONCE)" == "0" ] && pass "$1: no backend has the request" \
     || fail "$1: the request reached a backend ($(receipts $R_NONCE) receipt)"
+  [ "$3" == "http1.1" ] && expect_strict "$1" $2
 }
 
 serve() { # host, name, port, certificate, extra arguments
@@ -225,6 +304,7 @@ echo "Fixtures"
 [ "$(post_cert qual-otherca ca pki/ca-b.crt)" == "201" ] && pass "a CA the backends do not chain to is registered" || fail "second CA refused"
 [ "$(post_cert qual-client-rsa client pki/client-rsa.crt pki/client-rsa.key)" == "201" ] && pass "an RSA client certificate is registered" || fail "RSA client certificate refused"
 [ "$(post_cert qual-client-ecdsa client pki/client-ecdsa.crt pki/client-ecdsa.key)" == "201" ] && pass "an ECDSA client certificate is registered" || fail "ECDSA client certificate refused"
+[ "$(post_cert qual-client-otherca client pki/client-otherca.crt pki/client-otherca.key)" == "201" ] && pass "a client certificate from a CA the backends do not accept is registered" || fail "the other CA's client certificate was refused"
 ans=$(post_cert_answer qual-badpair client pki/client-rsa.crt pki/client-ecdsa.key)
 [[ "${ans##*$'\n'}" == "400" && "$ans" == *"not a usable pair"* ]] && pass "a certificate with another key is refused, and the answer says why" \
   || fail "a mismatched pair was answered ${ans##*$'\n'} without the reason: ${ans:0:200}"
@@ -268,7 +348,22 @@ rc=$(post_rule 2055 $EP1 9444 ", $VERIFY"); echo "  POST -> $rc"
 expect_effective 2055 "applied True qual-ca False None None" "for the rule"
 expect_served "verification only" 2055 http1.1 optional none none
 rc=$(post_rule 2056 $EP1 9443 ", $VERIFY"); echo "  POST -> $rc"
-expect_unserved "a backend that requires a client certificate, none named" 2056 http1.1
+expect_turned_away "a backend that requires a client certificate, none named" 2056 http1.1 $EP1 9443
+expect_turned_away "the same on a second connection" 2056 http1.1 $EP1 9443
+rc=$(post_rule 2057 $EP1 9443 ", $VERIFY$H2"); echo "  POST -> $rc"
+expect_turned_away "none named, HTTP/2" 2057 http2 $EP1 9443
+expect_turned_away "none named, HTTP/2, a second connection" 2057 http2 $EP1 9443
+
+echo "A client certificate the backend does not accept"
+rc=$(post_rule 2058 $EP1 9443 ", $VERIFY"', "backend_client_cert_id": "qual-client-otherca"'); echo "  POST -> $rc"
+expect_effective 2058 "applied True qual-ca True qual-client-otherca None" "for the rule"
+expect_turned_away "a client certificate from another CA" 2058 http1.1 $EP1 9443
+
+echo "The rule that was turned away, once it names a certificate the backend accepts"
+n=$(replaced 2056)
+rc=$(post_rule 2056 $EP1 9443 ", $VERIFY"', "backend_client_cert_id": "qual-client-rsa"'); echo "  POST -> $rc"
+expect_replaced 2056 $n
+expect_served "after the certificate was named" 2056 http1.1 good client-rsa none
 
 # One backend the gateway must not talk to: served while the rule does not
 # verify, turned away once it does, over the same listener.
@@ -402,10 +497,10 @@ rc=$(post_rule 2054 $EP1 9443 ", $VERIFY"', "backend_client_cert_id": "qual-clie
 expect_served "RSA client, ECDSA default" 2054 http1.1 good client-rsa none
 
 [ "$(gw_pid)" == "$pid0" ] && pass "gateway pid unchanged ($pid0)" || fail "gateway pid changed $pid0 -> $(gw_pid)"
-for p in 2051 2052 2053 2054 2055 2056 2061 2062 2063 2064 2065 2066 2067; do
+for p in 2051 2052 2053 2054 2055 2056 2057 2058 2061 2062 2063 2064 2065 2066 2067; do
   [ "$(del_rule $p)" == "200" ] || fail "the rule on $p could not be deleted"
 done
-for c in qual-ca qual-otherca qual-client-rsa qual-client-ecdsa; do
+for c in qual-ca qual-otherca qual-client-rsa qual-client-ecdsa qual-client-otherca; do
   [ "$(del_cert $c)" == "204" ] || fail "the certificate $c could not be deleted"
 done
 $dexec llb1 sh -c 'ls -d /etc/loxilb/certs/qual-* 2>/dev/null' | grep -q . && fail "certificate material is left in the managed directory" \
