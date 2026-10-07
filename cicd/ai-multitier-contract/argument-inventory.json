@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "9932ef4a04644b5631c47102bc4bdce519c1a4fa4acedde542812aeb51aad0d5"
+    "swagger.yml": "eb702bffe4aeacc00810a9729a96440e054c97f05d70158a2d87e1a80b8d5635"
   },
   "fields": [
     {
@@ -301,7 +301,7 @@
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments",
       "required": false,
       "contract": {
-        "description": "Service configuration. Implementation warnings for this REST representation: POST does not copy adminStateUp or snat into the domain. GET omits privateIP, timeoutMemberConnect, timeoutMemberData, timeoutTcpInspect, vip_qos_policy_id, alpn_protocols, tls_ciphers, tls_versions, hsts_max_age, hsts_include_subdomains, hsts_preload, backend_ca_cert_id, backend_client_cert_id and mtls_frontend.client_crl_path. GET/edit/POST is therefore not a lossless configuration round trip. PATCH has a limited overlay and does not update arbitrary properties. Metadata-only POSTs can return an unchanged-rule error before applying metadata; managed is not assigned on the existing-rule update path. FullProxy replacement removes its pool but C retains the listener; reuse does not reliably restore listener arguments or rebuild TLS contexts, so updated TLS/HSTS/timeout settings are not established by stored state. Requested-security fail-closed behavior and LB-resource/listener policy ownership remain unresolved; these defects are not supported fallback or update semantics.",
+        "description": "Service configuration. Implementation warnings for this REST representation: POST does not copy adminStateUp or snat into the domain. GET omits privateIP and vip_qos_policy_id. GET/edit/POST is therefore not a lossless configuration round trip. PATCH has a limited overlay and does not update arbitrary properties. Metadata-only POSTs can return an unchanged-rule error before applying metadata; managed is not assigned on the existing-rule update path. FullProxy replacement removes its pool but C retains the listener; reuse does not reliably restore listener arguments or rebuild TLS contexts, so updated TLS/HSTS/timeout settings are not established by stored state. Requested-security fail-closed behavior and LB-resource/listener policy ownership remain unresolved; these defects are not supported fallback or update semantics.",
         "type": "object"
       }
     },
@@ -1528,7 +1528,7 @@
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/mtls_frontend/client_crl_path",
       "required": false,
       "contract": {
-        "description": "Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes; normal GET omits this field.",
+        "description": "Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes. GET returns the stored path.",
         "type": "string"
       }
     },
@@ -1893,7 +1893,7 @@
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/tls_ciphers",
       "required": false,
       "contract": {
-        "description": "Cipher string passed to both the TLS 1.3 ciphersuite and TLS 1.2 cipher configuration calls for listener/backend contexts, regardless of the selected version range. Empty uses the built-in lists. Implementation warnings: the C copy limits the string to 255 bytes without admission rejection; either OpenSSL call can fail, and listener creation then reaches an SSL-context assertion. Invalid input is not guaranteed to produce a clean REST rejection. See shared readback/update warnings.",
+        "description": "Cipher string passed to both the TLS 1.3 ciphersuite and TLS 1.2 cipher configuration calls for listener/backend contexts, regardless of the selected version range. Empty uses the built-in lists. A string longer than 255 bytes, and a string either call does not take, is refused with 400 before the rule is stored, on a FullProxy rule that terminates TLS; any other rule stores the value and does not use it. Because one string goes to both calls, a string that names only TLS 1.2 ciphers or only TLS 1.3 ciphersuites is refused; a string that names both kinds is taken. GET returns the stored string.",
         "type": "string"
       }
     },
