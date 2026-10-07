@@ -213,6 +213,9 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	lbRules.Serv.KvExactApiMode = params.Attr.ServiceArguments.KvExactAPIMode
 	lbRules.Serv.KvModelProfile = params.Attr.ServiceArguments.KvModelProfile
 	lbRules.Serv.PDBootstrapPort = uint16(params.Attr.ServiceArguments.PdBootstrapPort)
+	// Endpoint Picker (EPP) client. Absent ⇒ zero values ⇒ the rule's own
+	// selection ladder, byte-identical to a rule without these fields.
+	applyEppArguments(&lbRules.Serv, params.Attr.ServiceArguments)
 
 	// Custom session header configuration - supports both RR and Persist modes
 	lbRules.Serv.SessionHeaderName = params.Attr.ServiceArguments.SessionHeaderName
@@ -796,6 +799,7 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	if lb.Serv.PDBootstrapPort != 0 {
 		tmpSvc.PdBootstrapPort = int32(lb.Serv.PDBootstrapPort)
 	}
+	serializeEppArguments(&tmpSvc, lb.Serv)
 
 	// CHWBL configuration (present when sel=8 CHWBL or sel=10 WRR_HASH)
 	if lb.Serv.Sel == cmn.LbSelCHWBL || lb.Serv.Sel == cmn.LbSelWRRHash {
@@ -1264,4 +1268,35 @@ func ConfigDeleteLoadbalancerByName(params operations.DeleteConfigLoadbalancerNa
 	}
 
 	return &ResultResponse{Result: "Success"}
+}
+
+// applyEppArguments copies the Endpoint Picker declaration of a POST body
+// into the rule arguments. eppTimeoutMs is range-checked by the swagger
+// schema (0..600000) before the body reaches here, so the narrowing cast
+// cannot wrap; the rule layer resolves the FailClose / 3000 ms defaults.
+func applyEppArguments(dst *cmn.LbServiceArg, src *models.LoadbalanceEntryServiceArguments) {
+	if src == nil {
+		return
+	}
+	dst.EppEndpoint = src.EppEndpoint
+	dst.EppFailureMode = src.EppFailureMode
+	dst.EppTimeoutMs = uint32(src.EppTimeoutMs)
+	dst.EppPlaintext = src.EppPlaintext
+}
+
+// serializeEppArguments reports the stored Endpoint Picker declaration on
+// GET, zero-suppressed so a rule without an EPP reads exactly as before.
+func serializeEppArguments(dst *models.LoadbalanceEntryServiceArguments, src cmn.LbServiceArg) {
+	if src.EppEndpoint != "" {
+		dst.EppEndpoint = src.EppEndpoint
+	}
+	if src.EppFailureMode != "" {
+		dst.EppFailureMode = src.EppFailureMode
+	}
+	if src.EppTimeoutMs != 0 {
+		dst.EppTimeoutMs = int64(src.EppTimeoutMs)
+	}
+	if src.EppPlaintext {
+		dst.EppPlaintext = true
+	}
 }

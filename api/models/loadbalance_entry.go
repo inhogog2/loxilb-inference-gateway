@@ -725,6 +725,21 @@ type LoadbalanceEntryServiceArguments struct {
 	// Marks an egress rule. The ordinary LB2DP programming path returns early for this marker; do not infer ordinary ingress FullProxy behavior. The existing-rule path rejects changes to this flag.
 	Egress bool `json:"egress,omitempty"`
 
+	// gRPC address (host:port) of a Gateway API Inference Extension Endpoint Picker (EPP) that chooses the backend for every request of this fullproxy rule over the Envoy ext_proc protocol, for example pd-disaggregation-epp.llm-d-pd-disaggregation.svc:9002. Empty or omitted keeps the rule's own selection ladder (sel, kvExactMode, ...) and leaves the data path byte-identical to a rule without this field. A nonempty value requires mode=4 (fullproxy) and pd_disagg_mode=false; the rule's own selector remains the FailOpen fallback. Candidates named by the EPP must still be endpoints of this rule and pass loxilb's local health, circuit-breaker and disabled checks. Accepts at most 255 UTF-8 bytes. PATCH does not support this field.
+	EppEndpoint string `json:"eppEndpoint,omitempty"`
+
+	// What a request does when the EPP cannot answer (submission refused, timeout, gRPC error, NOT_SERVING, or every candidate it named rejected locally). FailClose (default) answers 503 epp_unavailable or 503 epp_no_endpoint; FailOpen falls back to the rule's own selection ladder. Omitted or empty resolves to FailClose. Only meaningful with eppEndpoint; accepted but inert otherwise.
+	// Enum: [FailOpen FailClose]
+	EppFailureMode string `json:"eppFailureMode,omitempty"`
+
+	// true connects to the EPP without TLS. The default (false) uses TLS without certificate verification, matching the insecureSkipVerify DestinationRule the llm-d charts install for the EPP's self-signed certificate. Only meaningful with eppEndpoint; accepted but inert otherwise.
+	EppPlaintext bool `json:"eppPlaintext,omitempty"`
+
+	// Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.
+	// Maximum: 600000
+	// Minimum: 0
+	EppTimeoutMs int64 `json:"eppTimeoutMs,omitempty"`
+
 	// External service IP used in the LB rule key. The domain validates the address. Create callers must provide it; shared PATCH-compatible schema optionality does not make an omitted create address usable.
 	ExternalIP *string `json:"externalIP,omitempty"`
 
@@ -1047,6 +1062,14 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	}
 
 	if err := m.validateChwblReplication(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateEppFailureMode(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateEppTimeoutMs(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -1431,6 +1454,64 @@ func (m *LoadbalanceEntryServiceArguments) validateChwblReplication(formats strf
 	}
 
 	if err := validate.MaximumInt("serviceArguments"+"."+"chwbl_replication", "body", m.ChwblReplication, 1024, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsTypeEppFailureModePropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["FailOpen","FailClose"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsTypeEppFailureModePropEnum = append(loadbalanceEntryServiceArgumentsTypeEppFailureModePropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsEppFailureModeFailOpen captures enum value "FailOpen"
+	LoadbalanceEntryServiceArgumentsEppFailureModeFailOpen string = "FailOpen"
+
+	// LoadbalanceEntryServiceArgumentsEppFailureModeFailClose captures enum value "FailClose"
+	LoadbalanceEntryServiceArgumentsEppFailureModeFailClose string = "FailClose"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArguments) validateEppFailureModeEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsTypeEppFailureModePropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateEppFailureMode(formats strfmt.Registry) error {
+	if swag.IsZero(m.EppFailureMode) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateEppFailureModeEnum("serviceArguments"+"."+"eppFailureMode", "body", m.EppFailureMode); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateEppTimeoutMs(formats strfmt.Registry) error {
+	if swag.IsZero(m.EppTimeoutMs) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"eppTimeoutMs", "body", m.EppTimeoutMs, 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"eppTimeoutMs", "body", m.EppTimeoutMs, 600000, false); err != nil {
 		return err
 	}
 

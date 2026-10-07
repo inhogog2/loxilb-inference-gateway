@@ -170,6 +170,22 @@ x-loxilb-contract-relations:
       enforcement: server-static
       message: The encoded endpoint routing key, including separators, must fit in 511 UTF-8 bytes.
       evidence: pkg/loxinet/rules.go:validateLBFixedCStringFields
+    - id: LB-EPP-FULLPROXY
+      kind: requires
+      when: {field: /serviceArguments/eppEndpoint, operator: nonempty-string}
+      require:
+        - {field: /serviceArguments/mode, operator: in, values: [4], missing: 0}
+      enforcement: server-static
+      message: An Endpoint Picker (EPP) requires the fullproxy data path.
+      evidence: pkg/loxinet/rules.go:eppArgsValidate
+    - id: LB-EPP-NO-PD
+      kind: requires
+      when: {field: /serviceArguments/eppEndpoint, operator: nonempty-string}
+      require:
+        - {field: /serviceArguments/pd_disagg_mode, operator: in, values: [false], missing: false}
+      enforcement: server-static
+      message: An Endpoint Picker (EPP) rule must not enable loxilb's own P/D orchestration.
+      evidence: pkg/loxinet/rules.go:eppArgsValidate
 paths:
   '/config/import':
     post:
@@ -11240,6 +11256,59 @@ definitions:
               A nonzero declaration requires both
               pd_disagg_mode=true and kvEngineType=sglang; it is rejected on
               other shapes. Zero is accepted on other shapes but has no effect.
+          eppEndpoint:
+            type: string
+            x-nullable: false
+            description: >-
+              gRPC address (host:port) of a Gateway API Inference Extension
+              Endpoint Picker (EPP) that chooses the backend for every request
+              of this fullproxy rule over the Envoy ext_proc protocol, for
+              example pd-disaggregation-epp.llm-d-pd-disaggregation.svc:9002.
+              Empty or omitted keeps the rule's own selection ladder (sel,
+              kvExactMode, ...) and leaves the data path byte-identical to a
+              rule without this field. A nonempty value requires mode=4
+              (fullproxy) and pd_disagg_mode=false; the rule's own selector
+              remains the FailOpen fallback. Candidates named by the EPP must
+              still be endpoints of this rule and pass loxilb's local health,
+              circuit-breaker and disabled checks. Accepts at most 255 UTF-8
+              bytes. PATCH does not support this field.
+            x-loxilb-max-utf8-bytes: 255
+          eppFailureMode:
+            type: string
+            x-nullable: false
+            enum: ["FailOpen", "FailClose"]
+            default: "FailClose"
+            description: >-
+              What a request does when the EPP cannot answer (submission
+              refused, timeout, gRPC error, NOT_SERVING, or every candidate it
+              named rejected locally). FailClose (default) answers 503
+              epp_unavailable or 503 epp_no_endpoint; FailOpen falls back to
+              the rule's own selection ladder. Omitted or empty resolves to
+              FailClose. Only meaningful with eppEndpoint; accepted but
+              inert otherwise.
+          eppTimeoutMs:
+            type: integer
+            format: int64
+            x-nullable: false
+            minimum: 0
+            maximum: 600000
+            default: 0
+            description: >-
+              Longest wait, in milliseconds, for the EPP's request-phase
+              decision (destination, header and body mutations) before the
+              request is treated as an EPP failure and eppFailureMode applies.
+              Omitted or 0 resolves to 3000. Only meaningful with
+              eppEndpoint; accepted but inert otherwise.
+          eppPlaintext:
+            type: boolean
+            x-nullable: false
+            default: false
+            description: >-
+              true connects to the EPP without TLS. The default (false)
+              uses TLS without certificate verification, matching the
+              insecureSkipVerify DestinationRule the llm-d charts install for
+              the EPP's self-signed certificate. Only meaningful with
+              eppEndpoint; accepted but inert otherwise.
           session_header_name:
             type: string
             description: >-

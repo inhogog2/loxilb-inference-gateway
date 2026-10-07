@@ -997,6 +997,38 @@ const KVBlockSizeMax uint32 = 4096
 // for hours.
 const PDPrefillTimeoutSecMax uint16 = 3600
 
+// Endpoint Picker (EPP) rule arguments. An EPP is a Gateway API Inference
+// Extension endpoint picker that loxilb asks, over Envoy's ext_proc gRPC
+// protocol, which backend should serve each request of a fullproxy rule.
+const (
+	// EppFailureModeFailOpen falls back to the rule's own selection ladder
+	// when the EPP cannot answer.
+	EppFailureModeFailOpen = "FailOpen"
+	// EppFailureModeFailClose answers 503 when the EPP cannot answer. It is
+	// the resolved default of an empty eppFailureMode on an EPP rule.
+	EppFailureModeFailClose = "FailClose"
+	// EppDefaultTimeoutMs is what an omitted or zero eppTimeoutMs resolves
+	// to on an EPP rule: the request-phase decision deadline in ms.
+	EppDefaultTimeoutMs uint32 = 3000
+	// EppTimeoutMsMax bounds eppTimeoutMs (ten minutes); the data plane
+	// carries the value in 32 bits, the bound guards against a typo that
+	// would park client connections for hours.
+	EppTimeoutMsMax uint32 = 600000
+	// EppEndpointMaxBytes bounds the UTF-8 length of eppEndpoint.
+	EppEndpointMaxBytes = 255
+)
+
+// IsValidEppFailureMode reports whether mode is one of the closed set of
+// eppFailureMode values; the empty string is accepted (resolved at
+// admission).
+func IsValidEppFailureMode(mode string) bool {
+	switch mode {
+	case "", EppFailureModeFailOpen, EppFailureModeFailClose:
+		return true
+	}
+	return false
+}
+
 // LbServiceArg - Information related to load-balancer service
 type LbServiceArg struct {
 	// ServIP - the service ip or vip  of the load-balancer rule
@@ -1346,6 +1378,21 @@ type LbServiceArg struct {
 	// create time. Empty = legacy profile-less rule (no binding, documented
 	// migration behavior). Immutable on a live rule (delete+recreate).
 	KvModelProfile string `json:"kvModelProfile,omitempty"`
+
+	// Endpoint Picker (EPP) client configuration — Gateway API Inference
+	// Extension ext_proc. Zero values on every field keep the rule, the
+	// stored JSON and the data-plane push byte-identical to a rule that
+	// never heard of the EPP (default-OFF additive chain).
+	// EppEndpoint - gRPC host:port of the EPP; "" = EPP off.
+	EppEndpoint string `json:"eppEndpoint,omitempty"`
+	// EppFailureMode - "FailOpen" or "FailClose" ("" resolves to FailClose at
+	// admission when EppEndpoint is set).
+	EppFailureMode string `json:"eppFailureMode,omitempty"`
+	// EppTimeoutMs - request-phase decision deadline in ms (0 resolves to
+	// EppDefaultTimeoutMs at admission when EppEndpoint is set).
+	EppTimeoutMs uint32 `json:"eppTimeoutMs,omitempty"`
+	// EppPlaintext - true connects to the EPP without TLS.
+	EppPlaintext bool `json:"eppPlaintext,omitempty"`
 	// RestoreReplay - set by the snapshot engine when this rule add is a
 	// restore replay rather than a fresh POST. A replayed strict rule must
 	// NOT allocate a new KV-exact binding generation: the snapshot's

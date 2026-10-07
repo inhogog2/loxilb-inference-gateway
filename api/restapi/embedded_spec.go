@@ -4885,6 +4885,37 @@ func init() {
               "description": "Marks an egress rule. The ordinary LB2DP programming path returns early for this marker; do not infer ordinary ingress FullProxy behavior. The existing-rule path rejects changes to this flag.",
               "type": "boolean"
             },
+            "eppEndpoint": {
+              "description": "gRPC address (host:port) of a Gateway API Inference Extension Endpoint Picker (EPP) that chooses the backend for every request of this fullproxy rule over the Envoy ext_proc protocol, for example pd-disaggregation-epp.llm-d-pd-disaggregation.svc:9002. Empty or omitted keeps the rule's own selection ladder (sel, kvExactMode, ...) and leaves the data path byte-identical to a rule without this field. A nonempty value requires mode=4 (fullproxy) and pd_disagg_mode=false; the rule's own selector remains the FailOpen fallback. Candidates named by the EPP must still be endpoints of this rule and pass loxilb's local health, circuit-breaker and disabled checks. Accepts at most 255 UTF-8 bytes. PATCH does not support this field.",
+              "type": "string",
+              "x-loxilb-max-utf8-bytes": 255,
+              "x-nullable": false
+            },
+            "eppFailureMode": {
+              "default": "FailClose",
+              "description": "What a request does when the EPP cannot answer (submission refused, timeout, gRPC error, NOT_SERVING, or every candidate it named rejected locally). FailClose (default) answers 503 epp_unavailable or 503 epp_no_endpoint; FailOpen falls back to the rule's own selection ladder. Omitted or empty resolves to FailClose. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+              "enum": [
+                "FailOpen",
+                "FailClose"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
+            "eppPlaintext": {
+              "default": false,
+              "description": "true connects to the EPP without TLS. The default (false) uses TLS without certificate verification, matching the insecureSkipVerify DestinationRule the llm-d charts install for the EPP's self-signed certificate. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+              "type": "boolean",
+              "x-nullable": false
+            },
+            "eppTimeoutMs": {
+              "default": 0,
+              "description": "Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+              "format": "int64",
+              "maximum": 600000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
             "externalIP": {
               "description": "External service IP used in the LB rule key. The domain validates the address. Create callers must provide it; shared PATCH-compatible schema optionality does not make an omitted create address usable.",
               "type": "string",
@@ -21185,6 +21216,48 @@ func init() {
         "maximum": 511,
         "message": "The encoded endpoint routing key, including separators, must fit in 511 UTF-8 bytes.",
         "unit": "utf8-bytes"
+      },
+      {
+        "enforcement": "server-static",
+        "evidence": "pkg/loxinet/rules.go:eppArgsValidate",
+        "id": "LB-EPP-FULLPROXY",
+        "kind": "requires",
+        "message": "An Endpoint Picker (EPP) requires the fullproxy data path.",
+        "require": [
+          {
+            "field": "/serviceArguments/mode",
+            "missing": 0,
+            "operator": "in",
+            "values": [
+              4
+            ]
+          }
+        ],
+        "when": {
+          "field": "/serviceArguments/eppEndpoint",
+          "operator": "nonempty-string"
+        }
+      },
+      {
+        "enforcement": "server-static",
+        "evidence": "pkg/loxinet/rules.go:eppArgsValidate",
+        "id": "LB-EPP-NO-PD",
+        "kind": "requires",
+        "message": "An Endpoint Picker (EPP) rule must not enable loxilb's own P/D orchestration.",
+        "require": [
+          {
+            "field": "/serviceArguments/pd_disagg_mode",
+            "missing": false,
+            "operator": "in",
+            "values": [
+              false
+            ]
+          }
+        ],
+        "when": {
+          "field": "/serviceArguments/eppEndpoint",
+          "operator": "nonempty-string"
+        }
       }
     ],
     "scope": "#/definitions/LoadbalanceEntry",
@@ -39847,6 +39920,37 @@ func init() {
               "description": "Marks an egress rule. The ordinary LB2DP programming path returns early for this marker; do not infer ordinary ingress FullProxy behavior. The existing-rule path rejects changes to this flag.",
               "type": "boolean"
             },
+            "eppEndpoint": {
+              "description": "gRPC address (host:port) of a Gateway API Inference Extension Endpoint Picker (EPP) that chooses the backend for every request of this fullproxy rule over the Envoy ext_proc protocol, for example pd-disaggregation-epp.llm-d-pd-disaggregation.svc:9002. Empty or omitted keeps the rule's own selection ladder (sel, kvExactMode, ...) and leaves the data path byte-identical to a rule without this field. A nonempty value requires mode=4 (fullproxy) and pd_disagg_mode=false; the rule's own selector remains the FailOpen fallback. Candidates named by the EPP must still be endpoints of this rule and pass loxilb's local health, circuit-breaker and disabled checks. Accepts at most 255 UTF-8 bytes. PATCH does not support this field.",
+              "type": "string",
+              "x-loxilb-max-utf8-bytes": 255,
+              "x-nullable": false
+            },
+            "eppFailureMode": {
+              "description": "What a request does when the EPP cannot answer (submission refused, timeout, gRPC error, NOT_SERVING, or every candidate it named rejected locally). FailClose (default) answers 503 epp_unavailable or 503 epp_no_endpoint; FailOpen falls back to the rule's own selection ladder. Omitted or empty resolves to FailClose. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+              "type": "string",
+              "default": "FailClose",
+              "enum": [
+                "FailOpen",
+                "FailClose"
+              ],
+              "x-nullable": false
+            },
+            "eppPlaintext": {
+              "description": "true connects to the EPP without TLS. The default (false) uses TLS without certificate verification, matching the insecureSkipVerify DestinationRule the llm-d charts install for the EPP's self-signed certificate. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+              "type": "boolean",
+              "default": false,
+              "x-nullable": false
+            },
+            "eppTimeoutMs": {
+              "description": "Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 600000,
+              "minimum": 0,
+              "x-nullable": false
+            },
             "externalIP": {
               "description": "External service IP used in the LB rule key. The domain validates the address. Create callers must provide it; shared PATCH-compatible schema optionality does not make an omitted create address usable.",
               "type": "string",
@@ -40987,6 +41091,37 @@ func init() {
         "egress": {
           "description": "Marks an egress rule. The ordinary LB2DP programming path returns early for this marker; do not infer ordinary ingress FullProxy behavior. The existing-rule path rejects changes to this flag.",
           "type": "boolean"
+        },
+        "eppEndpoint": {
+          "description": "gRPC address (host:port) of a Gateway API Inference Extension Endpoint Picker (EPP) that chooses the backend for every request of this fullproxy rule over the Envoy ext_proc protocol, for example pd-disaggregation-epp.llm-d-pd-disaggregation.svc:9002. Empty or omitted keeps the rule's own selection ladder (sel, kvExactMode, ...) and leaves the data path byte-identical to a rule without this field. A nonempty value requires mode=4 (fullproxy) and pd_disagg_mode=false; the rule's own selector remains the FailOpen fallback. Candidates named by the EPP must still be endpoints of this rule and pass loxilb's local health, circuit-breaker and disabled checks. Accepts at most 255 UTF-8 bytes. PATCH does not support this field.",
+          "type": "string",
+          "x-loxilb-max-utf8-bytes": 255,
+          "x-nullable": false
+        },
+        "eppFailureMode": {
+          "description": "What a request does when the EPP cannot answer (submission refused, timeout, gRPC error, NOT_SERVING, or every candidate it named rejected locally). FailClose (default) answers 503 epp_unavailable or 503 epp_no_endpoint; FailOpen falls back to the rule's own selection ladder. Omitted or empty resolves to FailClose. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+          "type": "string",
+          "default": "FailClose",
+          "enum": [
+            "FailOpen",
+            "FailClose"
+          ],
+          "x-nullable": false
+        },
+        "eppPlaintext": {
+          "description": "true connects to the EPP without TLS. The default (false) uses TLS without certificate verification, matching the insecureSkipVerify DestinationRule the llm-d charts install for the EPP's self-signed certificate. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+          "type": "boolean",
+          "default": false,
+          "x-nullable": false
+        },
+        "eppTimeoutMs": {
+          "description": "Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0,
+          "maximum": 600000,
+          "minimum": 0,
+          "x-nullable": false
         },
         "externalIP": {
           "description": "External service IP used in the LB rule key. The domain validates the address. Create callers must provide it; shared PATCH-compatible schema optionality does not make an omitted create address usable.",
@@ -45692,6 +45827,48 @@ func init() {
         "maximum": 511,
         "message": "The encoded endpoint routing key, including separators, must fit in 511 UTF-8 bytes.",
         "unit": "utf8-bytes"
+      },
+      {
+        "enforcement": "server-static",
+        "evidence": "pkg/loxinet/rules.go:eppArgsValidate",
+        "id": "LB-EPP-FULLPROXY",
+        "kind": "requires",
+        "message": "An Endpoint Picker (EPP) requires the fullproxy data path.",
+        "require": [
+          {
+            "field": "/serviceArguments/mode",
+            "missing": 0,
+            "operator": "in",
+            "values": [
+              4
+            ]
+          }
+        ],
+        "when": {
+          "field": "/serviceArguments/eppEndpoint",
+          "operator": "nonempty-string"
+        }
+      },
+      {
+        "enforcement": "server-static",
+        "evidence": "pkg/loxinet/rules.go:eppArgsValidate",
+        "id": "LB-EPP-NO-PD",
+        "kind": "requires",
+        "message": "An Endpoint Picker (EPP) rule must not enable loxilb's own P/D orchestration.",
+        "require": [
+          {
+            "field": "/serviceArguments/pd_disagg_mode",
+            "missing": false,
+            "operator": "in",
+            "values": [
+              false
+            ]
+          }
+        ],
+        "when": {
+          "field": "/serviceArguments/eppEndpoint",
+          "operator": "nonempty-string"
+        }
       }
     ],
     "scope": "#/definitions/LoadbalanceEntry",

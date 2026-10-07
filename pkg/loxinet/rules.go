@@ -652,6 +652,10 @@ type ruleEnt struct {
 	kvRestoredProfileUnresolved bool                    // restored KV-exact rule whose declared profile could not be resolved (registry unavailable): declaration preserved, exact path fenced
 	kvDpRankCount               uint16                  // SGLang DP rank count (1..8, 0 ⇒ 1; rank N publishes at kvZmqPort+N)
 	pdBootstrapPort             uint16                  // SGLang P/D bootstrap port on prefill EPs (0 ⇒ 8998 downstream)
+	eppEndpoint                 string                  // Endpoint Picker gRPC host:port ("" = EPP off)
+	eppFailureMode              string                  // "FailOpen" | "FailClose" (resolved at admission, "" when EPP off)
+	eppTimeoutMs                uint32                  // EPP request-phase deadline in ms (resolved at admission, 0 when EPP off)
+	eppPlaintext                bool                    // EPP connection without TLS
 	chwblPrefixHashLevel        int                     // CHWBL prefix hash level: 1, 2, or 3
 	chwblPrefixHashFlags        int                     // CHWBL optional field flags bitfield
 	chwblMeanLoadFactor         int                     // CHWBL max load factor percentage (100-300)
@@ -1270,6 +1274,11 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.KvModelProfile = data.kvModelProfile // zero value ⇒ omitempty ⇒ absent on legacy rules
 		ret.Serv.KvDpRankCount = data.kvDpRankCount
 		ret.Serv.PDBootstrapPort = data.pdBootstrapPort // zero value ⇒ omitempty ⇒ absent on legacy rules
+		// Endpoint Picker: zero values ⇒ omitempty ⇒ absent on rules without an EPP
+		ret.Serv.EppEndpoint = data.eppEndpoint
+		ret.Serv.EppFailureMode = data.eppFailureMode
+		ret.Serv.EppTimeoutMs = data.eppTimeoutMs
+		ret.Serv.EppPlaintext = data.eppPlaintext
 		// CHWBL configuration (sel=8)
 		ret.Serv.CHWBLPrefixHashLevel = data.chwblPrefixHashLevel
 		ret.Serv.CHWBLPrefixHashFlags = data.chwblPrefixHashFlags
@@ -3037,6 +3046,43 @@ const (
 //
 // Pure function: unit-testable without a rule fixture (kvEngineConfigValidate
 // precedent).
+// eppArgsValidate checks the Endpoint Picker arguments of a rule against
+// the fullproxy topology they need and resolves their defaults IN PLACE:
+// on an EPP rule an empty eppFailureMode becomes FailClose and a zero
+// eppTimeoutMs becomes EppDefaultTimeoutMs. A rule without eppEndpoint
+// keeps every EPP field at its zero value (the other three are accepted
+// but inert), so a rule that never named an EPP stays byte-identical.
+func eppArgsValidate(serv *cmn.LbServiceArg, mode cmn.LBMode) error {
+	if !cmn.IsValidEppFailureMode(serv.EppFailureMode) {
+		return fmt.Errorf("eppFailureMode must be %s or %s", cmn.EppFailureModeFailOpen, cmn.EppFailureModeFailClose)
+	}
+	if serv.EppTimeoutMs > cmn.EppTimeoutMsMax {
+		return fmt.Errorf("eppTimeoutMs must be within 0..%d", cmn.EppTimeoutMsMax)
+	}
+	if serv.EppEndpoint == "" {
+		return nil
+	}
+	if err := validateLBFixedCString("eppEndpoint", serv.EppEndpoint, cmn.EppEndpointMaxBytes); err != nil {
+		return err
+	}
+	if _, _, err := net.SplitHostPort(serv.EppEndpoint); err != nil {
+		return fmt.Errorf("eppEndpoint must be host:port: %v", err)
+	}
+	if mode != cmn.LBModeFullProxy {
+		return errors.New("eppEndpoint requires mode=fullproxy (the EPP decides per HTTP request)")
+	}
+	if serv.PDDisaggMode {
+		return errors.New("eppEndpoint is incompatible with pd_disagg_mode=true (the EPP orchestrates P/D itself)")
+	}
+	if serv.EppFailureMode == "" {
+		serv.EppFailureMode = cmn.EppFailureModeFailClose
+	}
+	if serv.EppTimeoutMs == 0 {
+		serv.EppTimeoutMs = cmn.EppDefaultTimeoutMs
+	}
+	return nil
+}
+
 func kvExactApiModeValidate(apiMode string, kvExactMode uint8) error {
 	switch apiMode {
 	case "", KvExactApiCompletions, KvExactApiChat, KvExactApiBoth:
@@ -4112,6 +4158,13 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		return RuleUnknownServiceErr, errors.New("kv-exact zmq mode requires pd_disagg_mode=true (use kvExactMode=3 for a single pool)")
 	}
 
+	// Endpoint Picker (EPP) shape + default resolution. Runs before any rule
+	// or data-plane state is touched; the resolved values are what the rule
+	// stores, what GET reports and what the data plane receives.
+	if err := eppArgsValidate(&serv, lBActs.mode); err != nil {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+	}
+
 	// engine allowlist + DP rank bounds — covers
 	// both the create and update paths (everything below flows through here).
 	if err := kvBlockSizeValidate(serv.KvBlockSize); err != nil {
@@ -4358,6 +4411,10 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			// change must REJECT (RuleExistsErr below), never ruleChg delete+re-add.
 			eRule.kvDpRankCount != serv.KvDpRankCount ||
 			eRule.pdBootstrapPort != serv.PDBootstrapPort ||
+			eRule.eppEndpoint != serv.EppEndpoint ||
+			eRule.eppFailureMode != serv.EppFailureMode ||
+			eRule.eppTimeoutMs != serv.EppTimeoutMs ||
+			eRule.eppPlaintext != serv.EppPlaintext ||
 			eRule.chwblPrefixHashLevel != serv.CHWBLPrefixHashLevel ||
 			eRule.chwblPrefixHashFlags != serv.CHWBLPrefixHashFlags ||
 			eRule.chwblMeanLoadFactor != serv.CHWBLMeanLoadFactor ||
@@ -4588,6 +4645,10 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		eRule.kvEngineType = serv.KvEngineType // immutability enforced above
 		eRule.kvDpRankCount = serv.KvDpRankCount
 		eRule.pdBootstrapPort = serv.PDBootstrapPort
+		eRule.eppEndpoint = serv.EppEndpoint
+		eRule.eppFailureMode = serv.EppFailureMode
+		eRule.eppTimeoutMs = serv.EppTimeoutMs
+		eRule.eppPlaintext = serv.EppPlaintext
 		eRule.chwblPrefixHashLevel = serv.CHWBLPrefixHashLevel
 		eRule.chwblPrefixHashFlags = serv.CHWBLPrefixHashFlags
 		eRule.chwblMeanLoadFactor = serv.CHWBLMeanLoadFactor
@@ -4944,6 +5005,12 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	r.kvRestoredProfileUnresolved = kvRestoreProfileUnresolved
 	r.kvDpRankCount = serv.KvDpRankCount
 	r.pdBootstrapPort = serv.PDBootstrapPort
+
+	// Store the Endpoint Picker configuration (resolved by eppArgsValidate)
+	r.eppEndpoint = serv.EppEndpoint
+	r.eppFailureMode = serv.EppFailureMode
+	r.eppTimeoutMs = serv.EppTimeoutMs
+	r.eppPlaintext = serv.EppPlaintext
 
 	// Store CHWBL configuration (sel=8)
 	r.chwblPrefixHashLevel = serv.CHWBLPrefixHashLevel
