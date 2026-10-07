@@ -21,6 +21,7 @@ on:
       - 'cicd/common/k8s-inference/**'
       - 'cicd/k3d-incluster-inference-svc/**'
       - 'cicd/k3d-incluster-inference-gwapi/**'
+      - 'cicd/k3d-incluster-inference-epp/**'
       - '.github/workflows/k3d-incluster-inference.yml'
   pull_request:
     branches: [ "main" ]
@@ -28,17 +29,18 @@ on:
       - 'cicd/common/k8s-inference/**'
       - 'cicd/k3d-incluster-inference-svc/**'
       - 'cicd/k3d-incluster-inference-gwapi/**'
+      - 'cicd/k3d-incluster-inference-epp/**'
       - '.github/workflows/k3d-incluster-inference.yml'
 
 jobs:
   k3d-incluster-inference:
     name: ${{ matrix.scenario }}
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 90   # the EPP scenario builds the image from the checkout
     strategy:
       fail-fast: false
       matrix:
-        scenario: [k3d-incluster-inference-svc, k3d-incluster-inference-gwapi]
+        scenario: [k3d-incluster-inference-svc, k3d-incluster-inference-gwapi, k3d-incluster-inference-epp]
     steps:
       - uses: actions/checkout@v4
       - name: Install PyYAML (manifest renderer)
@@ -50,6 +52,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || github.token }}
+      - uses: actions/setup-go@v5
+        if: matrix.scenario == 'k3d-incluster-inference-epp'
+        with:
+          go-version-file: go.mod
+      - name: Build loxilb from this checkout (the EPP scenario tests the branch)
+        if: matrix.scenario == 'k3d-incluster-inference-epp'
+        run: |
+          docker build -t ghcr.io/loxilb-io/loxilb-inference-gateway:k3d-epp-local .
+          echo "IGW_IMAGE=ghcr.io/loxilb-io/loxilb-inference-gateway:k3d-epp-local" >> "$GITHUB_ENV"
       - name: Run the scenario
         env:
           KLB_REF: ${{ github.event.inputs.klbRef || 'integration/inference-gateway' }}
