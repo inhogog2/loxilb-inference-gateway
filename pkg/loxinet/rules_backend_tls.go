@@ -135,6 +135,30 @@ func lbPushRefusedError(vip net.IP, policyKept bool) error {
 	}
 }
 
+// lbTLSCiphersErr refuses a cipher string that the TLS contexts of a rule
+// could not be built with. The data plane passes the one string to both the
+// TLS 1.3 ciphersuites and the TLS 1.2 cipher list of the listener and of the
+// backend leg, and a rule whose context is not built is not installed. Only
+// a full-proxy rule that terminates TLS builds a context; any other rule
+// stores the value and does not use it.
+func lbTLSCiphersErr(serv *cmn.LbServiceArg) error {
+	if serv.TlsCiphers == "" || serv.Mode != cmn.LBModeFullProxy || serv.Security == cmn.LBServPlain {
+		return nil
+	}
+	tls13, tls12, asked := tlsCiphersRefused(serv.TlsCiphers)
+	if !asked || !tls13 && !tls12 {
+		return nil
+	}
+	missing := "a TLS 1.3 ciphersuite and a TLS 1.2 cipher"
+	if !tls12 {
+		missing = "a TLS 1.3 ciphersuite"
+	} else if !tls13 {
+		missing = "a TLS 1.2 cipher"
+	}
+	return fmt.Errorf("tls_ciphers %q is not accepted by the gateway's TLS library: the one string is used as the "+
+		"TLS 1.3 ciphersuites and as the TLS 1.2 cipher list, and it names no usable %s", serv.TlsCiphers, missing)
+}
+
 // lbReplaceUndo is a full-proxy rule as it stood before a replace wrote
 // into it: the rule's own values, its endpoints and its allowed sources.
 type lbReplaceUndo struct {
