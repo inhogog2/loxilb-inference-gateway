@@ -7576,7 +7576,15 @@ paths:
         policy change it is. Lowering a retention target never deletes
         segments already on disk: they keep the terms they were sealed
         under, and only what is sealed afterwards is subject to the
-        shorter one.
+        shorter one. The body replaces the whole policy: a field left out
+        is set to its zero value, which for a retention limit means no
+        limit, and is not kept from the policy before. The policy is held
+        in memory only. It is not part of the persisted configuration
+        document, unlike the sinks, and a restart brings back the values
+        the gateway starts with: its startup segment limits and no
+        retention limit. A deployment that needs a policy to hold across
+        restarts applies the whole of it again after every start, and
+        reads it back.
       operationId: PostAuditPolicy
       tags:
         - audit
@@ -7630,6 +7638,18 @@ paths:
         always verified against the configured bundle; there is no mode that
         disables verification, and a configuration without a bundle is
         refused. The change is audited like any other management mutation.
+        Syslog over TLS carries no acknowledgement from the receiver, so
+        what the sink can know is what the receiver's transport has
+        acknowledged. A record is behind the sink once it has been
+        written to the session; records written and not yet acknowledged
+        are remembered with the sink's place in the trail, and are sent
+        again after the session fails and after a restart of the gateway,
+        orderly or not. A receiver therefore sees a record at least once
+        up to its own transport and may see it more than once, and removes
+        repeats by (instance_id, boot_id, seq). What a receiver has
+        acknowledged and then loses before storing it is covered only by
+        the fixed number of records sent again after a session that
+        failed, and not across a restart of the gateway.
       operationId: PostAuditSink
       tags:
         - audit
@@ -14307,7 +14327,12 @@ definitions:
         description: The sink that receives every record.
       state:
         type: string
-        description: starting, connected, disconnected, stalled or stopped.
+        description: >-
+          starting, connected, disconnected, stalled or stopped. connected
+          says the last record offered was written to a session the receiver
+          has not closed. It does not say the receiver has stored it: a
+          receiver that stops answering without closing is found only when
+          the transport gives up on it, some seconds later.
       cursor:
         $ref: '#/definitions/AuditSinkCursor'
       in_active_segment:

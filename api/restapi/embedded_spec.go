@@ -653,7 +653,7 @@ func init() {
           "type": "string"
         },
         "state": {
-          "description": "starting, connected, disconnected, stalled or stopped.",
+          "description": "starting, connected, disconnected, stalled or stopped. connected says the last record offered was written to a session the receiver has not closed. It does not say the receiver has stored it: a receiver that stops answering without closing is found only when the transport gives up on it, some seconds later.",
           "type": "string"
         }
       },
@@ -8378,7 +8378,7 @@ func init() {
         ]
       },
       "post": {
-        "description": "Replaces the runtime-changeable audit policy. The change is itself audited before it is applied, like any other management mutation. A value below the deployment profile's floor is refused for every caller, the gateway administrator included, and the refusal names the fields. That refusal answers 400, not 403: the caller was authorized and the values were not acceptable, and a 403 here would be recorded as an authorization denial rather than as the refused policy change it is. Lowering a retention target never deletes segments already on disk: they keep the terms they were sealed under, and only what is sealed afterwards is subject to the shorter one.",
+        "description": "Replaces the runtime-changeable audit policy. The change is itself audited before it is applied, like any other management mutation. A value below the deployment profile's floor is refused for every caller, the gateway administrator included, and the refusal names the fields. That refusal answers 400, not 403: the caller was authorized and the values were not acceptable, and a 403 here would be recorded as an authorization denial rather than as the refused policy change it is. Lowering a retention target never deletes segments already on disk: they keep the terms they were sealed under, and only what is sealed afterwards is subject to the shorter one. The body replaces the whole policy: a field left out is set to its zero value, which for a retention limit means no limit, and is not kept from the policy before. The policy is held in memory only. It is not part of the persisted configuration document, unlike the sinks, and a restart brings back the values the gateway starts with: its startup segment limits and no retention limit. A deployment that needs a policy to hold across restarts applies the whole of it again after every start, and reads it back.",
         "operationId": "PostAuditPolicy",
         "parameters": [
           {
@@ -8474,7 +8474,7 @@ func init() {
         ]
       },
       "post": {
-        "description": "Configures the remote syslog sink. The receiver's certificate is always verified against the configured bundle; there is no mode that disables verification, and a configuration without a bundle is refused. The change is audited like any other management mutation.",
+        "description": "Configures the remote syslog sink. The receiver's certificate is always verified against the configured bundle; there is no mode that disables verification, and a configuration without a bundle is refused. The change is audited like any other management mutation. Syslog over TLS carries no acknowledgement from the receiver, so what the sink can know is what the receiver's transport has acknowledged. A record is behind the sink once it has been written to the session; records written and not yet acknowledged are remembered with the sink's place in the trail, and are sent again after the session fails and after a restart of the gateway, orderly or not. A receiver therefore sees a record at least once up to its own transport and may see it more than once, and removes repeats by (instance_id, boot_id, seq). What a receiver has acknowledged and then loses before storing it is covered only by the fixed number of records sent again after a session that failed, and not across a restart of the gateway.",
         "operationId": "PostAuditSink",
         "parameters": [
           {
@@ -21251,7 +21251,7 @@ func init() {
         }
       },
       "post": {
-        "description": "Replaces the runtime-changeable audit policy. The change is itself audited before it is applied, like any other management mutation. A value below the deployment profile's floor is refused for every caller, the gateway administrator included, and the refusal names the fields. That refusal answers 400, not 403: the caller was authorized and the values were not acceptable, and a 403 here would be recorded as an authorization denial rather than as the refused policy change it is. Lowering a retention target never deletes segments already on disk: they keep the terms they were sealed under, and only what is sealed afterwards is subject to the shorter one.",
+        "description": "Replaces the runtime-changeable audit policy. The change is itself audited before it is applied, like any other management mutation. A value below the deployment profile's floor is refused for every caller, the gateway administrator included, and the refusal names the fields. That refusal answers 400, not 403: the caller was authorized and the values were not acceptable, and a 403 here would be recorded as an authorization denial rather than as the refused policy change it is. Lowering a retention target never deletes segments already on disk: they keep the terms they were sealed under, and only what is sealed afterwards is subject to the shorter one. The body replaces the whole policy: a field left out is set to its zero value, which for a retention limit means no limit, and is not kept from the policy before. The policy is held in memory only. It is not part of the persisted configuration document, unlike the sinks, and a restart brings back the values the gateway starts with: its startup segment limits and no retention limit. A deployment that needs a policy to hold across restarts applies the whole of it again after every start, and reads it back.",
         "tags": [
           "audit"
         ],
@@ -21377,7 +21377,7 @@ func init() {
         }
       },
       "post": {
-        "description": "Configures the remote syslog sink. The receiver's certificate is always verified against the configured bundle; there is no mode that disables verification, and a configuration without a bundle is refused. The change is audited like any other management mutation.",
+        "description": "Configures the remote syslog sink. The receiver's certificate is always verified against the configured bundle; there is no mode that disables verification, and a configuration without a bundle is refused. The change is audited like any other management mutation. Syslog over TLS carries no acknowledgement from the receiver, so what the sink can know is what the receiver's transport has acknowledged. A record is behind the sink once it has been written to the session; records written and not yet acknowledged are remembered with the sink's place in the trail, and are sent again after the session fails and after a restart of the gateway, orderly or not. A receiver therefore sees a record at least once up to its own transport and may see it more than once, and removes repeats by (instance_id, boot_id, seq). What a receiver has acknowledged and then loses before storing it is covered only by the fixed number of records sent again after a session that failed, and not across a restart of the gateway.",
         "tags": [
           "audit"
         ],
@@ -35132,7 +35132,7 @@ func init() {
           "type": "string"
         },
         "state": {
-          "description": "starting, connected, disconnected, stalled or stopped.",
+          "description": "starting, connected, disconnected, stalled or stopped. connected says the last record offered was written to a session the receiver has not closed. It does not say the receiver has stored it: a receiver that stops answering without closing is found only when the transport gives up on it, some seconds later.",
           "type": "string"
         }
       }

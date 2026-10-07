@@ -36,7 +36,7 @@ type AuditSinkStatus struct {
 	// name
 	Name string `json:"name,omitempty"`
 
-	// starting, connected, disconnected, stalled or stopped.
+	// starting, connected, disconnected, stalled or stopped. connected says the last record offered was written to a session the receiver has not closed. It does not say the receiver has stored it: a receiver that stops answering without closing is found only when the transport gives up on it, some seconds later.
 	State string `json:"state,omitempty"`
 }
 
