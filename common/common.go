@@ -2355,6 +2355,12 @@ var ErrBootstrapClosed = errors.New("user bootstrap is closed")
 // text would make the status depend on wording.
 var ErrSockMapNoRule = errors.New("sockmap-reset: no sockproxy rule for this service")
 
+// ErrBgpOnlyMode reports that a hook was called on an instance that runs
+// goBGP only, with no data plane and so no load-balancer rules. It is a
+// sentinel because a caller that asks "which rules refer to X" can answer
+// "none" for it, and must not for any other failure of the same call.
+var ErrBgpOnlyMode = errors.New("running in bgp only mode")
+
 // NetHookInterface - Go interface which needs to be implemented to talk to loxinet module
 type NetHookInterface interface {
 	NetMirrorGet() ([]MirrGetMod, error)

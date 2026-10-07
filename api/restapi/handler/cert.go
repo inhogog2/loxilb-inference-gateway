@@ -53,6 +53,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -356,36 +357,53 @@ func certStoreBackend(cert *cmn.CertArg) {
 }
 
 // certInUse names the first load-balancer rule that refers to a certificate
-// ID for its backend leg, or returns "".
-func certInUse(certId string) string {
+// ID for its backend leg, or returns "". An instance that runs goBGP only has
+// no rules, so nothing refers to the ID there; any other failure to read the
+// rules is returned, because "no rule refers to it" is then not known.
+func certInUse(certId string) (string, error) {
 	if ApiHooks == nil {
-		return ""
+		return "", nil
 	}
 	rules, err := ApiHooks.NetLbRuleGet()
+	if errors.Is(err, cmn.ErrBgpOnlyMode) {
+		return "", nil
+	}
 	if err != nil {
-		return ""
+		return "", err
 	}
 	for i := range rules {
 		serv := &rules[i].Serv
 		if serv.BackendCaCertId == certId || serv.BackendClientCertId == certId {
-			return fmt.Sprintf("%s:%d/%s", serv.ServIP, serv.ServPort, serv.Proto)
+			return fmt.Sprintf("%s:%d/%s", serv.ServIP, serv.ServPort, serv.Proto), nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // certRefreshRules has the rules that refer to a certificate ID pushed again
 // after its material was replaced. It returns how many were pushed and names
-// the ones whose listener kept its previous context.
-func certRefreshRules(certId string) (int, []string) {
+// the ones whose listener kept its previous context. An instance that runs
+// goBGP only has no rules to push; any other failure is returned, because the
+// rules may still be serving the replaced material.
+func certRefreshRules(certId string) (int, []string, error) {
 	if ApiHooks == nil {
-		return 0, nil
+		return 0, nil, nil
 	}
 	pushed, kept, err := ApiHooks.NetLbBackendCertRefresh(certId)
-	if err != nil {
-		return 0, nil
+	if errors.Is(err, cmn.ErrBgpOnlyMode) {
+		return 0, nil, nil
 	}
-	return pushed, kept
+	if err != nil {
+		return 0, nil, err
+	}
+	return pushed, kept, nil
+}
+
+// certHookFailure is the body of a certificate request that could not be
+// completed because the load-balancer rules could not be consulted. The
+// sentence is the handler's own; the cause goes to the log.
+func certHookFailure(result string) *models.Error {
+	return &models.Error{Code: 500, Message: "Internal service error", Result: result}
 }
 
 // --- CRUD handlers (deferred-regen: generated op types come from `make build`) -----------
@@ -494,7 +512,13 @@ func ConfigPutCert(params operations.PutConfigCertCertIDParams, principal interf
 		// IDs are no longer the ones the context was built from. One that
 		// cannot load the new material keeps the context it has, and the
 		// caller is told, because the material is stored either way.
-		pushed, kept := certRefreshRules(cert.CertId)
+		pushed, kept, err := certRefreshRules(cert.CertId)
+		if err != nil {
+			tk.LogIt(tk.LogError, "api: Cert %s rotated (usage %s), rule refresh failed: %v\n", cert.CertId, cert.Usage, err)
+			return operations.NewPutConfigCertCertIDInternalServerError().WithPayload(certHookFailure(fmt.Sprintf(
+				"cert: certId %q is stored, but the rules that refer to it could not be pushed again; "+
+					"they keep the previous material until the certificate is written again", cert.CertId)))
+		}
 		tk.LogIt(tk.LogInfo, "api: Cert %s rotated (usage %s, %d rule(s) pushed, %d kept the previous context)\n",
 			cert.CertId, cert.Usage, pushed, len(kept))
 		if len(kept) != 0 {
@@ -545,7 +569,13 @@ func ConfigDeleteCert(params operations.DeleteConfigCertCertIDParams, principal 
 	if !known && !dirExists {
 		return operations.NewDeleteConfigCertCertIDNotFound()
 	}
-	if rule := certInUse(params.CertID); rule != "" {
+	rule, err := certInUse(params.CertID)
+	if err != nil {
+		tk.LogIt(tk.LogError, "api: cert delete refused, rules unreadable: %v\n", err)
+		return operations.NewDeleteConfigCertCertIDInternalServerError().WithPayload(certHookFailure(fmt.Sprintf(
+			"cert: could not read the load-balancer rules to check whether certId %q is in use; nothing was deleted", params.CertID)))
+	}
+	if rule != "" {
 		return operations.NewDeleteConfigCertCertIDBadRequest().WithPayload(certRefusal(
 			fmt.Errorf("cert: certId %q is used by load-balancer rule %s for its backend leg; remove it from the rule first", params.CertID, rule)))
 	}
