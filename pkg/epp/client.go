@@ -35,6 +35,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -199,7 +200,23 @@ type Stream struct {
 	recv   chan recvMsg
 	mu     sync.Mutex
 	done   bool
+	// decided is set once the request phase is over; from then on an
+	// ImmediateResponse from the EPP is an eviction (the EPP sheds a request
+	// it already admitted, llm-d-router flow control) and goes to onEvict.
+	decided atomic.Bool
+	evicted atomic.Bool
+	onEvict atomic.Pointer[func(code int)]
 }
+
+// OnEvict installs the handler called, once, from the stream's receiver
+// when the EPP answers the response phase with an ImmediateResponse: the
+// request must be cut (the backend leg ended) with that status.
+func (s *Stream) OnEvict(fn func(code int)) {
+	s.onEvict.Store(&fn)
+}
+
+// Evicted reports whether the EPP evicted the request during its response.
+func (s *Stream) Evicted() bool { return s.evicted.Load() }
 
 type recvMsg struct {
 	msg *extprocv3.ProcessingResponse
@@ -234,13 +251,24 @@ func (c *Client) Submit(ctx context.Context, cfg RuleCfg, req *Request) (*Decisi
 		s.Abort()
 		return dec, nil
 	}
+	s.decided.Store(true)
 	return dec, s
 }
 
 // receiver is the stream's only reader; it ends on any error (EOF, cancel).
+// Once the request phase is decided it also watches for an eviction.
 func (s *Stream) receiver() {
 	for {
 		msg, err := s.stream.Recv()
+		if err == nil && s.decided.Load() {
+			if im, ok := msg.Response.(*extprocv3.ProcessingResponse_ImmediateResponse); ok && s.evicted.CompareAndSwap(false, true) {
+				code := immediateDecision(im.ImmediateResponse).ImmCode
+				tk.LogIt(tk.LogInfo, "[EPP] request evicted by the EPP during its response (%d)\n", code)
+				if fn := s.onEvict.Load(); fn != nil {
+					(*fn)(code)
+				}
+			}
+		}
 		s.recv <- recvMsg{msg: msg, err: err}
 		if err != nil {
 			return

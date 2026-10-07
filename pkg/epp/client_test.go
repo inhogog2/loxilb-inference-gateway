@@ -232,3 +232,32 @@ func TestParseHTTP1Request(t *testing.T) {
 		t.Fatal("request line without a target accepted")
 	}
 }
+
+func TestEppClientEvictionDuringResponse(t *testing.T) {
+	f := epptest.New("evict")
+	addr, stop := epptest.Start(t, f, false)
+	defer stop()
+	c := epp.NewClient()
+	defer c.Close()
+	dec, s := c.Submit(context.Background(), epp.RuleCfg{Endpoint: addr, Plaintext: true}, sampleRequest())
+	if dec.Status != epp.StatusOK || s == nil {
+		t.Fatalf("decision %+v", dec)
+	}
+	evicted := make(chan int, 1)
+	s.OnEvict(func(code int) { evicted <- code })
+	if err := s.ReportResponseHeaders(200, nil, "10.0.0.1:8000"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-evicted:
+		if code != 429 {
+			t.Fatalf("eviction code %d", code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("eviction not seen")
+	}
+	if !s.Evicted() {
+		t.Fatal("Evicted() false after the handler ran")
+	}
+	s.Abort()
+}

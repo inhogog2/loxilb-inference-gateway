@@ -9,7 +9,8 @@
 // llm-d EPP: it waits for the whole request body, answers with a headers
 // response and streamed body chunks, then expects the response-phase
 // reports. Mode selects the behaviour: ok, echo, immediate, hang,
-// metadata-only, disagree.
+// metadata-only, disagree, evict (an ImmediateResponse in the response
+// phase).
 package epptest
 
 import (
@@ -161,6 +162,14 @@ func (f *Fake) Process(st extprocv3.ExternalProcessor_ProcessServer) error {
 		}
 		switch r := msg.Request.(type) {
 		case *extprocv3.ProcessingRequest_ResponseHeaders:
+			if f.Mode == "evict" {
+				// Flow-control eviction: the EPP sheds a request it admitted.
+				return st.Send(&extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ImmediateResponse{
+					ImmediateResponse: &extprocv3.ImmediateResponse{
+						Status: &typev3.HttpStatus{Code: typev3.StatusCode_TooManyRequests},
+						Body:   []byte(`{"error":"evicted"}`),
+					}}})
+			}
 			f.Mu.Lock()
 			f.RespStatus = make(map[string]string)
 			for _, h := range r.ResponseHeaders.GetHeaders().GetHeaders() {

@@ -372,6 +372,43 @@ var (
 		[]string{"tier", "model"},
 	)
 
+	// aiEppRequestsTotal counts requests a rule handed to its Endpoint
+	// Picker (EPP) by how the request phase ended: ok (a decision with
+	// candidates was applied), immediate (the EPP answered the client),
+	// error (deadline, gRPC error, NOT_SERVING), refused (the submit was
+	// refused before a stream opened), no_endpoint (no candidate usable),
+	// body_too_large (decision D5), evicted (shed during the response).
+	aiEppRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_epp_requests_total",
+			Help: "Total requests handed to an Endpoint Picker (EPP), by outcome of the request phase (ok, immediate, error, refused, no_endpoint, body_too_large, evicted).",
+		},
+		[]string{"outcome"},
+	)
+
+	// aiEppDurationSeconds is the EPP's request-phase latency: from the
+	// submit to the decision (or its failure), the time the client waits
+	// parked before the backend is chosen.
+	aiEppDurationSeconds = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "loxilb_ai_epp_duration_seconds",
+			Help:    "Endpoint Picker request-phase duration in seconds, submit to decision.",
+			Buckets: []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
+		},
+	)
+
+	// aiEppCandidatesRejectedTotal counts the endpoints an EPP named that
+	// the data plane could not use, by reason: unknown (not an endpoint of
+	// the rule), down, disabled (controller), unhealthy (prober or breaker),
+	// capacity (endpoint ceiling), connect (refused the connection).
+	aiEppCandidatesRejectedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_epp_candidates_rejected_total",
+			Help: "Total Endpoint Picker candidates the data plane skipped, by reason (unknown, down, disabled, unhealthy, capacity, connect).",
+		},
+		[]string{"reason"},
+	)
+
 	// aiNormalSessionHitsTotal counts normal-mode session-stickiness cache hits per model.
 	aiNormalSessionHitsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -1149,4 +1186,20 @@ func RecordAIRequestDenied(tenantID, modelName string, statusCode int) {
 	status := strconv.Itoa(statusCode)
 
 	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied).Inc()
+}
+
+// RecordEppOutcome counts one request handed to an Endpoint Picker by how
+// its request phase ended, and its duration when known (seconds > 0).
+func RecordEppOutcome(outcome string, seconds float64) {
+	if outcome != "" {
+		aiEppRequestsTotal.WithLabelValues(sanitizeLabel(outcome)).Inc()
+	}
+	if seconds > 0 {
+		aiEppDurationSeconds.Observe(seconds)
+	}
+}
+
+// RecordEppCandidateRejected counts one EPP candidate the data plane skipped.
+func RecordEppCandidateRejected(reason string) {
+	aiEppCandidatesRejectedTotal.WithLabelValues(sanitizeLabel(reason)).Inc()
 }

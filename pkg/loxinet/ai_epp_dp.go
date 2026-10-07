@@ -34,10 +34,12 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	tk "github.com/loxilb-io/loxilib"
 
+	prom "github.com/loxilb-io/loxilb/api/prometheus"
 	cmn "github.com/loxilb-io/loxilb/common"
 	"github.com/loxilb-io/loxilb/pkg/epp"
 )
@@ -165,13 +167,37 @@ func llb_epp_submit(svcID C.uint32_t, ns unsafe.Pointer, fd C.int, gen C.uint64_
 // then the decision handed to C from this thread.
 func (fl *eppFlight) run(cfg epp.RuleCfg, req *epp.Request) {
 	defer cgoRecover("eppFlight.run")
+	start := time.Now()
 	dec, stream := eppClient.Submit(fl.ctx, cfg, req)
-	if dec.Status == epp.StatusError && fl.ctx.Err() == nil {
-		tk.LogIt(tk.LogInfo, "[EPP] sid=%d fd=%d: %v\n", fl.sid, fl.fd, dec.Err)
+	took := time.Since(start).Seconds()
+	switch dec.Status {
+	case epp.StatusImmediate:
+		prom.RecordEppOutcome("immediate", took)
+	case epp.StatusError:
+		if fl.ctx.Err() == nil {
+			tk.LogIt(tk.LogInfo, "[EPP] sid=%d fd=%d: %v\n", fl.sid, fl.fd, dec.Err)
+			prom.RecordEppOutcome("error", took)
+		}
+	default:
+		// The final outcome of an OK decision (ok / no_endpoint /
+		// body_too_large) is decided and counted in the data plane; only
+		// the duration is observed here.
+		prom.RecordEppOutcome("", took)
 	}
 	fl.mu.Lock()
 	fl.stream = stream
 	fl.mu.Unlock()
+	if stream != nil {
+		stream.OnEvict(func(code int) {
+			defer cgoRecover("eppFlight.evict")
+			prom.RecordEppOutcome("evicted", 0)
+			rc := int(C.proxy_epp_evict(fl.ns, C.int(fl.fd), C.uint64_t(fl.gen), C.uint64_t(fl.sid), C.int(code)))
+			if rc != 0 {
+				tk.LogIt(tk.LogDebug, "[EPP] sid=%d fd=%d: eviction not delivered (%d)\n", fl.sid, fl.fd, rc)
+			}
+			fl.end()
+		})
+	}
 
 	rc := eppComplete(fl, dec)
 	if rc != 0 || stream == nil {
@@ -342,4 +368,16 @@ func eppParseHeaderLines(raw string) []epp.Header {
 		out = append(out, epp.Header{Key: strings.ToLower(strings.TrimSpace(k)), Value: strings.TrimSpace(v)})
 	}
 	return out
+}
+
+//export llb_epp_metric_outcome
+func llb_epp_metric_outcome(outcome *C.char) {
+	defer cgoRecover("llb_epp_metric_outcome")
+	prom.RecordEppOutcome(C.GoString(outcome), 0)
+}
+
+//export llb_epp_metric_rejected
+func llb_epp_metric_rejected(reason *C.char) {
+	defer cgoRecover("llb_epp_metric_rejected")
+	prom.RecordEppCandidateRejected(C.GoString(reason))
 }

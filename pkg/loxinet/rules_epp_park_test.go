@@ -17,9 +17,49 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+
 	cmn "github.com/loxilb-io/loxilb/common"
 	"github.com/loxilb-io/loxilb/pkg/epp/epptest"
 )
+
+// eppMetric reads one labelled counter of the EPP metric families (M8)
+// from the default registry; 0 when the series does not exist yet.
+func eppMetric(t *testing.T, name, label, value string) float64 {
+	t.Helper()
+	fams, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fams {
+		if f.GetName() != name {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == label && l.GetValue() == value {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func eppHistogramCount(t *testing.T, name string) uint64 {
+	t.Helper()
+	fams, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fams {
+		if f.GetName() == name && f.GetType() == dto.MetricType_HISTOGRAM && len(f.GetMetric()) > 0 {
+			return f.GetMetric()[0].GetHistogram().GetSampleCount()
+		}
+	}
+	return 0
+}
 
 // Phase 1 M4 completion checks, end to end through the in-process data
 // plane (the loxinet harness runs the sockproxy workers): an EPP rule's
@@ -347,6 +387,116 @@ func TestEppDecisionPinsEndpoint(t *testing.T) {
 		if err != nil || code != 200 || !strings.Contains(resp, `"served":"a"`) {
 			t.Fatalf("FailOpen: code=%d resp=%q err=%v", code, resp, err)
 		}
+		eppTestSettled(t)
+	})
+}
+
+// Phase 1 M7: failure handling the data plane decides after the decision —
+// an EPP that is down (connection refused, the shape of NOT_SERVING and of
+// a restart gap) takes the failure mode, and a request the EPP evicts
+// during its response is cut. M8: the counters explain each run.
+func TestEppFailureHandlingAndMetrics(t *testing.T) {
+	if mh.zr == nil || mh.dpEbpf == nil {
+		t.Skip("loxinet harness not initialized (run the whole package as root)")
+	}
+	_, ep, _ := eppTestBackendSeen(t, "a")
+	body := `{"model":"alias","prompt":"hello"}`
+
+	t.Run("EPP down: FailOpen falls back, FailClose answers 503", func(t *testing.T) {
+		l, _ := net.Listen("tcp", "127.0.0.1:0")
+		addr := l.Addr().String()
+		l.Close()
+		eppTestRule(t, 28130, addr, cmn.EppFailureModeFailOpen, 2000, ep)
+		eppTestRule(t, 28132, addr, cmn.EppFailureModeFailClose, 2000, ep)
+		errors0 := eppMetric(t, "loxilb_ai_epp_requests_total", "outcome", "error")
+		code, resp, err := eppTestRequest(28130, body, 5*time.Second)
+		if err != nil || code != 200 || !strings.Contains(resp, `"served":"a"`) {
+			t.Fatalf("FailOpen with the EPP down: code=%d resp=%q err=%v", code, resp, err)
+		}
+		code, resp, err = eppTestRequest(28132, body, 5*time.Second)
+		if err != nil || code != 503 || !strings.Contains(resp, "epp_unavailable") {
+			t.Fatalf("FailClose with the EPP down: code=%d resp=%q err=%v", code, resp, err)
+		}
+		if got := eppMetric(t, "loxilb_ai_epp_requests_total", "outcome", "error"); got != errors0+2 {
+			t.Fatalf("error outcomes %v -> %v, want +2", errors0, got)
+		}
+		eppTestSettled(t)
+	})
+
+	t.Run("eviction during a streaming response cuts the relay", func(t *testing.T) {
+		slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(200)
+			w.(http.Flusher).Flush()
+			for i := 0; i < 40; i++ {
+				select {
+				case <-r.Context().Done():
+					return
+				case <-time.After(100 * time.Millisecond):
+				}
+				fmt.Fprintf(w, "data: {\"i\":%d}\n\n", i)
+				w.(http.Flusher).Flush()
+			}
+		}))
+		defer slow.Close()
+		host, port, _ := net.SplitHostPort(strings.TrimPrefix(slow.URL, "http://"))
+		var p int
+		fmt.Sscanf(port, "%d", &p)
+		slowEp := cmn.LbEndPointArg{EpIP: host, EpPort: uint16(p), Weight: 1}
+		f := epptest.New("evict")
+		f.Dest = eppAddr(slowEp)
+		addr, stop := epptest.Start(t, f, false)
+		defer stop()
+		eppTestRule(t, 28134, addr, cmn.EppFailureModeFailClose, 3000, slowEp)
+		evicted0 := eppMetric(t, "loxilb_ai_epp_requests_total", "outcome", "evicted")
+
+		conn, err := net.Dial("tcp", net.JoinHostPort(eppTestVIP, "28134"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		fmt.Fprintf(conn, "POST /v1/completions HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+		start := time.Now()
+		got, _ := io.ReadAll(conn) // ends when the relay is cut
+		took := time.Since(start)
+		if !strings.HasPrefix(string(got), "HTTP/1.1 200") {
+			t.Fatalf("response head %q", got)
+		}
+		if took > 2*time.Second {
+			t.Fatalf("the stream ran %s after the eviction; want it cut", took)
+		}
+		if got := eppMetric(t, "loxilb_ai_epp_requests_total", "outcome", "evicted"); got != evicted0+1 {
+			t.Fatalf("evicted outcomes %v -> %v, want +1", evicted0, got)
+		}
+		eppTestSettled(t)
+	})
+
+	t.Run("counters explain a routed request", func(t *testing.T) {
+		_, epB, _ := eppTestBackendSeen(t, "b")
+		f := epptest.New("echo")
+		f.Dest = "10.9.9.9:1," + eppAddr(epB)
+		addr, stop := epptest.Start(t, f, false)
+		defer stop()
+		eppTestRule(t, 28136, addr, cmn.EppFailureModeFailClose, 3000, ep, epB)
+		ok0 := eppMetric(t, "loxilb_ai_epp_requests_total", "outcome", "ok")
+		unknown0 := eppMetric(t, "loxilb_ai_epp_candidates_rejected_total", "reason", "unknown")
+		dur0 := eppHistogramCount(t, "loxilb_ai_epp_duration_seconds")
+		code, resp, err := eppTestRequest(28136, body, 5*time.Second)
+		if err != nil || code != 200 || !strings.Contains(resp, `"served":"b"`) {
+			t.Fatalf("code=%d resp=%q err=%v", code, resp, err)
+		}
+		if got := eppMetric(t, "loxilb_ai_epp_requests_total", "outcome", "ok"); got != ok0+1 {
+			t.Fatalf("ok outcomes %v -> %v", ok0, got)
+		}
+		if got := eppMetric(t, "loxilb_ai_epp_candidates_rejected_total", "reason", "unknown"); got != unknown0+1 {
+			t.Fatalf("unknown rejections %v -> %v", unknown0, got)
+		}
+		if got := eppHistogramCount(t, "loxilb_ai_epp_duration_seconds"); got != dur0+1 {
+			t.Fatalf("duration samples %v -> %v", dur0, got)
+		}
+		eppTestResponsePhase(t, f, "200", eppAddr(epB))
 		eppTestSettled(t)
 	})
 }
