@@ -42,6 +42,9 @@ import (
 type Fake struct {
 	extprocv3.UnimplementedExternalProcessorServer
 	Mode string // "ok", "echo", "immediate", "hang", "metadata-only", "disagree"
+	// Dest, when set, replaces the default destination list in the headers
+	// response (comma-separated ip:port, as the EPP sends it).
+	Dest string
 
 	Mu           sync.Mutex
 	ReqHeaders   map[string]string
@@ -114,6 +117,9 @@ func (f *Fake) Process(st extprocv3.ExternalProcessor_ProcessServer) error {
 	// a prefill hint, a content-length the client must drop, a removal.
 	hm := &extprocv3.HeaderMutation{RemoveHeaders: []string{"X-Drop"}}
 	dest := "10.0.0.1:8000,10.0.0.2:8000, 10.0.0.3:8000,10.0.0.1:8000,bogus,10.0.0.4:8000,10.0.0.5:8000"
+	if f.Dest != "" {
+		dest = f.Dest
+	}
 	dyn, _ := structpb.NewStruct(map[string]any{epp.MetadataNamespace: map[string]any{epp.HeaderDestination: dest}})
 	switch f.Mode {
 	case "metadata-only":

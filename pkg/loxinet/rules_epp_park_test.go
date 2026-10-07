@@ -29,27 +29,50 @@ import (
 
 const eppTestVIP = "127.0.0.1"
 
+// eppTestSeen is what a test backend saw of its last request.
+type eppTestSeen struct {
+	mu      sync.Mutex
+	hits    int
+	body    string
+	headers http.Header
+}
+
 func eppTestBackend(t *testing.T) (*httptest.Server, cmn.LbEndPointArg) {
+	_, ep, _ := eppTestBackendSeen(t, "a")
+	return nil, ep
+}
+
+// eppTestBackendSeen starts a backend named `name` that answers
+// {"served":"<name>"} and records the request it received.
+func eppTestBackendSeen(t *testing.T, name string) (*httptest.Server, cmn.LbEndPointArg, *eppTestSeen) {
 	t.Helper()
+	seen := &eppTestSeen{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
+		seen.mu.Lock()
+		seen.hits++
+		seen.body = string(body)
+		seen.headers = r.Header.Clone()
+		seen.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"served":true,"bytes":%d}`, len(body))
+		fmt.Fprintf(w, `{"served":"%s","bytes":%d}`, name, len(body))
 	}))
 	t.Cleanup(srv.Close)
 	host, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	var p int
 	fmt.Sscanf(port, "%d", &p)
-	return srv, cmn.LbEndPointArg{EpIP: host, EpPort: uint16(p), Weight: 1}
+	return srv, cmn.LbEndPointArg{EpIP: host, EpPort: uint16(p), Weight: 1}, seen
 }
 
-func eppTestRule(t *testing.T, port uint16, eppAddr, failureMode string, timeoutMs uint32, ep cmn.LbEndPointArg) cmn.LbServiceArg {
+func eppAddr(ep cmn.LbEndPointArg) string { return fmt.Sprintf("%s:%d", ep.EpIP, ep.EpPort) }
+
+func eppTestRule(t *testing.T, port uint16, eppAddr, failureMode string, timeoutMs uint32, eps ...cmn.LbEndPointArg) cmn.LbServiceArg {
 	t.Helper()
 	serv := cmn.LbServiceArg{
 		ServIP: eppTestVIP, ServPort: port, Proto: "tcp", Mode: cmn.LBModeFullProxy, Sel: cmn.LbSelRr,
 		EppEndpoint: eppAddr, EppFailureMode: failureMode, EppTimeoutMs: timeoutMs, EppPlaintext: true,
 	}
-	if _, err := mh.zr.Rules.AddLbRule(serv, nil, nil, nil, []cmn.LbEndPointArg{ep}); err != nil {
+	if _, err := mh.zr.Rules.AddLbRule(serv, nil, nil, nil, eps); err != nil {
 		t.Fatalf("add rule on :%d: %v", port, err)
 	}
 	t.Cleanup(func() { mh.zr.Rules.DeleteLbRule(serv) })
@@ -100,11 +123,12 @@ func TestEppParkResumeThroughDataPlane(t *testing.T) {
 
 	t.Run("decision resumes the request", func(t *testing.T) {
 		f := epptest.New("ok")
+		f.Dest = eppAddr(ep) // M5 pins the decision: name the rule's endpoint
 		addr, stop := epptest.Start(t, f, false)
 		defer stop()
 		eppTestRule(t, 28100, addr, cmn.EppFailureModeFailClose, 3000, ep)
 		code, resp, err := eppTestRequest(28100, body, 5*time.Second)
-		if err != nil || code != 200 || !strings.Contains(resp, `"served":true`) {
+		if err != nil || code != 200 || !strings.Contains(resp, `"served":"a"`) {
 			t.Fatalf("code=%d resp=%q err=%v", code, resp, err)
 		}
 		f.Mu.Lock()
@@ -209,6 +233,88 @@ func TestEppParkResumeThroughDataPlane(t *testing.T) {
 		case <-f.StreamClosed:
 		case <-time.After(3 * time.Second):
 			t.Fatal("the EPP did not see the stream end after the client left")
+		}
+		eppTestSettled(t)
+	})
+}
+
+// Phase 1 M5: the EPP's decision is applied — its first usable candidate
+// gets the request, with the header and body mutations; unusable
+// candidates (unknown to the rule, down) are skipped in order; with none
+// usable the failure mode decides.
+func TestEppDecisionPinsEndpoint(t *testing.T) {
+	if mh.zr == nil || mh.dpEbpf == nil {
+		t.Skip("loxinet harness not initialized (run the whole package as root)")
+	}
+	_, epA, seenA := eppTestBackendSeen(t, "a")
+	_, epB, seenB := eppTestBackendSeen(t, "b")
+	body := `{"model":"alias","prompt":"hello"}`
+	dead := func() cmn.LbEndPointArg {
+		l, _ := net.Listen("tcp", "127.0.0.1:0")
+		_, port, _ := net.SplitHostPort(l.Addr().String())
+		l.Close()
+		var p int
+		fmt.Sscanf(port, "%d", &p)
+		return cmn.LbEndPointArg{EpIP: "127.0.0.1", EpPort: uint16(p), Weight: 1}
+	}()
+	hits := func(s *eppTestSeen) int { s.mu.Lock(); defer s.mu.Unlock(); return s.hits }
+
+	t.Run("second endpoint named first wins, mutations reach it", func(t *testing.T) {
+		f := epptest.New("ok")
+		f.Dest = eppAddr(epB) + "," + eppAddr(epA)
+		addr, stop := epptest.Start(t, f, false)
+		defer stop()
+		eppTestRule(t, 28120, addr, cmn.EppFailureModeFailClose, 3000, epA, epB)
+		a0, b0 := hits(seenA), hits(seenB)
+		reqBody := body
+		code, resp, err := eppTestRequest(28120, reqBody, 5*time.Second)
+		if err != nil || code != 200 || !strings.Contains(resp, `"served":"b"`) {
+			t.Fatalf("code=%d resp=%q err=%v (want backend b)", code, resp, err)
+		}
+		if hits(seenA) != a0 || hits(seenB) != b0+1 {
+			t.Fatalf("hits a=%d->%d b=%d->%d", a0, hits(seenA), b0, hits(seenB))
+		}
+		seenB.mu.Lock()
+		defer seenB.mu.Unlock()
+		if seenB.headers.Get("X-Prefiller-Host-Port") != "10.0.0.9:8000" {
+			t.Fatalf("prefill hint did not reach the backend: %v", seenB.headers)
+		}
+		if seenB.headers.Get("X-Drop") != "" {
+			t.Fatalf("removed header reached the backend: %v", seenB.headers)
+		}
+		if !strings.Contains(seenB.body, `"model":"served-model"`) || seenB.headers.Get("Content-Length") != fmt.Sprint(len(seenB.body)) {
+			t.Fatalf("rewritten body or its length wrong: body=%q cl=%q", seenB.body, seenB.headers.Get("Content-Length"))
+		}
+		eppTestSettled(t)
+	})
+
+	t.Run("dead and unknown candidates are skipped in order", func(t *testing.T) {
+		f := epptest.New("echo")
+		f.Dest = "10.9.9.9:1," + eppAddr(dead) + "," + eppAddr(epA)
+		addr, stop := epptest.Start(t, f, false)
+		defer stop()
+		eppTestRule(t, 28122, addr, cmn.EppFailureModeFailClose, 3000, epA, epB, dead)
+		code, resp, err := eppTestRequest(28122, body, 8*time.Second)
+		if err != nil || code != 200 || !strings.Contains(resp, `"served":"a"`) {
+			t.Fatalf("code=%d resp=%q err=%v (want backend a after the dead one)", code, resp, err)
+		}
+		eppTestSettled(t)
+	})
+
+	t.Run("no usable candidate: FailClose 503, FailOpen falls back", func(t *testing.T) {
+		f := epptest.New("echo")
+		f.Dest = "10.9.9.9:1," + eppAddr(dead)
+		addr, stop := epptest.Start(t, f, false)
+		defer stop()
+		eppTestRule(t, 28124, addr, cmn.EppFailureModeFailClose, 3000, epA, dead)
+		eppTestRule(t, 28126, addr, cmn.EppFailureModeFailOpen, 3000, epA, dead)
+		code, resp, err := eppTestRequest(28124, body, 8*time.Second)
+		if err != nil || code != 503 || !strings.Contains(resp, "epp_no_endpoint") {
+			t.Fatalf("FailClose: code=%d resp=%q err=%v", code, resp, err)
+		}
+		code, resp, err = eppTestRequest(28126, body, 8*time.Second)
+		if err != nil || code != 200 || !strings.Contains(resp, `"served":"a"`) {
+			t.Fatalf("FailOpen: code=%d resp=%q err=%v", code, resp, err)
 		}
 		eppTestSettled(t)
 	})
