@@ -5,6 +5,8 @@
 bootstrap room, and does not keep the prefix of one sent with its warm-up bootstrap host, so a family can only be
 seeded the way SGLang's own router serves a request: the same body, with bootstrap_host / bootstrap_port /
 bootstrap_room, sent to the owner prefill engine and to a decode engine at the same time.
+
+--second-touch sends the row's second seed request (the same prefix, another ending) instead of the first.
 """
 import argparse
 import concurrent.futures
@@ -34,18 +36,22 @@ def main():
     ap.add_argument("--timeout", type=float, default=180)
     ap.add_argument("--pair-decode", help="SGLang prefill/decode: decode engine base URL paired with every seed")
     ap.add_argument("--bootstrap-port", type=int, default=8998)
+    ap.add_argument("--second-touch", action="store_true", help="send the second seed request of every family")
     a = ap.parse_args()
     rows = [json.loads(line) for line in open(a.corpus, encoding="utf-8") if line.strip()]
     failures = 0
+    field = "seed2" if a.second_touch else "seed"
     with open(a.output, "w", encoding="utf-8") as out:
         for row in rows:
             target = a.target[row["owner"]]
             payload = {"model": a.model, "max_tokens": 1, "temperature": 0, "stream": False}
             if a.api == "chat":
-                payload["messages"] = row["seed_messages"]
+                payload["messages"] = row[field + "_messages"]
             else:
-                payload["prompt"] = row["seed_prompt"]
+                payload["prompt"] = row[field + "_prompt"]
             receipt = {"prompt_id": row["prompt_id"], "owner": row["owner"], "target": target, "started_at_unix": time.time()}
+            if a.second_touch:
+                receipt["touch"] = 2
             path = "/v1/chat/completions" if a.api == "chat" else "/v1/completions"
             try:
                 if a.pair_decode:

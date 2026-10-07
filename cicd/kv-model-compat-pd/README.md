@@ -92,6 +92,7 @@ Other measured per-version, per-profile launch arguments (`engine.sh`; the failu
 | SGLang 0.5.18 | exaone4-12b-v1 | `--attention-backend triton` | Exaone4ForCausalLM accepts only fa3 / triton / trtllm_mha; fa3 needs Hopper, so on Ada the launch asserts |
 | SGLang 0.5.18 | olmo2-0425-1b-v1 | `--disable-cuda-graph` | decode member exits before readiness: `Capture cuda graph failed: scheduler_metadata must have shape (metadata_size)` |
 | vLLM 0.28.0 | qwen36-27b-fp8-v1, qwen38-27b-fp8-v1 | `--max-num-seqs 64` | hybrid Mamba on one 48 GB GPU: `max_num_seqs (256) exceeds available Mamba cache blocks` |
+| SGLang 0.5.18 | qwen38-27b-fp8-v1, converged engine only | `--mem-fraction-static 0.85` (`sgl_static_mem` in `env.sh`; 0.70 everywhere else, `SGL_MEM` overrides) | on one 48 GB GPU the pool of recurrent states is 12 slots, 5 per running request: two running requests at most, and a second request in flight evicts the saved states of the other prefixes. At 0.85: 36 slots, 7 running requests, 4.7 GB of the GPU left free |
 | vLLM 0.28.0 | qwen36-27b-fp8-v1, qwen38-27b-fp8-v1 | env `VLLM_SSM_CONV_STATE_LAYOUT=DS` | NIXL connector start fails: `3-read Mamba conv transfer requires DS conv state layout` |
 
 `engine.sh` also launches TensorRT-LLM (PyTorch backend), converged only, for the A/B scenario

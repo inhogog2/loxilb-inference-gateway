@@ -68,6 +68,7 @@ sglang/0.5.18/exaone4-12b-v1) SGL_PROFILE_ARGS="--attention-backend triton" ;;
 sglang/0.5.18/olmo2-0425-1b-v1) SGL_PROFILE_ARGS="--disable-cuda-graph" ;;
 *) SGL_PROFILE_ARGS="" ;;
 esac
+SGL_STATIC_MEM=${SGL_MEM:-$(sgl_static_mem "$ROLE" "$PROF")}
 # Per-version, per-profile vLLM launch arguments, each measured.
 # Qwen3.6 / Qwen3.8 27B-FP8 (0.28.0, one L40S): hybrid Mamba; the default 256 sequences exceed the Mamba cache
 # blocks left after the weights ("max_num_seqs (256) exceeds available Mamba cache blocks (180)"), and the NIXL
@@ -138,7 +139,7 @@ else
   $SSH root@"$NODE" "docker rm -f $NAME >/dev/null 2>&1; docker run -d --name $NAME --gpus all --network host --ipc=host --shm-size 16g \
     -v $HF_CACHE:$HF_CACHE -v $SGL_EXT_CACHE:/root/.cache/torch_extensions $TOKMNT -e HF_HOME=$HF_CACHE -e HF_HUB_OFFLINE=1 $SGL_IMAGE \
     python3 -m sglang.launch_server --model-path $SNAP --revision $REV --served-model-name $MODEL --host 0.0.0.0 --port $EPORT \
-    --page-size 16 --enable-metrics --context-length 4096 --mem-fraction-static ${SGL_MEM:-0.70} $DIS $SGL_PROFILE_ARGS ${SGL_EXTRA:-}" >/dev/null
+    --page-size 16 --enable-metrics --context-length 4096 --mem-fraction-static $SGL_STATIC_MEM $DIS $SGL_PROFILE_ARGS ${SGL_EXTRA:-}" >/dev/null
 fi
 # Ready = the SERVED model id answers on /v1/models (a 200 from a stray engine on the port is not readiness).
 for _ in $(seq 1 120); do

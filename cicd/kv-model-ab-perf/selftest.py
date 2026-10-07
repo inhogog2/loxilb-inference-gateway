@@ -5,6 +5,7 @@ The analyzer decides whether a point is banked and whether a difference is claim
 decides whether a request counts; both are exercised here on synthetic rows and against a local SSE stand-in.
 Every case states the verdict it expects, including the ones where the tool must refuse.
 """
+import hashlib
 import http.server
 import json
 import os
@@ -347,7 +348,8 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = pathlib.Path(tmp)
         (tmp / "c.jsonl").write_text("".join(json.dumps(
-            {"prompt_id": f"family-{n:03d}", "owner": n % 2, "seed_messages": [{"role": "user", "content": f"p{n}"}]}) + "\n"
+            {"prompt_id": f"family-{n:03d}", "owner": n % 2, "seed_messages": [{"role": "user", "content": f"p{n}"}],
+             "seed2_messages": [{"role": "user", "content": f"q{n}"}]}) + "\n"
             for n in range(4)))
         def seed(*extra):
             r = subprocess.run([sys.executable, str(HERE / "seed.py"), "--corpus", str(tmp / "c.jsonl"), "--output",
@@ -375,8 +377,33 @@ def main():
         rc, rec = seed("--target", ub, "--target", u1, "--pair-decode", ud)
         check("S5 a prefill engine that refuses its half -> exit 1, those families not seeded",
               rc == 1 and [r["completed"] for r in rec].count(False) == 2, (rc, rec))
+        for srv in (p0, p1, d):
+            srv.bodies.clear()
+        rc, rec = seed("--target", u0, "--target", u1, "--second-touch")
+        sent = sorted(b["messages"][0]["content"] for b in p0.bodies + p1.bodies)
+        check("S6 second touch: each family once on its owner engine with its second seed request, receipts say touch 2",
+              rc == 0 and sent == ["q0", "q1", "q2", "q3"] and [b["messages"][0]["content"] for b in p0.bodies] == ["q0", "q2"]
+              and all(r["completed"] and r.get("touch") == 2 for r in rec) and all(b["max_tokens"] == 1 for b in p0.bodies), (rc, sent, rec[:1]))
         for srv in (p0, p1, d, bad):
             srv.shutdown()
+        # The three requests of a family share the prefix and nothing after it: each ending starts with another
+        # character, so a request branches from the other two exactly at the end of the prefix.
+        subprocess.run([sys.executable, str(HERE / "gen_corpus.py"), "--output", str(tmp / "long.jsonl"), "--families", "4",
+                        "--owners", "2", "--prefix-repetitions", "3"], check=True)
+        subprocess.run([sys.executable, str(HERE / "gen_corpus.py"), "--output", str(tmp / "short.jsonl"), "--families", "4",
+                        "--owners", "2", "--shape", "short"], check=True)
+        def shared(x, y):
+            return next((i for i, (p, q) in enumerate(zip(x, y)) if p != q), min(len(x), len(y)))
+        long_ = [json.loads(x) for x in (tmp / "long.jsonl").read_text().splitlines()]
+        cuts = [{shared(r[a], r[b]) for a, b in (("seed_prompt", "seed2_prompt"), ("seed_prompt", "timed_prompt"), ("seed2_prompt", "timed_prompt"))}
+                for r in long_]
+        check("S7 long corpus: seed, second seed and timed request of a family branch at one place, the end of the prefix",
+              all(len(c) == 1 for c in cuts) and all(
+                  hashlib.sha256(r["seed2_prompt"][:next(iter(c)) - 1].encode()).hexdigest() == r["prefix_sha256"]
+                  and r["seed2_messages"] == [{"role": "user", "content": r["seed2_prompt"]}] for r, c in zip(long_, cuts)), cuts)
+        short = [json.loads(x) for x in (tmp / "short.jsonl").read_text().splitlines()]
+        check("S8 short corpus: the second seed is the prompt itself, as the first",
+              all(r["seed2_prompt"] == r["seed_prompt"] == r["timed_prompt"] for r in short), short[:1])
 
     # The decode engines' launch arguments. validation.sh itself is run, beside a stand-in for the engine
     # launcher that records what each engine would have been started with.
@@ -487,6 +514,27 @@ def main():
         rc, out, cmds = launch("converged", "r1-distill-qwen-15b-v1", pinned)
         check("E8 the pinned image: the launch goes on to the node (the weights check is its first command there)",
               rc == 1 and "WEIGHTS_MISSING 10.0.0.7" in out and "config.json" in cmds and "ENGINE_" not in out, (rc, out, cmds))
+        # The per-profile plans of a state-space model on SGLang, asked of env.sh itself.
+        print("second seed and static memory")
+        def ask(call, topology="converged"):
+            e = {"PATH": os.environ["PATH"], "TOPOLOGY": topology, "VIP": "10.0.0.12", "LOGD": str(tmp)}
+            e.update({"PREFILLS": "10.0.0.7 10.0.0.8", "DECODES": "10.0.0.10 10.0.0.11"} if topology == "pd" else {"ENGINES": "10.0.0.7 10.0.0.8"})
+            r = subprocess.run(["bash", "-c", f'source "{ab}/env.sh" && {call}'], capture_output=True, text=True, env=e)
+            return r.stdout.strip() if r.returncode == 0 else f"rc {r.returncode} {r.stderr.strip()}"
+        got = [ask(f"sgl_second_seed_plan {x}", t) for x, t in (
+            ("sglang converged qwen38-27b-fp8-v1", "converged"), ("sglang converged r1-distill-qwen-15b-v1", "converged"),
+            ("vllm converged qwen38-27b-fp8-v1", "converged"), ("trtllm converged qwen38-27b-fp8-v1", "converged"),
+            ("sglang pd qwen38-27b-fp8-v1", "pd"))]
+        check("H1 second seed: only the measured state-space model on one pool of SGLang engines; no other model, engine or fleet shape",
+              got == ["second", "none", "none", "none", "none"], got)
+        got = [ask(f"sgl_static_mem {x}") for x in ("converged qwen38-27b-fp8-v1", "prefill qwen38-27b-fp8-v1", "decode qwen38-27b-fp8-v1",
+                                                    "converged r1-distill-qwen-15b-v1")]
+        check("H2 static memory: 0.85 for that model's converged engine, 0.70 for its prefill and decode engines and for every other model",
+              got == ["0.85", "0.70", "0.70", "0.70"], got)
+        text = (real / "engine.sh").read_text()
+        check("H3 the launcher takes the share from that plan, SGL_MEM still overrides it, and no launch line names a number",
+              'SGL_STATIC_MEM=${SGL_MEM:-$(sgl_static_mem "$ROLE" "$PROF")}\n' in text
+              and [x.split("--mem-fraction-static ")[1].split()[0] for x in text.splitlines() if "--mem-fraction-static " in x] == ["$SGL_STATIC_MEM"], text.count("mem-fraction"))
     print(f"SELFTEST kv-model-ab-perf: {'PASS' if not failed else f'FAIL ({failed})'}")
     return 1 if failed else 0
 

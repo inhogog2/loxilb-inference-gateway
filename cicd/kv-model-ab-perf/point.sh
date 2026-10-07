@@ -4,7 +4,8 @@
 # One A/B point against a RUNNING fleet (validation.sh fleet-up) and the RUNNING gateway: REPS repetitions, the
 # two arms in alternating order (exact-baseline, baseline-exact, exact-baseline). Before EVERY arm the engines
 # are restarted (empty caches), the rule is created fresh, and every prompt family is seeded directly on its
-# owner prefill engine and on every decode engine. Then the same requests are offered open-loop at the same rate through the VIP.
+# owner prefill engine and on every decode engine (twice, with two endings, for an SGLang state-space model:
+# sgl_second_seed_plan in env.sh). Then the same requests are offered open-loop at the same rate through the VIP.
 #   exact     strict KV-exact rule on the model's profile (the rule a supported row describes)
 #   baseline  the same rule without KV-exact: round-robin over the prefill engines
 # A point is banked (ab-summary.json) only when, in every repetition:
@@ -111,6 +112,10 @@ arm() { # arm <repetition> exact|baseline
   local pair=(); [ "$ENG" = sglang ] && [ "$TOPOLOGY" = pd ] && pair=(--pair-decode "http://${DNODES[0]}:$EPORT")
   python3 "$AB_DIR/seed.py" --corpus "$CORPUS" --output "$d/seed-receipts.jsonl" --model "$MODEL" --api "$API" "${t[@]}" "${pair[@]}" \
     || { echo "SEED_FAILED $a"; return 1; }
+  if [ "$(sgl_second_seed_plan "$ENG" "$TOPOLOGY" "$PROF")" = second ]; then
+    python3 "$AB_DIR/seed.py" --corpus "$CORPUS" --output "$d/seed2-receipts.jsonl" --model "$MODEL" --api "$API" "${t[@]}" --second-touch \
+      || { echo "SEED_FAILED $a second touch"; return 1; }
+  fi
   # The decode engines get every family too, in both arms. A decode engine that has never seen a prefix pulls it
   # whole from the prefill engine, and that first pull costs more than the prefill either arm can save; with it
   # in the timed window the tail measures decode warm-up, not routing. Seeded, the arms differ only in which

@@ -56,6 +56,18 @@ TRT_CONVERGED_YAML="${SCENARIO_DIR}/trtllm/converged.yaml"
 LB="${GW_API}/config/loadbalancer"
 MET="${GW_API}/metrics"
 
+# sgl_static_mem <role> <profileId> — the --mem-fraction-static of an SGLang engine (SGL_MEM overrides it).
+# Per version, profile and role, each row measured.
+# Qwen3.8-27B-FP8 (0.5.18, one L40S, converged): at 0.70 the pool of recurrent states is 12 slots, 5 per running
+# request, so the engine runs two requests at most and a second request in flight evicts the saved states of the
+# other prefixes (their next request is computed in full). At 0.85 it is 36 slots and 7 running requests, with
+# 4.7 GB of the GPU left free.
+sgl_static_mem() {
+  case $SGL_VERSION/$2/$1 in
+  0.5.18/qwen38-27b-fp8-v1/converged) echo 0.85 ;;
+  *) echo 0.70 ;;
+  esac
+}
 # trt_blocked <profileId> — the reason TensorRT-LLM TRT_VERSION cannot serve the model under a strict chat rule,
 # or nothing. Each row was observed on the engine (scripts/models/validated-models.yaml carries the same rows).
 trt_blocked() {

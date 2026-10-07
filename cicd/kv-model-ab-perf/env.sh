@@ -56,3 +56,16 @@ sgl_decode_cache_plan() {
   *) echo unmeasured ;;
   esac
 }
+# sgl_second_seed_plan <engine> <topology> <profileId> — second | none
+# SGLang keeps a state-space model's recurrent state only where a request saved one: a seed saves it at its own
+# end, and the state at the end of the shared prefix is saved by the first later request that branches there.
+# With one seed per family the first timed request of every family is computed in full and the first-round check
+# refuses the arm. For the profiles listed, each measured on one pool of SGLang 0.5.18 engines, every family is
+# seeded a second time with another ending, in both arms.
+sgl_second_seed_plan() {
+  [ "$1" = sglang ] && [ "$2" = converged ] || { echo none; return 0; }
+  case $SGL_VERSION/$3 in
+  0.5.18/qwen38-27b-fp8-v1) echo second ;;
+  *) echo none ;;
+  esac
+}

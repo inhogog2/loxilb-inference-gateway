@@ -5,6 +5,10 @@ Each row is one prompt FAMILY: a prefix shared by its seed request and by every 
 one prefill engine (its owner). `long` prefixes repeat a paragraph --prefix-repetitions times; `short` ones
 are a few blocks long and are the control (no cache benefit to win). --salt makes every prefix unique to
 this corpus, so a calibration corpus shares nothing with a measured one.
+
+A row also carries a second seed request: the same prefix with a third ending. An engine that keeps a reusable
+state at the end of the shared prefix only once a second request has branched there (SGLang with a
+state-space model) needs it; seed.py sends it with --second-touch.
 """
 import argparse
 import hashlib
@@ -33,15 +37,17 @@ def main():
             family = f"family-{n:03d}"
             if a.shape == "short":
                 prefix = SHORT.format(salt=a.salt, family=family)
-                seed = timed = prefix
+                seed = seed2 = timed = prefix
             else:
                 prefix = f"AB deterministic prefix {a.salt}{family}.\n" + PARAGRAPH * a.prefix_repetitions
                 seed = prefix + "\nSeed this prefix and answer with one word."
+                seed2 = prefix + "\nBranch from this prefix once more and answer with one word."
                 timed = prefix + f"\nTimed continuation {family}: list two safe change-control checks."
             out.write(json.dumps({
                 "schema_version": 1, "prompt_id": family, "owner": n % a.owners,
-                "seed_prompt": seed, "timed_prompt": timed,
+                "seed_prompt": seed, "seed2_prompt": seed2, "timed_prompt": timed,
                 "seed_messages": [{"role": "user", "content": seed}],
+                "seed2_messages": [{"role": "user", "content": seed2}],
                 "timed_messages": [{"role": "user", "content": timed}],
                 "workload_shape": a.shape, "prefix_sha256": hashlib.sha256(prefix.encode()).hexdigest(),
             }, sort_keys=True) + "\n")
