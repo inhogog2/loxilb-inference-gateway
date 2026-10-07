@@ -67,6 +67,20 @@ This test validates complete end-to-end mutual TLS (mTLS) functionality in loxil
 ### Test 6: Backend server certificate verification
 - **Skipped**: a rule cannot request backend certificate verification in this release
 
+### A rule takes over a kept listener (`validate_takeover.sh`)
+Deleting the last rule of a listener keeps the listener, and an endpoint change on a full proxy
+rule is a remove followed by a create in the data plane. The rule that comes back must be judged
+by its own arguments. The script runs from `validation.sh` while the backends are up:
+- On `:2020` (client certificate required, CN pattern): an endpoint is removed, added back, the
+  same payload is posted again (`409`), and the rule is deleted and created. After each step a
+  trusted client is served on a new connection, and a client with no certificate, with a
+  certificate from another CA, or with another name is refused in the handshake.
+- On `:2022` one listener is taken over in turn by a rule that asks for no client certificate,
+  one that requires it, one that requires it from another CA, and one that asks for none again.
+  Each is checked with the clients it must serve and the clients it must refuse.
+- Every takeover is awaited on the data plane log line `takes over the kept listener`, and the
+  run must not log `No mTLS config for connection`.
+
 ## Certificate Hierarchy
 
 ```

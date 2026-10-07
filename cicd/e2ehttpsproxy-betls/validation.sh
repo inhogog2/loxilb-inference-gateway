@@ -560,6 +560,30 @@ rc=$(post_rule 2054 $EP1 9443 ", $VERIFY"', "backend_client_cert_id": "qual-clie
   || fail "precondition: the listener on 2054 does not show the ECDSA default certificate"
 expect_served "RSA client, ECDSA default" 2054 http1.1 good client-rsa none
 
+# Deleting the last rule of a listener keeps the listener. The rule that takes
+# it over decides what the listener offers its clients: HTTP/2 again for the
+# rule that had it, and HTTP/2 on a listener whose rule before spoke HTTP/1.1.
+taken() { $dexec llb1 grep -F "takes over the kept listener" /var/log/loxilbdp.log 2>/dev/null | grep -c -F ":$1 rule "; }
+expect_taken() { # port, count before
+  local i n=0
+  for i in $(seq 1 15); do n=$(taken $1); [ "${n:-0}" -gt "$2" ] && break; sleep 1; done
+  [ "${n:-0}" -gt "$2" ] && pass "the rule took over the kept listener on $1" \
+    || fail "the data plane did not report a rule taking over the listener on $1"
+}
+echo "A kept listener taken over by its HTTP/2 rule again"
+n=$(taken 2052)
+rc=$(del_rule 2052); echo "  DELETE -> $rc"
+rc=$(post_rule 2052 $EP1 9443 ", $VERIFY"', "backend_client_cert_id": "qual-client-rsa"'"$H2"); echo "  POST -> $rc"
+expect_taken 2052 $n
+expect_served "HTTP/2 after delete and create" 2052 http2 good client-rsa none
+
+echo "A kept HTTP/1.1 listener taken over by an HTTP/2 rule"
+n=$(taken 2054)
+rc=$(del_rule 2054); echo "  DELETE -> $rc"
+rc=$(post_rule 2054 $EP1 9443 ", $VERIFY"', "backend_client_cert_id": "qual-client-rsa"'"$H2"); echo "  POST -> $rc"
+expect_taken 2054 $n
+expect_served "HTTP/2 on the listener that spoke HTTP/1.1" 2054 http2 good client-rsa none
+
 [ "$(gw_pid)" == "$pid0" ] && pass "gateway pid unchanged ($pid0)" || fail "gateway pid changed $pid0 -> $(gw_pid)"
 for p in 2051 2052 2053 2054 2055 2056 2057 2058 2061 2062 2063 2064 2065 2066 2067; do
   [ "$(del_rule $p)" == "200" ] || fail "the rule on $p could not be deleted"

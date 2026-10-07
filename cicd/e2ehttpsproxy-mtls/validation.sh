@@ -347,6 +347,12 @@ else
     code=1
 fi
 
+# A rule that takes over a kept listener: runs while the backends are up, and
+# before validate_api.sh deletes the rule on 2020.
+if [[ -f ./validate_takeover.sh ]]; then
+  bash ./validate_takeover.sh || code=1
+fi
+
 stop_helpers
 
 # REST API validation — verify mTLS rule fields are stored/retrievable via API
