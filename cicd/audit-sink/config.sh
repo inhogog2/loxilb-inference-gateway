@@ -34,7 +34,7 @@ RCV="$(pwd)/syslog_receiver.py"
 
 echo SCENARIO-audit-sink-config
 
-require_host_tools jq openssl python3 sha256sum || exit 1
+require_host_tools jq openssl python3 sha256sum iptables || exit 1
 
 echo "#########################################"
 echo "Minting the receivers' certificates"
