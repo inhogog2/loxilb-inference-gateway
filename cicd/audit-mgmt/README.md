@@ -53,8 +53,9 @@ boot's segment is sealed at recovery and compressed, never removed.
 5. `--audit-dir` pointed below a regular file — no writer at all. Only the
    `available:false` arm of T-GW-5 runs here.
 6. audit at `/var/log/loxilb/audit` again, still no `--userservice` — the
-   rest of T-GW-5, against a healthy writer and a sink that has never been
-   configured.
+   rest of T-GW-5, against a healthy writer and no sink: the section removes
+   the one T-GW-2 configured and saves the configuration before it stops
+   boot 4.
 
 ## Design decisions worth knowing
 
@@ -102,9 +103,18 @@ boot's segment is sealed at recovery and compressed, never removed.
   the seal in T-GW-2, so the trail is no longer in positional order. Every
   one of its trail assertions picks its record out by a receiver address
   only that arm configured (`127.0.0.1:7514`, `127.0.0.1:7515`) or by the
-  removal being the one successful sink record naming no endpoint — none of
-  which any ordering can disturb. It also configures a sink, which is why it
-  cannot run before T-GW-2's "no sink is configured yet".
+  removal being boot 6's one successful sink record naming no endpoint — none
+  of which any ordering can disturb. It also configures a sink, which is why
+  it cannot run before T-GW-2's "no sink is configured yet".
+- **T-GW-5 does not inherit T-GW-2's sink.** The sinks are saved with the
+  running configuration by a debounced write (three seconds of quiet), and
+  T-GW-2 ends with one configured. A host that reached the stop of boot 4
+  inside that quiet period came back in boot 6 without the sink; a slower
+  one came back with it, and `T-GW-5-4a`, `-4c`, `-5l` and `-6e` failed
+  there for a reason that was not the gateway's. `T-GW-5-0b`–`0e` remove the
+  sink and save the configuration on request before the stop. With the
+  removal taken out, a host of the slower kind fails `0c`, `0e` and those
+  four; with it, all of them pass there.
 - **Restarts pass `-p --loglevel debug` explicitly.** `spawn_docker_host`
   adds them to the first boot; a restart that forgot them would lose
   `/metrics` (503 "Prometheus option is disabled") and read as a product

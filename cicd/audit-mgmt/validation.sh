@@ -940,6 +940,22 @@ t_gw_5() {
     bad T-GW-5-0a "trust anchor for the sink" "could not place $SINK_CA in llb1"
   fi
 
+  # ---- no sink goes into the restarts ---------------------------------------
+  # T-GW-2 left a sink configured, and the sinks are saved with the running
+  # configuration: a debounced write, some seconds after the change. Whether
+  # that write lands before the stop below depends on how fast the host runs
+  # the rows in between, and with it whether boot 6 comes back holding that
+  # sink. The sink is removed here and the configuration saved on request,
+  # which answers once the file is written, so "no sink" below is what the
+  # section arranged and not what the timing happened to leave.
+  api POST /audit/sink "${AUTH[@]}" "${CT[@]}" -d '{"enabled":false}'
+  chk     T-GW-5-0b "the sink T-GW-2 configured is removed" 204 "$RESP_CODE"
+  chk     T-GW-5-0c "the gateway holds no sink (the oracle)" false "$(asink | jq -r '.enabled // false')"
+  api POST /config/persist "${AUTH[@]}" "${CT[@]}" -d '{}'
+  chk     T-GW-5-0d "the configuration is saved without it" 200 "$RESP_CODE"
+  chk     T-GW-5-0e "the saved configuration names no receiver" 0 \
+          "$(docker exec llb1 grep -c '127.0.0.1:6514' /etc/loxilb/snapshot.json)"
+
   # ---- the writer-less gateway ---------------------------------------------
   # --audit-dir defaults to the healthy directory, so "no writer" is made by
   # pointing it below a regular file: the create fails with ENOTDIR. The
@@ -1100,15 +1116,16 @@ t_gw_5() {
   cli sink-off-again get audit-sink
   chk     T-GW-5-9e "get audit-sink reports it unconfigured again" \
           "Audit sink: not configured - the trail is local only." "$(head -n1 "$CLI_OUT")"
-  # The removal is the one successful sink record naming no receiver, which is
-  # how it is told apart from the two sets without using order. Exactly one,
-  # not at least one: "at least one" would go on passing on a gateway that had
-  # stopped naming the receiver on all three, which is the thing this row and
-  # the two above it exist to catch.
-  chk     T-GW-5-9f "the removal is the only successful sink record naming no receiver" 1 \
-          "$(count '.event_type=="mgmt.audit.sink" and .phase=="result" and .outcome.ok==true and .detail.endpoint==null')"
+  # The removal is the one successful sink record of this boot naming no
+  # receiver, which is how it is told apart from the two sets without using
+  # order; the boot is named because boot 4 ended with a removal of its own.
+  # Exactly one, not at least one: "at least one" would go on passing on a
+  # gateway that had stopped naming the receiver on all three, which is the
+  # thing this row and the two above it exist to catch.
+  chk     T-GW-5-9f "the removal is this boot's only successful sink record naming no receiver" 1 \
+          "$(count ".boot_id==\"$B6\" and .event_type==\"mgmt.audit.sink\" and .phase==\"result\" and .outcome.ok==true and .detail.endpoint==null")"
   chk_has T-GW-5-9g "and its changed_fields say the sink was turned off" enabled \
-          "$(records '.event_type=="mgmt.audit.sink" and .phase=="result" and .outcome.ok==true and .detail.endpoint==null' | tail -n1 | jq -c '.detail.changed_fields')"
+          "$(records ".boot_id==\"$B6\" and .event_type==\"mgmt.audit.sink\" and .phase==\"result\" and .outcome.ok==true and .detail.endpoint==null" | tail -n1 | jq -c '.detail.changed_fields')"
   # "The trail continues locally" is a claim, so it is measured: the writer
   # is still the one that was running, and it is still advancing.
   cli status-after get audit-status
