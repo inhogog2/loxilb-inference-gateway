@@ -28,7 +28,10 @@ import (
 // Pruning is announced by an audit_system record before the delete and is
 // bounded to MaxPrunePerPass segments per pass, so lowering the policy
 // never deletes history at once; the ledger shrinks one segment per pass
-// with each deletion on record. A held segment is never pruned. A segment
+// with each deletion on record. A segment is announced once, whichever of
+// its files a pass finds: one being compressed is held under two names for
+// a moment, and one whose removal failed is tried again without a second
+// record. A held segment is never pruned. A segment
 // sealed since the last pass waits one pass for a connected sink that has
 // not been sent all of it, unless the disk reserve is breached.
 type Retention struct {
@@ -58,7 +61,7 @@ func (r Retention) withDefaults() Retention {
 // goroutine so the announcing records are ordered with everything else.
 func (w *Writer) prunePass() {
 	pol := *w.retention.Load()
-	segs, err := w.seg.listSealed()
+	segs, err := w.seg.listSegments()
 	if err != nil {
 		w.logf("audit: list segments: %v", err)
 		return
@@ -95,7 +98,11 @@ func (w *Writer) prunePass() {
 			break
 		}
 		age := now.Sub(s.SealedAt)
-		over := breached ||
+		name := sealedName(s)
+		// A prune that is on the trail is carried out whatever the policy
+		// has become since.
+		_, owed := w.pruneOwed[name]
+		over := owed || breached ||
 			(pol.MaxAge > 0 && age > pol.MaxAge) ||
 			(pol.MaxBytes > 0 && total > pol.MaxBytes)
 		if !over {
@@ -105,55 +112,74 @@ func (w *Writer) prunePass() {
 		if w.isHeld(uuid) {
 			continue
 		}
-		// A segment sealed before the retention target was lowered keeps
-		// the terms it was written under. A reserve breach overrides
-		// that: a trail that cannot write is worse than one that pruned
-		// early, and `breached` is the only reason that survives here.
-		if !breached && w.grandfatherHolds(uuid, now) {
-			continue
-		}
-		exported, pending, connected, rng, ready := w.sinkStandings(segs, i, uuid)
-		if !ready {
-			// What the segment holds is being read off this goroutine;
-			// the pass ends here rather than prune a newer segment
-			// ahead of this one.
-			break
-		}
-		// The pass runs right behind the heartbeat record, which can seal
-		// a segment, and a sink that keeps up asks for more only so often.
-		// A segment sealed since the last pass is left for one pass when a
-		// connected sink has not been sent all of it; the next pass has
-		// seen it and judges the sink as it stands. A breached reserve
-		// does not wait.
-		if connected && !breached && sealedName(s) > saw {
-			w.logf("audit: prune of %s left for one pass: sealed since the last pass, not yet sent to %v", s.Name, pending)
-			break
-		}
-		// Retention wins over a sink that is behind: the segment goes,
-		// and what the sink will now never be sent is put on record
-		// first, as the range of numbers a receiver will find missing.
-		if len(pending) > 0 && !rng.empty {
-			if !rng.unknown {
-				w.stats.lostToRetention.Add(rng.last - rng.first + 1)
+		if !owed {
+			// A segment sealed before the retention target was lowered
+			// keeps the terms it was written under. A reserve breach
+			// overrides that: a trail that cannot write is worse than one
+			// that pruned early, and `breached` is the only reason that
+			// survives here.
+			if !breached && w.grandfatherHolds(uuid, now) {
+				continue
 			}
-			if err := w.writeSystemDurable(sysRecord("sys.segment.lost_to_retention", "audit_segment:"+uuid, &SysDetail{
-				SeqFrom: rng.first, SeqTo: rng.last, SinksPending: pending,
+			exported, pending, connected, rng, ready := w.sinkStandings(segs, i, uuid)
+			if !ready {
+				// What the segment holds is being read off this
+				// goroutine; the pass ends here rather than prune a newer
+				// segment ahead of this one.
+				break
+			}
+			// The pass runs right behind the heartbeat record, which can
+			// seal a segment, and a sink that keeps up asks for more only
+			// so often. A segment sealed since the last pass is left for
+			// one pass when a connected sink has not been sent all of it;
+			// the next pass has seen it and judges the sink as it stands.
+			// A breached reserve does not wait.
+			if connected && !breached && name > saw {
+				w.logf("audit: prune of %s left for one pass: sealed since the last pass, not yet sent to %v", s.Name, pending)
+				break
+			}
+			// Retention wins over a sink that is behind: the segment goes,
+			// and what the sink will now never be sent is put on record
+			// first, as the range of numbers a receiver will find missing.
+			if len(pending) > 0 && !rng.empty {
+				if err := w.writeSystemDurable(sysRecord("sys.segment.lost_to_retention", "audit_segment:"+uuid, &SysDetail{
+					SeqFrom: rng.first, SeqTo: rng.last, SinksPending: pending,
+				})); err != nil {
+					w.logf("audit: loss of %s to retention not announced, kept: %v", s.Name, err)
+					return
+				}
+				// Counted once it is on record, so that a range is never
+				// counted without its record or twice for one.
+				if !rng.unknown {
+					w.stats.lostToRetention.Add(rng.last - rng.first + 1)
+				}
+			}
+			// Announce first, durably; only then delete.
+			if err := w.writeSystemDurable(sysRecord("sys.segment.prune", "audit_segment:"+uuid, &SysDetail{
+				AgeDays: int(age.Hours() / 24), Bytes: s.Bytes, Hold: false, ExportedTo: exported,
 			})); err != nil {
-				w.logf("audit: loss of %s to retention not announced, kept: %v", s.Name, err)
+				w.logf("audit: prune of %s not announced, kept: %v", s.Name, err)
 				return
 			}
 		}
-		// Announce first, durably; only then delete.
-		if err := w.writeSystemDurable(sysRecord("sys.segment.prune", "audit_segment:"+uuid, &SysDetail{
-			AgeDays: int(age.Hours() / 24), Bytes: s.Bytes, Hold: false, ExportedTo: exported,
-		})); err != nil {
-			w.logf("audit: prune of %s not announced, kept: %v", s.Name, err)
-			return
-		}
-		if err := removeFile(s.Path); err != nil {
+		if err := w.seg.removeSealed(name); err != nil {
+			// The prune is on the trail and the segment is not gone. It is
+			// said once, the segment stays owed, and the pass ends: a
+			// newer segment is not taken ahead of this one.
 			w.logf("audit: prune %s: %v", s.Name, err)
-			continue
+			if !w.pruneOwed[name] {
+				w.seg.stats.pruneFailed.Add(1)
+				w.writeSystem(sysRecord("sys.segment.prune_failed", "audit_segment:"+uuid, &SysDetail{
+					ErrnoClass: errnoClass(err),
+				}))
+			}
+			if w.pruneOwed == nil {
+				w.pruneOwed = map[string]bool{}
+			}
+			w.pruneOwed[name] = true
+			break
 		}
+		delete(w.pruneOwed, name)
 		w.forgetGrandfather(uuid)
 		w.seg.forgetRange(uuid)
 		total -= s.Bytes

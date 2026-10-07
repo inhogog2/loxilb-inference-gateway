@@ -2,8 +2,8 @@
   "schema": 1,
   "generated_by": "cicd/audit-mgmt/gen-coverage-manifest.py",
   "stage_claimed": "1b",
-  "event_types": 65,
-  "matrix_digest": "146c9ad79c77002baa38bdac8c621e7c1f8ca24a064b285a7192a0ae173045e3",
+  "event_types": 66,
+  "matrix_digest": "010744915593afc59e529204099599cfea820f1410e7be489d70a7ec1ca32b2d",
   "requirements_by_stage": {
     "1b": {
       "covered and tested": 4
@@ -14,7 +14,7 @@
     "2": {
       "covered and tested": 8,
       "uncovered": 12,
-      "covered but untested": 5
+      "covered but untested": 8
     },
     "1a": {
       "covered and tested": 5,
@@ -1400,6 +1400,27 @@
         {
           "stage": "2",
           "fields": [
+            "seq_from",
+            "seq_to"
+          ],
+          "behaviour": "a range is announced lost once and counted once, over a run of several pruned segments",
+          "scenario": "audit-sink",
+          "assertion_ids": [
+            "T16-4a",
+            "T16-4b",
+            "T16-4c",
+            "T16-4e"
+          ],
+          "unit_tests": [
+            "TestPruneTakesASegmentHeldInBothFormsOnce",
+            "TestPruneFollowsASegmentCompressedUnderThePass"
+          ],
+          "red_twin_run_id": null,
+          "state": "covered but untested"
+        },
+        {
+          "stage": "2",
+          "fields": [
             "sinks_pending"
           ],
           "behaviour": "a sink that was sent the segment is not named: the pass's own records can seal the active segment under it, and a sink standing in a segment sealed since the pass listed the directory is ahead, not lost",
@@ -1476,6 +1497,50 @@
           "unit_tests": [
             "TestPruneOfAnExportedSegmentLosesNothing",
             "TestPruneWithoutSinksSaysNothingAboutSinks"
+          ],
+          "red_twin_run_id": null,
+          "state": "covered but untested"
+        },
+        {
+          "stage": "2",
+          "fields": [
+            "bytes"
+          ],
+          "behaviour": "a segment is pruned once, whichever of its two files a pass finds while it is being compressed, and no file of it is left",
+          "scenario": "audit-sink",
+          "assertion_ids": [
+            "T16-4d",
+            "T16-4f"
+          ],
+          "unit_tests": [
+            "TestPruneTakesASegmentHeldInBothFormsOnce",
+            "TestPruneFollowsASegmentCompressedUnderThePass",
+            "TestPruneOfASegmentBeingCompressedIsNotUndone"
+          ],
+          "red_twin_run_id": null,
+          "state": "covered but untested"
+        }
+      ],
+      "state": "uncovered"
+    },
+    {
+      "event_type": "sys.segment.prune_failed",
+      "class": "A",
+      "variants": [],
+      "requirements": [
+        {
+          "stage": "2",
+          "fields": [
+            "errno_class"
+          ],
+          "behaviour": "the prune is on the trail and the segment could not be removed: it is said once, no newer segment is taken ahead of it, and the pass that removes it announces and counts nothing again",
+          "scenario": "audit-sink",
+          "assertion_ids": [
+            "T16-4g",
+            "T16-4h"
+          ],
+          "unit_tests": [
+            "TestPruneThatCannotRemoveIsSaidOnceAndTriedAgain"
           ],
           "red_twin_run_id": null,
           "state": "covered but untested"

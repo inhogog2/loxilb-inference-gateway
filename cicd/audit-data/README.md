@@ -93,27 +93,65 @@ asserts that.
   because the mutation is itself what produces the exact records that
   T18-1e contradicts.
 
-## Known red, and why
+## What this scenario found, and where each baseline stands
 
-The suite is red on T4's split-body arm: a response whose body arrives in
-more than one segment has its completion record written when the headers
-land, which is before the usage object it should report, so the record
-says nothing was spent while the settle beside it charges the real counts.
-That is a defect it found, not an assertion waiting to be softened.
+Nothing in this section is the current state of the suite unless it says
+so. It is the record of what the scenario found when it was first run, when
+each finding was closed, and what has been run since — so that a defect
+that was fixed is not read as one that is open, and a check that was run by
+hand is not read as a green suite.
 
-- **`data.ai.complete` and `data.ai.settle` carry no `request_id`.** The
-  gate mints or adopts the id and the refusal record carries it, but the
-  keep-alive reset in `pd_setup_and_forward` clears
+### First run: red (historical)
+
+Tree `18961eb4`, eBPF `8930d643`, 2026-09-25, bed `llbigw-2`. The suite was
+red, on three defects it found. None was an assertion waiting to be
+softened, and all three were fixed in the product:
+
+- **The completion record was written when the response headers landed**,
+  before the usage object of a body that arrives in more than one segment,
+  so the record said nothing was spent while the settle beside it charged
+  the real counts (T4's split-body arm).
+- **`data.ai.complete` and `data.ai.settle` carried no `request_id`.** The
+  gate mints or adopts the id and the refusal record carried it, but the
+  keep-alive reset in `pd_setup_and_forward` cleared
   `pfe->vllm_request_id` on the *current* request's forward path, before
   the response records read it. Every assertion that joins a completion or
-  a settle to its request fails on this, which is most of T14 and T4.
-- **The authorization refusal does not name its tenant.** The 403
+  a settle to its request failed on this: most of T14 and T4.
+- **The authorization refusal did not name its tenant.** The 403
   `model_not_allowed` arm resolved a valid key before refusing, so the
-  record must carry that key's tenant; `actor.tenant` is empty. The
-  rate-limit refusal on the same bed does carry its tenant, so the record
-  path is fine and the arm is not handing the identity over.
+  record must carry that key's tenant; `actor.tenant` was empty.
 
-Both live in the eBPF half and are fixed there, not here.
+The first two lived in the eBPF half and were fixed there; the third in
+`pkg/loxinet/ai_gateway_dp.go`.
+
+### Corrected baseline: green, whole suite
+
+Tree `98dc1b0d`, eBPF `27241b85`, 2026-09-25, bed `llbigw-2`, the
+fault-enabled image: the whole scenario, 71 assertions, 0 failed. This is
+the baseline the red twins below were run against; each twin puts one of
+the fixes back out and names the rows that go red. The assertions about the
+producer gap were re-pointed at `757be259` (eBPF `61e57222`, 2026-09-27),
+as the last part of that section describes.
+
+### Since then: individual checks only
+
+Gateway `e94b3867`, eBPF `7c85a4d2`, 2026-10-07, bed `llbigw-1`, the
+ordinary image (no fault points). Run by hand, one request each, during the
+preparation of the operator manual — **not this scenario**:
+
+| what was checked | result |
+|---|---|
+| split-body usage: the completion and the settle both say 41/9 | as expected |
+| SSE usage with `include_usage`: 13/7 | as expected |
+| the completion and the settle carry the request's `X-Request-Id` | as expected |
+| the 403 refusal names the tenant of the key | as expected |
+
+That is four of the claims above on a later tree. It does not say the suite
+is green on that tree: `validation.sh` was not run there, and T2, T18 and
+T21 need the stalled writer and the saturated queue, which the ordinary
+image cannot be put into. A statement about the current tree is a run of
+this scenario on it, on the fault-enabled image, recorded here with its
+pins and its date.
 
 ## Design decisions worth knowing
 

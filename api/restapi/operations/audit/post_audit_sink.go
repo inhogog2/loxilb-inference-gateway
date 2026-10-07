@@ -34,7 +34,7 @@ func NewPostAuditSink(ctx *middleware.Context, handler PostAuditSinkHandler) *Po
 
 # Configure the audit sink
 
-Configures the remote syslog sink. The receiver's certificate is always verified against the configured bundle; there is no mode that disables verification, and a configuration without a bundle is refused. The change is audited like any other management mutation.
+Configures the remote syslog sink. The receiver's certificate is always verified against the configured bundle; there is no mode that disables verification, and a configuration without a bundle is refused. The change is audited like any other management mutation. Syslog over TLS carries no acknowledgement from the receiver, so what the sink can know is what the receiver's transport has acknowledged. A record is behind the sink once it has been written to the session; records written and not yet acknowledged are remembered with the sink's place in the trail, and are sent again after the session fails and after a restart of the gateway, orderly or not. A receiver therefore sees a record at least once up to its own transport and may see it more than once, and removes repeats by (instance_id, boot_id, seq). What a receiver has acknowledged and then loses before storing it is covered only by the fixed number of records sent again after a session that failed, and not across a restart of the gateway.
 */
 type PostAuditSink struct {
 	Context *middleware.Context

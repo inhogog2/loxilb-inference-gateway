@@ -22,11 +22,20 @@ control port that only the harness reaches:
   /__resume           read again
   /__kill             abort every open connection with an RST
   /__slow?bps=N       throttle reads to N bytes/s (0 = unthrottled) — T6, T9 export twin
-  /__reset            forget everything recorded so far
+  /__reset            forget everything recorded so far and begin a new
+                      session file
+
+The --out file is the evidence of a session: every accepted frame, one JSON
+object a line. It is never emptied behind the caller's back. A file that is
+already there when the receiver starts, and the one in use when /__reset is
+called, is moved aside as FILE.1, FILE.2, ... (the next number that is
+free) before a new one is begun, so the frames of a receiver that was
+restarted in the middle of a run are still on disk afterwards. --overwrite
+is the old behaviour, for a caller that wants the file emptied.
 
 Usage:
   syslog_receiver.py --cert srv.pem --key srv-key.pem [--port 6514]
-                     [--control 127.0.0.1:6515] [--out FILE]
+                     [--control 127.0.0.1:6515] [--out FILE] [--overwrite]
                      [--max-msg BYTES] [--pen N] [--sink NAME]
 
 Standard library only. Runs as root inside a network namespace via
@@ -36,6 +45,7 @@ Standard library only. Runs as root inside a network namespace via
 import argparse
 import hashlib
 import json
+import os
 import re
 import socket
 import ssl
@@ -63,9 +73,11 @@ KNOWN_STREAMS = {b"mgmt", b"data", b"audit_system"}
 
 
 class State:
-    def __init__(self, out_path, max_msg, pen, sink):
+    def __init__(self, out_path, max_msg, pen, sink, overwrite=False):
         self.lock = threading.Lock()
         self.out_path = out_path
+        self.overwrite = overwrite
+        self.kept = None           # where the previous session's file went
         self.max_msg = max_msg
         self.pen = pen
         self.sink = sink
@@ -96,8 +108,26 @@ class State:
         self.tls_peers = []        # cipher/version per session, for the connect assertion
         self.first_arrival = None
         self.last_arrival = None
+        self.kept = self.begin_out()
+
+    def begin_out(self):
+        """Begin an empty session file. What the file held is moved aside
+        first and its new path returned; with --overwrite, or when it held
+        nothing, there is nothing to keep and None is returned."""
+        kept = None
+        try:
+            held = os.path.getsize(self.out_path) > 0
+        except OSError:
+            held = False
+        if held and not self.overwrite:
+            n = 1
+            while os.path.lexists("%s.%d" % (self.out_path, n)):
+                n += 1
+            kept = "%s.%d" % (self.out_path, n)
+            os.rename(self.out_path, kept)
         with open(self.out_path, "w"):
             pass
+        return kept
 
     # --- accounting -------------------------------------------------------
 
@@ -427,7 +457,8 @@ class Control(BaseHTTPRequestHandler):
         if u.path == "/__reset":
             with st.lock:
                 st.reset()
-            return self._send(200, '{"reset": true}')
+                kept = st.kept
+            return self._send(200, json.dumps({"reset": True, "kept": kept}))
         return self._send(404, '{"error": "unknown control path"}')
 
 
@@ -438,6 +469,8 @@ def main():
     ap.add_argument("--cert", required=True)
     ap.add_argument("--key", required=True)
     ap.add_argument("--out", default="/tmp/audit-sink-receiver.jsonl")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="empty --out at start and on /__reset instead of moving what it holds aside")
     ap.add_argument("--max-msg", type=int, default=65536,
                     help="strict receiver cap; a longer frame closes the connection (poison-record arm)")
     ap.add_argument("--pen", type=int, default=0,
@@ -450,7 +483,9 @@ def main():
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3 if args.min_tls == "1.3" else ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(args.cert, args.key)
 
-    state = State(args.out, args.max_msg, args.pen, args.sink)
+    state = State(args.out, args.max_msg, args.pen, args.sink, args.overwrite)
+    if state.kept:
+        print("syslog_receiver: %s held an earlier session, kept as %s" % (args.out, state.kept), flush=True)
     Control.state = state
     host, _, port = args.control.rpartition(":")
     ctl = ThreadingHTTPServer((host or "127.0.0.1", int(port)), Control)

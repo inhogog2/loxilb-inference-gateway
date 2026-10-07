@@ -19,7 +19,7 @@ delete_docker_host llb1
 
 rm -f .state
 rm -rf llb1_config sinkcerts
-sudo rm -f /tmp/audit-sink-compliance.jsonl /tmp/audit-sink-decoy.jsonl /tmp/audit-sink-secondary.jsonl \
+sudo rm -f /tmp/audit-sink-compliance.jsonl* /tmp/audit-sink-decoy.jsonl* /tmp/audit-sink-secondary.jsonl* \
            /tmp/audit-sink-compliance.log   /tmp/audit-sink-decoy.log   /tmp/audit-sink-secondary.log
 
 echo SCENARIO-audit-sink-cleanup [OK]

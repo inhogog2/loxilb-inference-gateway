@@ -114,6 +114,7 @@ type segStats struct {
 	rotationFailed  atomic.Uint64
 	compressFailed  atomic.Uint64
 	compressSkipped atomic.Uint64
+	pruneFailed     atomic.Uint64
 }
 
 // segmenter owns the audit directory: the active segment, sealing and
@@ -144,6 +145,9 @@ type segmenter struct {
 
 	compressQ    chan string
 	compressDone chan struct{}
+	// formMu is held over the two places a sealed segment's files change
+	// name or go: the end of its compression and its pruning.
+	formMu sync.Mutex
 
 	// uuids caches sealed file name -> segment UUID. The compression
 	// worker renames files, so it shares the cache with the writer.
@@ -590,12 +594,29 @@ func (s *segmenter) compressWorker() {
 		if s.fault(FaultSegmentGzipFailed) {
 			err = syscall.EIO
 		} else {
-			err = logrotate.GzipFile(p, fileMode)
+			err = logrotate.GzipFileWith(p, fileMode, func(replace func() error) error {
+				// The pruner removes a segment in whichever forms it has.
+				// One it took while this archive was being written must
+				// not come back under the archive's name.
+				s.formMu.Lock()
+				defer s.formMu.Unlock()
+				if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
+					return errSegmentPruned
+				}
+				return replace()
+			})
 		}
 		if err == nil {
 			if u, ok := s.cachedUUID(filepath.Base(p)); ok {
 				s.cacheUUID(filepath.Base(p)+gzipExt, u)
 			}
+			continue
+		}
+		if errors.Is(err, errSegmentPruned) {
+			continue
+		}
+		if _, serr := os.Stat(p); errors.Is(err, os.ErrNotExist) && errors.Is(serr, os.ErrNotExist) {
+			// Pruned before the worker reached it.
 			continue
 		}
 		s.stats.compressFailed.Add(1)
@@ -635,6 +656,47 @@ func (s *segmenter) listSealed() ([]SegmentInfo, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// errSegmentPruned ends the compression of a segment that was pruned
+// while it was being compressed.
+var errSegmentPruned = errors.New("audit: segment pruned during compression")
+
+// listSegments is listSealed with each segment once. While a segment is
+// being compressed the directory holds it under two names, the plain file
+// and the archive; they are one segment, of the size both take on disk,
+// and it is named here by the archive, which is the name that stays.
+func (s *segmenter) listSegments() ([]SegmentInfo, error) {
+	files, err := s.listSealed()
+	if err != nil {
+		return nil, err
+	}
+	out := files[:0]
+	for _, f := range files {
+		if n := len(out); n > 0 && sealedName(out[n-1]) == sealedName(f) {
+			f.Bytes += out[n-1].Bytes
+			out[n-1] = f
+			continue
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+// removeSealed removes a sealed segment in every form the directory holds
+// it in. name is the segment's name without the archive's suffix. A form
+// that is not there is not an error: the segment is gone when neither is
+// left, whichever of them the caller had listed.
+func (s *segmenter) removeSealed(name string) error {
+	s.formMu.Lock()
+	defer s.formMu.Unlock()
+	var first error
+	for _, n := range []string{name, name + gzipExt} {
+		if err := removeFile(filepath.Join(s.dir, n)); err != nil && !errors.Is(err, os.ErrNotExist) && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // parseSegmentName recognises audit-<ts>.jsonl and audit-<ts>.jsonl.gz.
