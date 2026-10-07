@@ -2,7 +2,7 @@ FROM ubuntu:22.04 as build
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TAG=main
-ARG LOXICMD_TAG=d8cbabbbc131d18d36cc26a14ef5a6121a9de7dd
+ARG LOXICMD_TAG=28832f0c60ab717d8cb5133114edf2c45e22a85c
 
 ENV PATH="${PATH}:/usr/local/go/bin"
 ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/lib64/"
