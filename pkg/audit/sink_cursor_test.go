@@ -159,7 +159,7 @@ func exportRun(t *testing.T, m *modelFS, total, batch int, reserve uint64, crash
 					}
 					out = append(out, sent{rec: i, xseq: x, epoch: e.cursor().XseqEpoch})
 				}
-				if err := e.commit(Position{SegmentUUID: "u1", Seq: uint64(end)}); err != nil {
+				if err := e.commit(Position{SegmentUUID: "u1", Seq: uint64(end)}, Position{}); err != nil {
 					t.Fatalf("commit: %v", err)
 				}
 				at = end
@@ -307,12 +307,12 @@ func usedExportSeq(t *testing.T, s *cursorStore) SinkCursor {
 			t.Fatal(err)
 		}
 		if i == 4 {
-			if err := e.commit(Position{SegmentUUID: "u1", Seq: 4}); err != nil {
+			if err := e.commit(Position{SegmentUUID: "u1", Seq: 4}, Position{}); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	if err := e.commit(Position{SegmentUUID: "u2", Seq: 10}); err != nil {
+	if err := e.commit(Position{SegmentUUID: "u2", Seq: 10}, Position{}); err != nil {
 		t.Fatal(err)
 	}
 	return e.cursor()
@@ -399,12 +399,12 @@ func TestExportSeqPlaceFromALaterReservation(t *testing.T) {
 		// The fifth number opens the second block, and the reservation
 		// written for it carries the place committed just before.
 		if i == 4 {
-			if err := e.commit(Position{SegmentUUID: "u1", Seq: 4}); err != nil {
+			if err := e.commit(Position{SegmentUUID: "u1", Seq: 4}, Position{}); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	if err := e.commit(Position{SegmentUUID: "u1", Seq: 6}); err != nil {
+	if err := e.commit(Position{SegmentUUID: "u1", Seq: 6}, Position{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(s.cursorPath(), []byte("{"), fileMode); err != nil {
@@ -545,5 +545,54 @@ func TestCursorFaultPointStopsBeforeTheDirectoryFlush(t *testing.T) {
 	}
 	if _, ok := m.durable[s.cursorPath()]; ok {
 		t.Fatal("the directory had been flushed when the point fired")
+	}
+}
+
+// The resend a run left owed is in the cursor file and is what the next
+// run finds. It is carried to a clean stop unchanged, cleared by a save
+// that owes nothing, and a file written before there was such a thing
+// reads as owing nothing.
+func TestExportSeqKeepsTheResendThatIsOwed(t *testing.T) {
+	store := realStore(t)
+	now := func() time.Time { return time.Unix(1_800_000_000, 0) }
+	at, from := Position{SegmentUUID: "u2", Seq: 30}, Position{SegmentUUID: "u1", Seq: 21}
+
+	e, _ := openExportSeq(store, 16, now)
+	if got := e.resendFrom(); got != (Position{}) {
+		t.Fatalf("a sink with no state owes a resend from %+v", got)
+	}
+	if err := e.commit(at, from); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.close(); err != nil {
+		t.Fatal(err)
+	}
+
+	e, rec := openExportSeq(store, 16, now)
+	if rec.Method != CursorResumed || e.cursor().Position != at || e.resendFrom() != from {
+		t.Fatalf("reopened at %+v owing from %+v (%s), want %+v owing from %+v", e.cursor().Position, e.resendFrom(), rec.Method, at, from)
+	}
+	// What a reader of the cursor alone sees has not changed.
+	data, err := os.ReadFile(store.cursorPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, err := decodeCursor(data); err != nil || c.Position != at {
+		t.Fatalf("the cursor reads as %+v (%v), want %+v", c, err, at)
+	}
+
+	if err := e.commit(at, Position{}); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ = openExportSeq(store, 16, now); e.resendFrom() != (Position{}) {
+		t.Fatalf("a save that owed nothing left a resend from %+v", e.resendFrom())
+	}
+
+	// A file of the form without the field.
+	if err := os.WriteFile(store.cursorPath(), encodeCursor(SinkCursor{Position: at, XseqHigh: 3, XseqEpoch: 9}), fileMode); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ = openExportSeq(store, 16, now); e.cursor().Position != at || e.resendFrom() != (Position{}) {
+		t.Fatalf("an earlier file reads as %+v owing from %+v", e.cursor().Position, e.resendFrom())
 	}
 }

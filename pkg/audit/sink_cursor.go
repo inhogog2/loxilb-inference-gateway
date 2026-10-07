@@ -53,6 +53,16 @@ type SinkCursor struct {
 	XseqEpoch uint64 `json:"xseq_epoch"`
 }
 
+// cursorFile is what the cursor file holds: the cursor and, when a resend
+// is owed, the place it starts after. A write that returned without error
+// put a record in the socket and no more; the records the receiver's
+// transport had not acknowledged when the cursor was saved are owed to it
+// again by whichever run comes next, and this is how that run knows.
+type cursorFile struct {
+	SinkCursor
+	ResendFrom *Position `json:"resend_from,omitempty"`
+}
+
 // cursorFS is the set of file operations the cursor's durability rests
 // on. It is an interface so that the tests can put a model of a
 // filesystem that loses power in its place: what a crash leaves behind is
@@ -165,7 +175,9 @@ func (s *cursorStore) reservationPath() string { return filepath.Join(s.dir, s.n
 // encodeCursor is the file's content: the record as one JSON line and a
 // checksum of that line on the next. A file cut short, emptied or altered
 // fails one of the two and is treated as unreadable, never half-believed.
-func encodeCursor(c SinkCursor) []byte {
+func encodeCursor(c SinkCursor) []byte { return encodeCursorFile(cursorFile{SinkCursor: c}) }
+
+func encodeCursorFile(c cursorFile) []byte {
 	body, _ := json.Marshal(c)
 	out := append(body[:len(body):len(body)], '\n')
 	out = strconv.AppendUint(out, uint64(crc32.ChecksumIEEE(body)), 16)
@@ -175,7 +187,12 @@ func encodeCursor(c SinkCursor) []byte {
 var errCursorCorrupt = errors.New("audit: sink cursor file is not readable")
 
 func decodeCursor(data []byte) (SinkCursor, error) {
-	var c SinkCursor
+	c, err := decodeCursorFile(data)
+	return c.SinkCursor, err
+}
+
+func decodeCursorFile(data []byte) (cursorFile, error) {
+	var c cursorFile
 	body, rest, ok := bytes.Cut(data, []byte{'\n'})
 	if !ok {
 		return c, errCursorCorrupt
@@ -204,11 +221,24 @@ func decodeCursor(data []byte) (SinkCursor, error) {
 // undone by a power loss, which would bring the previous content back
 // after the caller has acted on the new one.
 func (s *cursorStore) save(path string, c SinkCursor) error {
+	return s.write(path, encodeCursor(c))
+}
+
+// saveCursor is save for the cursor file, with the resend that is owed.
+func (s *cursorStore) saveCursor(c SinkCursor, resend Position) error {
+	f := cursorFile{SinkCursor: c}
+	if resend != (Position{}) {
+		f.ResendFrom = &resend
+	}
+	return s.write(s.cursorPath(), encodeCursorFile(f))
+}
+
+func (s *cursorStore) write(path string, data []byte) error {
 	if err := s.fs.MkdirAll(s.dir); err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := s.fs.WriteFile(tmp, encodeCursor(c), true); err != nil {
+	if err := s.fs.WriteFile(tmp, data, true); err != nil {
 		return err
 	}
 	if err := s.fs.Rename(tmp, path); err != nil {
@@ -223,11 +253,16 @@ func (s *cursorStore) save(path string, c SinkCursor) error {
 // read returns the file's cursor. missing is true when there is no file,
 // which is a different fact from a file that cannot be read.
 func (s *cursorStore) read(path string) (c SinkCursor, ok bool, missing bool) {
+	f, ok, missing := s.readFile(path)
+	return f.SinkCursor, ok, missing
+}
+
+func (s *cursorStore) readFile(path string) (c cursorFile, ok bool, missing bool) {
 	data, err := s.fs.ReadFile(path)
 	if err != nil {
 		return c, false, errors.Is(err, fs.ErrNotExist)
 	}
-	c, err = decodeCursor(data)
+	c, err = decodeCursorFile(data)
 	return c, err == nil, false
 }
 
@@ -272,8 +307,11 @@ type CursorRecovery struct {
 // the reservation back to the exact count, so a restart continues with the
 // very next number.
 type exportSeq struct {
-	store    *cursorStore
-	cur      SinkCursor
+	store *cursorStore
+	cur   SinkCursor
+	// resend is the place a resend that is owed starts after; the zero
+	// Position when none is.
+	resend   Position
 	reserved uint64
 	reserve  uint64
 }
@@ -284,12 +322,16 @@ func openExportSeq(store *cursorStore, reserve uint64, now func() time.Time) (*e
 	if reserve == 0 {
 		reserve = DefaultExportReserve
 	}
-	cur, curOK, curMissing := store.read(store.cursorPath())
+	file, curOK, curMissing := store.readFile(store.cursorPath())
+	cur := file.SinkCursor
 	resv, resvOK, resvMissing := store.read(store.reservationPath())
 	e := &exportSeq{store: store, reserve: reserve}
 	rec := CursorRecovery{Method: CursorResumed}
 	if curOK {
 		rec.Old = cur
+		if file.ResendFrom != nil {
+			e.resend = *file.ResendFrom
+		}
 	}
 
 	// The place. A cursor that names another epoch than the reservation
@@ -350,21 +392,25 @@ func (e *exportSeq) next() (uint64, error) {
 	return x, nil
 }
 
-// commit records that the sink is past pos. A failure is returned for
-// counting and does not stop the sink: an unsaved cursor costs a re-send
-// after a restart and nothing else.
-func (e *exportSeq) commit(pos Position) error {
-	e.cur.Position = pos
-	return e.store.save(e.store.cursorPath(), e.cur)
+// commit records that the sink is past pos, and that the records after
+// resend are owed to the receiver again; the zero Position says none are.
+// A failure is returned for counting and does not stop the sink: an
+// unsaved cursor costs a re-send after a restart and nothing else.
+func (e *exportSeq) commit(pos, resend Position) error {
+	e.cur.Position, e.resend = pos, resend
+	return e.store.saveCursor(e.cur, e.resend)
 }
 
 // cursor returns the current state.
 func (e *exportSeq) cursor() SinkCursor { return e.cur }
 
+// resendFrom returns the place a resend that is owed starts after.
+func (e *exportSeq) resendFrom() Position { return e.resend }
+
 // close is the clean stop: the cursor is saved and the reservation is
 // brought back to the exact count.
 func (e *exportSeq) close() error {
-	err := e.store.save(e.store.cursorPath(), e.cur)
+	err := e.store.saveCursor(e.cur, e.resend)
 	if rerr := e.store.save(e.store.reservationPath(), e.cur); rerr != nil {
 		if err == nil {
 			err = rerr

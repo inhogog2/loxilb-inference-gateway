@@ -164,6 +164,10 @@ var ErrNoEnterpriseNumber = errors.New("syslog: an export sequence needs a priva
 // may use the same number again after it, and after no other failure.
 var ErrNotAttempted = errors.New("syslog: nothing was written")
 
+// ErrPeerClosed is why a submission was not attempted on a session the
+// receiver had already closed.
+var ErrPeerClosed = errors.New("syslog: the receiver closed the session")
+
 // ErrRejected marks a record this sink can never submit, whatever the
 // receiver does: it is not an object, or its identity fields alone exceed
 // the frame cap. Retrying it cannot succeed.
@@ -180,6 +184,15 @@ type Sink struct {
 
 	mu   sync.Mutex
 	conn net.Conn
+	// raw is the connection under the TLS session, counting what is
+	// handed to it. ends holds, oldest first, where each accepted frame
+	// that the receiver's transport has not acknowledged ended in that
+	// count. left is what Unconfirmed reported when the last session
+	// ended, kept for a caller that asks after it.
+	raw    *countingConn
+	ends   []uint64
+	left   int
+	leftOK bool
 
 	submitted   atomic.Uint64
 	bytes       atomic.Uint64
@@ -308,6 +321,15 @@ func (s *Sink) submit(line, sd []byte) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrNotAttempted, err)
 	}
+	// A receiver that has closed its side takes nothing more, and a write
+	// to it still succeeds until its refusal comes back, or for as long as
+	// nothing comes back at all. The session is ended here, before the
+	// frame is written into it.
+	if _, closed, ok := transportState(s.raw.Conn); ok && closed {
+		s.writeErrors.Add(1)
+		s.dropLocked(ErrPeerClosed)
+		return fmt.Errorf("%w: %w", ErrNotAttempted, ErrPeerClosed)
+	}
 	// The deadline comes from the real clock, never from cfg.Now: that one
 	// stamps a record when the record carries no timestamp of its own, and
 	// a caller is free to make it return a fixed instant. A socket deadline
@@ -325,7 +347,80 @@ func (s *Sink) submit(line, sd []byte) error {
 	}
 	s.submitted.Add(1)
 	s.bytes.Add(uint64(len(frame)))
+	s.ends = append(s.ends, s.raw.written)
 	return nil
+}
+
+// countingConn counts the bytes handed to the connection it wraps.
+type countingConn struct {
+	net.Conn
+	written uint64
+}
+
+func (c *countingConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.written += uint64(n)
+	return n, err
+}
+
+// Unconfirmed reports how many of the most recent accepted submissions the
+// receiver's transport has not acknowledged. A write that returned without
+// error put its bytes in the socket; the acknowledgement is the first sign
+// that they left this host and arrived at the other. It says nothing about
+// what the receiver did with them. ok is false where the transport cannot
+// be asked, and then nothing is known either way.
+//
+// After a session has ended the answer is the one it ended with, until the
+// next session accepts a submission.
+func (s *Sink) Unconfirmed() (n int, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn == nil {
+		return s.left, s.leftOK
+	}
+	return s.unconfirmedLocked()
+}
+
+// Broken reports that the receiver has closed the session the last
+// submission went out on, and ends that session. Nothing is written to
+// find out, so a sink with nothing to send learns of it as well. A session
+// that failed on a submission is not reported here again: that submission
+// returned the error.
+func (s *Sink) Broken() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn == nil {
+		return false
+	}
+	if _, closed, ok := transportState(s.raw.Conn); !ok || !closed {
+		return false
+	}
+	s.dropLocked(ErrPeerClosed)
+	return true
+}
+
+// unconfirmedLocked forgets the frames that have been acknowledged and
+// counts the rest.
+func (s *Sink) unconfirmedLocked() (int, bool) {
+	unacked, _, ok := transportState(s.raw.Conn)
+	if !ok {
+		s.ends = s.ends[:0]
+		return 0, false
+	}
+	// Everything written is in the count, the handshake included, and
+	// what is not acknowledged is the end of it.
+	var acked uint64
+	if unacked < s.raw.written {
+		acked = s.raw.written - unacked
+	}
+	i := 0
+	for i < len(s.ends) && s.ends[i] <= acked {
+		i++
+	}
+	if i > 0 {
+		s.ends = append(s.ends[:0], s.ends[i:]...)
+	}
+	return len(s.ends), true
 }
 
 // connLocked returns the live connection, dialing if there is none.
@@ -334,26 +429,51 @@ func (s *Sink) connLocked() (net.Conn, error) {
 		return s.conn, nil
 	}
 	s.dials.Add(1)
-	d := &net.Dialer{Timeout: s.cfg.DialTimeout}
-	conn, err := tls.DialWithDialer(d, "tcp", s.cfg.Address, s.tls)
-	if err != nil {
+	failed := func(err error) (net.Conn, error) {
 		s.dialErrors.Add(1)
 		s.setErr(err)
 		s.isDialed.Store(false)
 		return nil, fmt.Errorf("syslog: dial %s: %w", s.cfg.Address, err)
 	}
-	s.conn = conn
+	d := &net.Dialer{Timeout: s.cfg.DialTimeout}
+	tcp, err := d.Dial("tcp", s.cfg.Address)
+	if err != nil {
+		return failed(err)
+	}
+	boundSilence(tcp, s.cfg.WriteTimeout)
+	raw := &countingConn{Conn: tcp}
+	conn := tls.Client(raw, s.tls)
+	// One limit over the connection and the handshake together, as the
+	// dial had when it made both.
+	_ = tcp.SetDeadline(time.Now().Add(s.cfg.DialTimeout))
+	if err := conn.Handshake(); err != nil {
+		_ = tcp.Close()
+		return failed(err)
+	}
+	_ = tcp.SetDeadline(time.Time{})
+	s.conn, s.raw, s.ends = conn, raw, s.ends[:0]
+	s.left, s.leftOK = 0, false
 	s.isDialed.Store(true)
 	s.setErr(nil)
 	return conn, nil
 }
 
+// endSessionLocked closes the session and keeps what it left
+// unacknowledged.
+func (s *Sink) endSessionLocked() error {
+	if s.conn == nil {
+		return nil
+	}
+	s.left, s.leftOK = s.unconfirmedLocked()
+	err := s.conn.Close()
+	s.conn, s.raw, s.ends = nil, nil, s.ends[:0]
+	s.isDialed.Store(false)
+	return err
+}
+
 func (s *Sink) dropLocked(err error) {
 	s.setErr(err)
-	if s.conn != nil {
-		_ = s.conn.Close()
-		s.conn = nil
-	}
+	_ = s.endSessionLocked()
 	s.isDialed.Store(false)
 }
 
@@ -372,13 +492,7 @@ func (s *Sink) setErr(err error) {
 func (s *Sink) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.conn == nil {
-		return nil
-	}
-	err := s.conn.Close()
-	s.conn = nil
-	s.isDialed.Store(false)
-	return err
+	return s.endSessionLocked()
 }
 
 // Peer names the receiver of the current session: the subject of the

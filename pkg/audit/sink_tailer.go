@@ -49,7 +49,22 @@ type SinkPeer interface {
 	Peer() (subject string, notAfter time.Time, ok bool)
 }
 
+// SinkConfirmer is implemented by a Submitter that can say how far the
+// receiver's transport has acknowledged what was submitted.
+type SinkConfirmer interface {
+	// Unconfirmed reports how many of the most recent accepted
+	// submissions have not been acknowledged. ok is false when that
+	// cannot be told.
+	Unconfirmed() (n int, ok bool)
+	// Broken reports that the session the last submission went out on
+	// has been ended from the other side. It is reported once.
+	Broken() bool
+}
+
 var (
+	// errSinkSessionEnded is the error of a session the receiver ended
+	// while nothing was being submitted.
+	errSinkSessionEnded = errors.New("audit: the receiver ended the session")
 	// ErrSubmitNotAttempted: the submission failed before anything was
 	// sent.
 	ErrSubmitNotAttempted = errors.New("audit: nothing was submitted")
@@ -172,6 +187,13 @@ const (
 	DefaultSinkRetry           = time.Second
 	DefaultSinkRetryMax        = 30 * time.Second
 	DefaultSinkReconnectWindow = 64
+	// maxSinkWindow bounds how many submitted records a tailer keeps the
+	// places of. An unacknowledged run is as long as the socket's buffer
+	// lets it be, which is far below this.
+	maxSinkWindow = 1 << 16
+	// sinkSettle is how long a stopping tailer gives the acknowledgements
+	// of its last submissions to arrive before it calls them owed.
+	sinkSettle = 300 * time.Millisecond
 )
 
 // SinkTailerConfig describes one sink that follows the trail.
@@ -200,6 +222,12 @@ type SinkTailerConfig struct {
 	// returned without error says the bytes reached the socket, not the
 	// receiver, so the records just before a failure are the ones most
 	// likely to be missing there. Negative disables it.
+	//
+	// With a Submitter that is a SinkConfirmer the window is never
+	// shorter than the run of submissions the receiver's transport has
+	// not acknowledged, and that run is saved with the cursor: a tailer
+	// stopped with submissions unacknowledged, for whatever reason,
+	// starts its next run by sending them again.
 	ReconnectWindow int
 	// Reserve is the export sequence block size; zero takes the default.
 	Reserve uint64
@@ -446,6 +474,13 @@ func (t *SinkTailer) setPending(ts string) {
 	t.mu.Unlock()
 }
 
+// pending reports whether a record in hand has been noted.
+func (t *SinkTailer) pending() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.pendingTS != ""
+}
+
 func (t *SinkTailer) setIdle(idle bool) {
 	t.mu.Lock()
 	t.idle = idle
@@ -522,42 +557,52 @@ func (t *SinkTailer) reportRecovery(rec CursorRecovery) {
 	}), true)
 }
 
-// recentPositions remembers the places of the last submitted records.
+// recentPositions remembers the places of the last submitted records,
+// oldest first, and in front of them the place the first of them was
+// submitted after. Sending the last n again means continuing after the
+// place n back from the end.
 type recentPositions struct {
-	buf  []Position
-	next int
-	n    int
+	buf []Position
+	// head is where the remembered places begin in buf; what is before
+	// it has been dropped and is cleared out when it is the larger part.
+	head int
 }
 
-func (r *recentPositions) push(p Position) {
-	if len(r.buf) == 0 {
-		return
+func (r *recentPositions) empty() bool { return r.head == len(r.buf) }
+
+func (r *recentPositions) push(p Position) { r.buf = append(r.buf, p) }
+
+// keep drops all but the last n submissions and the place before them.
+func (r *recentPositions) keep(n int) {
+	if over := len(r.buf) - r.head - (n + 1); over > 0 {
+		r.head += over
 	}
-	r.buf[r.next] = p
-	r.next = (r.next + 1) % len(r.buf)
-	if r.n < len(r.buf) {
-		r.n++
+	if r.head > len(r.buf)/2 {
+		r.buf = append(r.buf[:0], r.buf[r.head:]...)
+		r.head = 0
 	}
 }
 
-// oldest returns the earliest place remembered.
-func (r *recentPositions) oldest() (Position, bool) {
-	if r.n == 0 {
+// before returns the place the last n submissions were submitted after,
+// or the oldest place remembered when fewer are.
+func (r *recentPositions) before(n int) (Position, bool) {
+	if r.empty() {
 		return Position{}, false
 	}
-	return r.buf[(r.next-r.n+len(r.buf))%len(r.buf)], true
+	i := len(r.buf) - 1 - n
+	if i < r.head {
+		i = r.head
+	}
+	return r.buf[i], true
 }
 
-func (r *recentPositions) clear() { r.next, r.n = 0, 0 }
+func (r *recentPositions) clear() { r.buf, r.head = r.buf[:0], 0 }
 
 func (t *SinkTailer) run() {
 	defer close(t.done)
 	seq, rec := openExportSeq(t.store, t.cfg.Reserve, t.cfg.Now)
 	t.setCursor(seq.cursor())
 	t.reportRecovery(rec)
-
-	rd := NewTrailReader(t.cfg.Dir, seq.cursor().Position)
-	defer rd.Close()
 
 	var (
 		// pos is the last record the sink is past; dirty says it moved
@@ -570,6 +615,8 @@ func (t *SinkTailer) run() {
 		// again.
 		cur  TrailLine
 		have bool
+		// last is the place of the record read before cur.
+		last = pos
 		// number is an export sequence number that was taken and not
 		// used.
 		number uint64
@@ -579,21 +626,72 @@ func (t *SinkTailer) run() {
 		// resendSeg is the segment the resend was last seen in.
 		resendSeg string
 		backoff   = t.cfg.Retry
-		// One place more than the window: sending the window again means
-		// continuing after the record before it.
-		recent = recentPositions{}
+		recent    = recentPositions{}
+		// settled says the save has already waited a turn for the
+		// acknowledgement of what was last written.
+		settled bool
 	)
-	if t.cfg.ReconnectWindow > 0 {
-		recent.buf = make([]Position, t.cfg.ReconnectWindow+1)
+	confirmer, _ := t.cfg.Submitter.(SinkConfirmer)
+	// unconfirmed is how many of the last submissions the receiver's
+	// transport has not acknowledged, as far as that can be told.
+	unconfirmed := func() int {
+		if confirmer == nil {
+			return 0
+		}
+		n, ok := confirmer.Unconfirmed()
+		if !ok || n < 0 {
+			return 0
+		}
+		if n > maxSinkWindow {
+			n = maxSinkWindow
+		}
+		return n
+	}
+	// window is how many of the last submissions a failure sends again.
+	window := func() int {
+		if n := unconfirmed(); n > t.cfg.ReconnectWindow {
+			return n
+		}
+		return t.cfg.ReconnectWindow
+	}
+	remember := t.cfg.ReconnectWindow > 0 || confirmer != nil
+
+	// The run before this one ended with submissions the receiver's
+	// transport had not acknowledged. They are owed again, and this run
+	// begins with them.
+	if from := seq.resendFrom(); from != (Position{}) && from != pos {
+		t.cfg.Logf("audit: sink %s: not acknowledged when the last run ended: sending again from %s seq %d to %s seq %d",
+			t.cfg.Name, from.SegmentUUID, from.Seq, pos.SegmentUUID, pos.Seq)
+		resending, last = true, from
+	}
+	rd := NewTrailReader(t.cfg.Dir, last)
+	defer rd.Close()
+
+	// owed is the place the next run would have to send again from: the
+	// place before the oldest submission that is not acknowledged. A
+	// resend still under way is owed from where it began.
+	owed := func() Position {
+		if resending {
+			return seq.resendFrom()
+		}
+		n := unconfirmed()
+		if n == 0 {
+			return Position{}
+		}
+		if from, ok := recent.before(n); ok && from != pos {
+			return from
+		}
+		return Position{}
 	}
 	commit := func() {
-		if !dirty {
+		from := owed()
+		if !dirty && from == seq.resendFrom() {
 			return
 		}
 		if t.cfg.Fault(FaultSinkBeforeCursorWrite) {
 			t.die(FaultSinkBeforeCursorWrite)
 		}
-		if err := seq.commit(pos); err != nil {
+		if err := seq.commit(pos, from); err != nil {
 			t.cursorErrors.Add(1)
 			t.cfg.Logf("audit: sink %s: cursor not saved: %v", t.cfg.Name, err)
 		}
@@ -606,7 +704,7 @@ func (t *SinkTailer) run() {
 	// has to go by. pos itself, and what the pruner is told, stay where
 	// they are.
 	rewind := func(to Position) {
-		if err := seq.commit(to); err != nil {
+		if err := seq.commit(to, Position{}); err != nil {
 			t.cursorErrors.Add(1)
 			t.cfg.Logf("audit: sink %s: cursor not saved: %v", t.cfg.Name, err)
 		}
@@ -616,8 +714,70 @@ func (t *SinkTailer) run() {
 		t.cursor = c
 		t.mu.Unlock()
 	}
+	// lost is what follows a session that ended: the state, the record of
+	// it, and the window. A session that was up and then failed may have
+	// lost what was written just before the failure. The tailer goes back
+	// over the window; the record in hand is read again after it. The
+	// cursor is saved at the start of the window, not at pos: a restart
+	// before the receiver is back must begin there too.
+	lost := func(err error, attempted bool) {
+		changed, from := t.setState(SinkDisconnected, err)
+		if changed {
+			t.cfg.Logf("audit: sink %s: %v", t.cfg.Name, err)
+			w := uint64(window())
+			reason := "write_failed"
+			if !attempted {
+				reason = "unreachable"
+			}
+			_ = t.emit(sysRecord("sys.sink.disconnect", t.resource(), &SysDetail{
+				Reason: reason, Cursor: &Position{SegmentUUID: pos.SegmentUUID, Seq: pos.Seq},
+				ReconnectWindowRecords: &w,
+			}), false)
+		}
+		// A resend that was under way goes back as well: what this
+		// session took of it is no more received than anything else it
+		// took.
+		rewound := false
+		if from == SinkConnected {
+			if start, ok := recent.before(window()); ok && (resending || start != pos) {
+				resending, resendSeg = true, ""
+				have = false
+				// The sink is behind by the window from here, whether or
+				// not a new record is waiting behind it.
+				t.setIdle(false)
+				recent.clear()
+				rd.Seek(start)
+				last = start
+				rewind(start)
+				rewound = true
+			}
+		}
+		if !rewound && !resending {
+			commit()
+		}
+	}
+	// ended asks, without writing anything, whether the receiver has ended
+	// the session, and treats that as the failed write it would have been
+	// for the next record.
+	ended := func() bool {
+		if confirmer == nil || !confirmer.Broken() {
+			return false
+		}
+		lost(errSinkSessionEnded, false)
+		return true
+	}
 	finish := func() {
-		commit()
+		// What was just written is acknowledged within moments by a
+		// receiver that is there. It is given those moments, so that a
+		// stop with the receiver up leaves nothing owed.
+		for deadline := time.Now().Add(sinkSettle); !resending && unconfirmed() > 0 && time.Now().Before(deadline); {
+			time.Sleep(sinkSettle / 30)
+		}
+		// A receiver that closed while the sink had nothing to send is
+		// found out here at the latest.
+		if !ended() {
+			commit()
+		}
 		if err := seq.close(); err != nil {
 			t.cursorErrors.Add(1)
 			t.cfg.Logf("audit: sink %s: cursor not saved at stop: %v", t.cfg.Name, err)
@@ -629,13 +789,17 @@ func (t *SinkTailer) run() {
 	passed := func() {
 		if resending {
 			if cur.Pos == pos {
+				// Everything the sink was past it is past again, and
+				// holds nothing unsent.
 				resending = false
+				t.setReached(pos, rd.offset())
 			}
 		} else {
 			pos, dirty = cur.Pos, true
 			inBatch++
 			t.setReached(pos, rd.offset())
 		}
+		last = cur.Pos
 		have = false
 		if inBatch >= t.cfg.Batch {
 			commit()
@@ -654,7 +818,18 @@ func (t *SinkTailer) run() {
 				cur, have = l, true
 			case errors.Is(err, ErrTrailIdle):
 				t.setIdle(!resending)
-				commit()
+				switch {
+				case ended():
+				case !settled && !resending && unconfirmed() > 0:
+					// What was just written is acknowledged within
+					// moments by a receiver that is there. The save
+					// waits one turn for that, so that it is made once
+					// and says nothing is owed, and not twice.
+					settled = true
+				default:
+					commit()
+					settled = false
+				}
 				if !t.wait(t.cfg.Idle) {
 					finish()
 					return
@@ -668,6 +843,7 @@ func (t *SinkTailer) run() {
 					resending = false
 					recent.clear()
 					rd.Seek(pos)
+					last = pos
 					continue
 				}
 				// The segment was removed before it was read out. What
@@ -678,6 +854,7 @@ func (t *SinkTailer) run() {
 					t.cfg.Name, pos.SegmentUUID)
 				recent.clear()
 				rd.Seek(Position{})
+				last = Position{}
 				continue
 			default:
 				t.setIdle(false)
@@ -719,7 +896,10 @@ func (t *SinkTailer) run() {
 
 		var ff filterFields
 		decoded := json.Unmarshal(cur.Raw, &ff) == nil
-		if !resending {
+		// The oldest record the sink holds unsent is the one in hand, or
+		// the first of a resend: what is being gone over again is as
+		// unsent as what was never tried.
+		if !resending || !t.pending() {
 			t.setPending(ff.TS)
 		}
 		// The compliance sink has no filter: one is refused when the
@@ -763,7 +943,13 @@ func (t *SinkTailer) run() {
 			if resending {
 				t.resent.Add(1)
 			}
-			recent.push(cur.Pos)
+			if remember {
+				if recent.empty() {
+					recent.push(last)
+				}
+				recent.push(cur.Pos)
+				recent.keep(window())
+			}
 			if changed, _ := t.setState(SinkConnected, nil); changed {
 				d := &SysDetail{Cursor: &Position{SegmentUUID: cur.Pos.SegmentUUID, Seq: cur.Pos.Seq}}
 				if p, ok := t.cfg.Submitter.(SinkPeer); ok {
@@ -797,38 +983,7 @@ func (t *SinkTailer) run() {
 				// Some of the frame may have arrived, with its number.
 				number = 0
 			}
-			changed, from := t.setState(SinkDisconnected, err)
-			if changed {
-				t.cfg.Logf("audit: sink %s: %v", t.cfg.Name, err)
-				w := uint64(t.cfg.ReconnectWindow)
-				reason := "write_failed"
-				if !attempted {
-					reason = "unreachable"
-				}
-				_ = t.emit(sysRecord("sys.sink.disconnect", t.resource(), &SysDetail{
-					Reason: reason, Cursor: &Position{SegmentUUID: pos.SegmentUUID, Seq: pos.Seq},
-					ReconnectWindowRecords: &w,
-				}), false)
-			}
-			// A session that was up and then failed may have lost what
-			// was written just before the failure. Go back over the
-			// window; the record in hand is read again after it. The
-			// cursor is saved at the start of the window, not at pos: a
-			// restart before the receiver is back must begin there too.
-			rewound := false
-			if from == SinkConnected && !resending {
-				if start, ok := recent.oldest(); ok && start != pos {
-					resending, resendSeg = true, ""
-					have = false
-					recent.clear()
-					rd.Seek(start)
-					rewind(start)
-					rewound = true
-				}
-			}
-			if !rewound && !resending {
-				commit()
-			}
+			lost(err, attempted)
 			if !t.wait(backoff) {
 				finish()
 				return
