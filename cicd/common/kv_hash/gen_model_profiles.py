@@ -16,11 +16,15 @@ templateContentFormat is the engines' content-format verdict for the template (v
 a loop over message content parts), fixed per model below.
 
 Written under <fixtures>: profiles/<id>.yaml, manifests/<id>.yaml (vLLM), manifests-sglang/<id>.yaml,
+manifests-trtllm/<id>.yaml,
 probefixtures/<id>/ (completions fixtures from gen_probe_fixtures.py + chat fixtures from
 gen_chat_probe_fixtures.py) and probefixtures/<id>/sglang/, the same set minus every chat case that ends on
 an assistant turn: SGLang renders a trailing assistant message as a user turn, and the gateway refuses such
 strict chat requests, so the engine is never asked to agree on that render. Where a profile records
 completionsBos for the SGLang contract, the subset's completions fixtures bank the BOS the engine prepends.
+probefixtures/<id>/trtllm/ is the same selection for TensorRT-LLM, whose rule the gateway attests against its
+own engine-scoped set: the engine joins a text-only content into one string before it renders (the string
+shape, as SGLang), and encodes a completions prompt with the tokenizer as loaded (no engine-added BOS).
 
 For an openai-format template the top (vLLM) set also leaves out every chat case whose render depends on the
 content shape: vLLM hands such a template a string content as one text part (null as []), the gateway renders
@@ -59,6 +63,9 @@ MODELS = [
 ENGINES = (
     ("manifests", "sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050c24aeb7830ac02039b14", "0.28.0"),
     ("manifests-sglang", "sha256:9e148f5ac788e856a06166bd6347a831831eb9fcfab4d1770874823a7c29a1a1", "0.5.18"),
+    # TensorRT-LLM: a locally built image, pinned by its id. The engine reports no version at runtime; its
+    # identity probe checks the KV event contract the engine describes itself with.
+    ("manifests-trtllm", "sha256:a867619fd56c85225927dac27e2111ae90ff66e23c59d9c5f8b9f345577cab6d", "1.3.0rc24"),
 )
 GOLDENS = "kv_chat_render_candidates.json"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -156,8 +163,9 @@ def bank_completions_bos(sub, bos_id):
             json.dump(d, f, indent=1)
 
 
-def sglang_subset(out):
-    sub = os.path.join(out, "sglang")
+def engine_subset(out, name):
+    """probefixtures/<id>/<name>/: the string-content set minus every chat case that ends on an assistant turn."""
+    sub = os.path.join(out, name)
     os.makedirs(sub)
     for fn in sorted(os.listdir(out)):
         if not fn.endswith(".request.json"):
@@ -257,7 +265,8 @@ def main():
                             out, GOLDENS], capture_output=True, text=True)
         if r.returncode:
             sys.exit(f"{pid}: chat fixtures refused: {r.stderr.strip()}")
-        sglang_subset(out)
+        for name in ("sglang", "trtllm"):
+            engine_subset(out, name)
         for contract, quirks in ENGINE_QUIRKS.get(pid, {}).items():
             if quirks.get("completionsBos"):
                 if contract not in BOS_SUBSETS or not g["bos_token"]:

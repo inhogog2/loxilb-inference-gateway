@@ -94,6 +94,14 @@ Other measured per-version, per-profile launch arguments (`engine.sh`; the failu
 | vLLM 0.28.0 | qwen36-27b-fp8-v1, qwen38-27b-fp8-v1 | `--max-num-seqs 64` | hybrid Mamba on one 48 GB GPU: `max_num_seqs (256) exceeds available Mamba cache blocks` |
 | vLLM 0.28.0 | qwen36-27b-fp8-v1, qwen38-27b-fp8-v1 | env `VLLM_SSM_CONV_STATE_LAYOUT=DS` | NIXL connector start fails: `3-read Mamba conv transfer requires DS conv state layout` |
 
+`engine.sh` also launches TensorRT-LLM (PyTorch backend), converged only, for the A/B scenario
+(`../kv-model-ab-perf`); the legs of this scenario do not drive it. The image is a local build from the release
+wheel, so `env.sh` pins its image id and the launch refuses a node whose tag names another image
+(`ENGINE_IMAGE_MISMATCH`). The engine options are `trtllm/converged.yaml` (block reuse, the KV event buffer the
+gateway drains, the Prometheus text). The engine is ready when it serves the model id and `/health` answers,
+minutes after the container starts. Models it cannot serve are refused before anything starts
+(`ENGINE_MODEL_BLOCKED`, `trt_blocked` in `env.sh`).
+
 ## Regenerating the fixtures
 
 Profiles, manifests and probe fixtures are generated from pinned inputs by
@@ -104,4 +112,7 @@ The vLLM fixture set of an openai-format template leaves out every chat case who
 content takes vLLM's shape (a string becomes one text part): the gateway refuses such requests at serve time,
 so banking their string-shape ids would hold a strict vLLM rule below READY for good (gemma-4's system turns).
 The `sglang/` subset keeps them, since SGLang hands the template a string content as a string, and leaves out
-every chat case ending on an assistant turn instead.
+every chat case ending on an assistant turn instead. The `trtllm/` subset is the same selection: TensorRT-LLM
+joins a text-only content into one string before it renders. Its completions fixtures carry no engine-added
+BOS (the engine encodes a text prompt with the tokenizer as loaded). The gateway attests a TensorRT-LLM rule
+against this set only; without it the rule stops below READY.

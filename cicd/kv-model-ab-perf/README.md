@@ -5,7 +5,7 @@ round-robin over the same prefill engines. The two arms differ in the rule only:
 same offered rate.
 
 ```bash
-python3 selftest.py                                   # no GPU, no gateway: analyzer, load generator, rules, seeding, decode-engine arguments
+python3 selftest.py                                   # no GPU, no gateway: analyzer, load generator, rules, seeding, engine arguments and refusals
 
 export PREFILLS="<node> <node>" DECODES="<node> <node>" VIP=<gateway address> LOGD=<gateway log dir>
 ./validation.sh model vllm <profileId>                # fleet up, corpus, calibration, three points, fleet down
@@ -67,6 +67,28 @@ On a prefill/decode fleet the report prints the KV transfers of each arm from th
 many, MB each, ms each, failed. vLLM counts them on the decode engines, SGLang on the prefill engines. SGLang's
 time is its latency metric, which also holds the wait for the prefill scheduler's next pass: an upper bound.
 
+## TensorRT-LLM
+
+```bash
+export TOPOLOGY=converged ENGINES="<node> <node> <node>" VIP=<gateway address> LOGD=<gateway log dir>
+./validation.sh model trtllm <profileId>
+```
+
+TensorRT-LLM is measured as one pool of converged engines on the chat surface, which is what its rows in
+`scripts/models/validated-models.yaml` claim. A prefill/decode fleet and a completions point are refused before
+anything starts (`TRTLLM_TOPOLOGY_UNSUPPORTED`, `TRTLLM_SURFACE_UNSUPPORTED`), and so is a model the engine
+cannot serve (`ENGINE_MODEL_BLOCKED`, from the launcher). What differs from the other engines:
+
+- The exact rule's block size is 32 tokens, the engine's own.
+- The engine's Prometheus text is at `/prometheus/metrics`; the scrapes kept with an arm come from there. Its
+  `/metrics` and `/kv_cache_events` are queues that a read empties, and the gateway is the reader of the second:
+  the scenario reads neither.
+- Requests served per engine: `trtllm_request_success_total`. Computed prompt tokens: missed KV blocks times the
+  block size of the same scrape, so each request counts in whole blocks.
+- The restart before every arm is stop, wait until the node holds no socket on the engine port, start: the engine
+  binds its port before it loads the model and without `SO_REUSEADDR`, so a start within a minute of the stop
+  exits with `Address already in use` (`ENGINE_PORT_HELD` if the port does not clear in two minutes).
+
 The rule of every arm comes from `rule.py`. The baseline and calibration rules have exact routing off; on a
 prefill/decode fleet of SGLang engines they still name the engine type, because the gateway picks the
 prefill/decode dialect from it and an SGLang fleet driven the vLLM way answers every request with an empty
@@ -100,7 +122,8 @@ repetition. It also has two shares, because p50 and p95 say nothing when the slo
 the same side of the rank: `slow_request_percent` (TTFT at least twice the lower arm's median) and
 `computed_prompt_token_percent` (prompt tokens the engines computed instead of reading from their cache, from
 the engine scrapes of the arm: vLLM's prompt tokens by source, SGLang's uncached prompt-token sum without the
-decode engines, which repeat what their prefill engine reported). A difference is **claimed** only when the arms' per-repetition values do not overlap
+decode engines, which repeat what their prefill engine reported, TensorRT-LLM's missed KV blocks times its
+block size). A difference is **claimed** only when the arms' per-repetition values do not overlap
 (`ttft_p95_separation`: `exact_lower`, `baseline_lower`); `overlap` means the numbers stand and the claim does
 not. The short-prefix control has no cache benefit to win: it bounds the routing overhead and the noise, and a
 long-prefix result is read against it.

@@ -53,19 +53,26 @@ def validate(rows):
 # Prompt tokens an engine computed, per engine family. vLLM counts prompt tokens by source; SGLang observes
 # prompt_tokens - cached_tokens of every finished request into a histogram, whose sum is the same quantity.
 # An SGLang decode engine observes the split its prefill engine reported for the same request, so its series
-# repeats tokens already counted there and is left out.
-COMPUTED = (("vllm:prompt_tokens_by_source_total", 'source="local_compute"', None),
-            ("sglang:uncached_prompt_tokens_histogram_sum", "", 'engine_type="decode"'))
+# repeats tokens already counted there and is left out. TensorRT-LLM counts the KV blocks a prompt did not find
+# in its cache; times the block size the same scrape reports, that is the computed tokens rounded up to whole
+# blocks per request (at most one block per request above the token count).
+COMPUTED = (("vllm:prompt_tokens_by_source_total", 'source="local_compute"', None, None),
+            ("sglang:uncached_prompt_tokens_histogram_sum", "", 'engine_type="decode"', None),
+            ("trtllm_kv_cache_missed_blocks_total", "", None, "trtllm_kv_cache_tokens_per_block"))
 
 
 def computed_tokens(arm_dir):
     """Prompt tokens the engines computed during one arm (after - before, all engines), or None without scrapes."""
     def total(path):
-        for metric, label, repeated in COMPUTED:
-            lines = [line for line in path.read_text().splitlines()
-                     if line.startswith(metric) and line[len(metric):len(metric) + 1] in ("{", " ") and label in line]
+        text = path.read_text().splitlines()
+        named = lambda metric: [line for line in text if line.startswith(metric) and line[len(metric):len(metric) + 1] in ("{", " ")]
+        for metric, label, repeated, unit in COMPUTED:
+            lines = [line for line in named(metric) if label in line]
             if lines:
-                return sum(float(line.rsplit(" ", 1)[1]) for line in lines if not (repeated and repeated in line))
+                per = [float(line.rsplit(" ", 1)[1]) for line in named(unit)] if unit else [1.0]
+                if len(set(per)) != 1:   # a count in blocks with no block size, or two sizes, is not a token count
+                    return None
+                return per[0] * sum(float(line.rsplit(" ", 1)[1]) for line in lines if not (repeated and repeated in line))
         return None
     out, after = 0.0, sorted(arm_dir.glob("after-engine-*.prom"))
     for a in after:

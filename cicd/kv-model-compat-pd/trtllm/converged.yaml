@@ -1,0 +1,9 @@
+# TensorRT-LLM extra LLM API options for one converged engine (engine.sh, --extra_llm_api_options).
+# Block reuse is the prefix cache; the event buffer is what the gateway drains at /kv_cache_events;
+# return_perf_metrics turns on the Prometheus text at /prometheus/metrics.
+kv_cache_config:
+  enable_block_reuse: true
+  event_buffer_max_size: 4096
+  free_gpu_memory_fraction: 0.85
+return_perf_metrics: true
+enable_iter_perf_stats: true
