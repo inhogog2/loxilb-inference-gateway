@@ -46,6 +46,8 @@ refused_leg() { # name, port, extra serviceArguments
     echo "  SKIP: leg $name: the API refuses this argument in this release, so the data plane is never asked"
     return
   fi
+  [ "$rc" == "412" ] && pass "the rule the data plane did not install is answered 412" \
+    || fail "the rule was answered $rc, want 412: the VIP is the gateway's own, so the refusal is not the caller's"
   # The refusal is the event to wait for, not a clock.
   for i in $(seq 1 20); do
     [ "$(not_installed $port)" -gt "$seen" ] && break

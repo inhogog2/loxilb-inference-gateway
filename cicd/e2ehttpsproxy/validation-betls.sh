@@ -233,7 +233,7 @@ DMG='"mtls_backend": {"verify_server_cert": true}, "backend_ca_cert_id": "betls-
 before=$(rule_list); nr=$(refused); g=$(generation)
 [[ "$g" == [0-9]* ]] || fail "precondition: GET reports no generation ('$g')"
 rc=$(post_rule ", $DMG"); echo "  POST -> $rc"
-[ "$rc" == "400" ] && pass "a policy change the data plane refuses is answered 400" || fail "a refused policy change was answered $rc, want 400"
+[ "$rc" == "412" ] && pass "a policy change the data plane refuses is answered 412" || fail "a refused policy change was answered $rc, want 412"
 [ "$(refused)" -gt "$nr" ] && pass "the data plane refused the new context and kept the one in service" \
   || fail "the data plane log shows no refused replacement: the request was stopped earlier, or not at all"
 [ "$(rule_list)" == "$before" ] && pass "the rule keeps the policy it had" || fail "a refused change is stored on the rule"
@@ -244,8 +244,8 @@ nr=$(refused); sleep 20
 [ "$(refused)" == "$nr" ] && pass "the refused policy is not pushed again behind the caller's back" \
   || fail "the refused policy was pushed again $(( $(refused) - nr )) time(s) in 20s"
 ans=$(post_rule_at $((PORT + 1)) "$VIP" ", $DMG")
-[ "${ans##*$'\n'}" == "400" ] && pass "a new rule the data plane cannot install is answered 400" \
-  || fail "a new rule with a context that cannot be built was answered ${ans##*$'\n'}, want 400"
+[ "${ans##*$'\n'}" == "412" ] && pass "a new rule the data plane cannot install is answered 412" \
+  || fail "a new rule with a context that cannot be built was answered ${ans##*$'\n'}, want 412"
 [ "$(rule_list)" == "$before" ] && pass "the rule that was not installed is not kept" || fail "a rule the data plane refused is in the rule list"
 ans=$(post_rule_at $((PORT + 1)) "$VIP" ", $BE")
 [ "${ans##*$'\n'}" == "200" ] && pass "the same rule with a policy that can be built is installed" \

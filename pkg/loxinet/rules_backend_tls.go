@@ -19,7 +19,9 @@ package loxinet
 import (
 	"errors"
 	"fmt"
+	"net"
 	"sort"
+	"syscall"
 
 	cmn "github.com/loxilb-io/loxilb/common"
 	tk "github.com/loxilb-io/loxilib"
@@ -65,16 +67,72 @@ func backendTLSChanged(r *ruleEnt, serv *cmn.LbServiceArg) bool {
 		backendVerifyOf(r.mtlsBackend) != backendVerifyOf(serv.MTLSBackend)
 }
 
-// lbPushRefusedError is the answer to a full-proxy rule the data plane did
+// lbPushRefusedText is the answer to a full-proxy rule the data plane did
 // not install. The data plane keeps the reason in its own log; what is known
 // here is that the listener or one of its TLS contexts could not be built.
-func lbPushRefusedError(policyKept bool) error {
+func lbPushRefusedText(policyKept bool) string {
 	if policyKept {
-		return errors.New("the data plane could not build the backend TLS context for this policy; " +
-			"the rule keeps its previous backend TLS policy, see the data plane log for the certificate that failed to load")
+		return "the data plane could not build the backend TLS context for this policy; " +
+			"the rule keeps its previous backend TLS policy, see the data plane log for the certificate that failed to load"
 	}
-	return errors.New("the data plane did not install the rule: its listener or a TLS context could not be built, " +
-		"see the data plane log")
+	return "the data plane did not install the rule: its listener or a TLS context could not be built, " +
+		"see the data plane log"
+}
+
+// lbVIPBindable reports whether a listener can be bound to a VIP on this
+// host. Only "the address is not one of this host" counts as no: any other
+// failure to bind says nothing about who holds the address. A variable so a
+// test can stand in for the host.
+var lbVIPBindable = func(vip net.IP) bool {
+	if vip == nil || vip.IsUnspecified() {
+		return true
+	}
+	l, err := net.Listen("tcp", net.JoinHostPort(vip.String(), "0"))
+	if err != nil {
+		return !errors.Is(err, syscall.EADDRNOTAVAIL)
+	}
+	l.Close()
+	return true
+}
+
+// lbListenerAwaitsVIP reports whether a full-proxy rule the data plane did
+// not install is one of a standby: its cluster instance is not the master,
+// so the VIP is with the peer and the listener has nothing to bind to. Such a
+// rule is kept and installed by the periodic sync once this gateway takes the
+// VIP over. Refusing it would leave the gateway without the rule after a
+// failover.
+func lbListenerAwaitsVIP(ciState string, vip net.IP) bool {
+	if ciState == cmn.CIMasterStateString || ciState == cmn.CIUnDefStateString {
+		return false
+	}
+	return !lbVIPBindable(vip)
+}
+
+// lbStandbyKeeps reports whether a full-proxy rule the data plane did not
+// install is kept for the periodic sync, see lbListenerAwaitsVIP.
+func (R *RuleH) lbStandbyKeeps(r *ruleEnt) bool {
+	ciState, _ := mh.has.CIStateGetInst(r.inst)
+	if !lbListenerAwaitsVIP(ciState, r.tuples.l3Dst.addr.IP) {
+		return false
+	}
+	tk.LogIt(tk.LogInfo, "lb-rule %s kept without a listener: cluster instance %s is %s and the VIP is not on this host\n",
+		r.tuples.String(), r.inst, ciState)
+	return true
+}
+
+// lbPushRefusedError classifies a full-proxy rule the data plane did not
+// install. A VIP this gateway does not hold is the caller's to correct, and
+// the answer names the field. Anything else is a condition of the gateway,
+// which no other request body would change.
+func lbPushRefusedError(vip net.IP, policyKept bool) error {
+	if !policyKept && !lbVIPBindable(vip) {
+		return &cmn.RuleArgumentError{Err: fmt.Errorf("externalIP %s is not an address of this gateway, so the rule's listener "+
+			"could not be bound: use an address the host holds, or one in a subnet of the gateway that it holds as cluster master", vip)}
+	}
+	return &cmn.ServerPreconditionError{
+		Reason: cmn.ReasonLbDataplaneInstallFailed,
+		Err:    errors.New(lbPushRefusedText(policyKept)),
+	}
 }
 
 // lbRulesOfBackendCert returns the full-proxy rules whose backend leg refers
