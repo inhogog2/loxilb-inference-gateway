@@ -1,0 +1,326 @@
+/*
+ * Copyright (c) 2026 NetLOX Inc
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ */
+package loxinet
+
+// The Go half of the Endpoint Picker (EPP) boundary — Phase 1 M4.
+//
+// The data plane hands a buffered request over (llb_epp_submit, on a worker
+// thread, returns at once with a stream id) and parks the client. A
+// goroutine runs the ext_proc exchange through pkg/epp and hands the
+// decision back from its own thread (proxy_epp_complete), which the C side
+// copies into its side table before waking the fd's owner worker. The
+// stream stays open until the data plane reports the response phase
+// (llb_epp_resp_event: headers, end of stream, or abort), exactly once per
+// stream id.
+//
+// Rules are resolved by their number (dp_proxy_tacts.ca.cidx, the pool's
+// epp_svc_id): the rule layer registers each EPP rule's address, failure
+// mode, deadline and TLS choice here when it stores the rule.
+
+/*
+#cgo CFLAGS: -I../../loxilb-ebpf/common
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include "sockproxy_epp.h"
+*/
+import "C"
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"unsafe"
+
+	tk "github.com/loxilb-io/loxilib"
+
+	cmn "github.com/loxilb-io/loxilb/common"
+	"github.com/loxilb-io/loxilb/pkg/epp"
+)
+
+// eppMaxInflight bounds the requests waiting on EPPs at once; a submit
+// past it is refused (sid 0) and the rule's failure mode applies.
+const eppMaxInflight = 65536
+
+var (
+	eppClient   = epp.NewClient()
+	eppRulesMu  sync.RWMutex
+	eppRules    = make(map[uint32]epp.RuleCfg) // rule number -> EPP config
+	eppNextSid  atomic.Uint64
+	eppFlights  sync.Map // sid (uint64) -> *eppFlight
+	eppInflight atomic.Int64
+)
+
+// eppFlight is one request between its submit and its last response event.
+type eppFlight struct {
+	sid    uint64
+	fd     int
+	gen    uint64
+	ns     unsafe.Pointer
+	ctx    context.Context    // bounds the request phase; cancelled by end()
+	cancel context.CancelFunc // so an abort while the EPP is still deciding ends the stream now
+	mu     sync.Mutex
+	stream *epp.Stream // nil until the decision is OK; nil again once ended
+	ended  bool
+}
+
+// eppRuleRegister records (or clears) the EPP configuration of a rule by
+// its number. Called by the rule layer whenever a rule is stored.
+func eppRuleRegister(ruleNum uint64, serv *cmn.LbServiceArg) {
+	eppRulesMu.Lock()
+	defer eppRulesMu.Unlock()
+	if serv == nil || serv.EppEndpoint == "" {
+		delete(eppRules, uint32(ruleNum))
+		return
+	}
+	eppRules[uint32(ruleNum)] = epp.RuleCfg{
+		Endpoint:    serv.EppEndpoint,
+		FailureMode: serv.EppFailureMode,
+		TimeoutMs:   serv.EppTimeoutMs,
+		Plaintext:   serv.EppPlaintext,
+	}
+}
+
+func eppRuleUnregister(ruleNum uint64) {
+	eppRulesMu.Lock()
+	delete(eppRules, uint32(ruleNum))
+	eppRulesMu.Unlock()
+}
+
+func eppRuleLookup(svcID uint32) (epp.RuleCfg, bool) {
+	eppRulesMu.RLock()
+	cfg, ok := eppRules[svcID]
+	eppRulesMu.RUnlock()
+	return cfg, ok
+}
+
+// EppInflight reports the requests currently between submit and their last
+// response event (diagnostic).
+func EppInflight() int { return int(eppInflight.Load()) }
+
+// EppPendingDecisions reports the decisions the C side table still holds
+// (diagnostic).
+func EppPendingDecisions() int { return int(C.epp_pending_count()) }
+
+//export llb_epp_submit
+func llb_epp_submit(svcID C.uint32_t, ns unsafe.Pointer, fd C.int, gen C.uint64_t,
+	reqHdrs *C.char, reqHdrsLen C.int, body *C.char, bodyLen C.int,
+	subset *C.char, subsetLen C.int) C.uint64_t {
+	defer cgoRecover("llb_epp_submit")
+
+	cfg, ok := eppRuleLookup(uint32(svcID))
+	if !ok {
+		tk.LogIt(tk.LogDebug, "[EPP] submit fd=%d: rule %d has no EPP configuration\n", int(fd), uint32(svcID))
+		return 0
+	}
+	if eppInflight.Load() >= eppMaxInflight {
+		tk.LogIt(tk.LogWarning, "[EPP] submit fd=%d: %d requests already waiting on EPPs; refused\n", int(fd), eppMaxInflight)
+		return 0
+	}
+	head := C.GoBytes(unsafe.Pointer(reqHdrs), reqHdrsLen)
+	req, err := epp.ParseHTTP1Request(head, "http")
+	if err != nil {
+		tk.LogIt(tk.LogWarning, "[EPP] submit fd=%d: %v\n", int(fd), err)
+		return 0
+	}
+	if bodyLen > 0 {
+		req.Body = C.GoBytes(unsafe.Pointer(body), bodyLen)
+	}
+	if subsetLen > 0 {
+		for _, s := range strings.Split(C.GoStringN(subset, subsetLen), ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				req.Subset = append(req.Subset, s)
+			}
+		}
+	}
+	sid := eppNextSid.Add(1)
+	fl := &eppFlight{sid: sid, fd: int(fd), gen: uint64(gen), ns: ns}
+	fl.ctx, fl.cancel = context.WithCancel(context.Background())
+	eppFlights.Store(sid, fl)
+	eppInflight.Add(1)
+	go fl.run(cfg, req)
+	return C.uint64_t(sid)
+}
+
+// run is the request phase on its own goroutine: the ext_proc exchange,
+// then the decision handed to C from this thread.
+func (fl *eppFlight) run(cfg epp.RuleCfg, req *epp.Request) {
+	defer cgoRecover("eppFlight.run")
+	dec, stream := eppClient.Submit(fl.ctx, cfg, req)
+	if dec.Status == epp.StatusError && fl.ctx.Err() == nil {
+		tk.LogIt(tk.LogInfo, "[EPP] sid=%d fd=%d: %v\n", fl.sid, fl.fd, dec.Err)
+	}
+	fl.mu.Lock()
+	fl.stream = stream
+	fl.mu.Unlock()
+
+	rc := eppComplete(fl, dec)
+	if rc != 0 || stream == nil {
+		// Nobody will route on this decision (slot gone) or nothing stays
+		// open for a response phase: the flight is over now.
+		if rc != 0 && stream != nil {
+			stream.Abort()
+		}
+		fl.end()
+	}
+}
+
+// eppComplete marshals the decision into struct epp_result and hands it to
+// C, which copies what it keeps before returning.
+func eppComplete(fl *eppFlight, dec *epp.Decision) int {
+	var r C.struct_epp_result
+	C.memset(unsafe.Pointer(&r), 0, C.sizeof_struct_epp_result)
+	var keep []unsafe.Pointer
+	cbuf := func(b []byte) (*C.char, C.int) {
+		if len(b) == 0 {
+			return nil, 0
+		}
+		p := C.CBytes(b)
+		keep = append(keep, p)
+		return (*C.char)(p), C.int(len(b))
+	}
+	defer func() {
+		for _, p := range keep {
+			C.free(p)
+		}
+	}()
+
+	switch dec.Status {
+	case epp.StatusOK:
+		r.status = C.EPP_RES_OK
+		n := 0
+		for _, c := range dec.Candidates {
+			if n == C.EPP_MAX_CANDS || len(c) >= C.EPP_CAND_LEN {
+				break
+			}
+			cs := C.CString(c)
+			C.strncpy(&r.cands[n][0], cs, C.EPP_CAND_LEN-1)
+			C.free(unsafe.Pointer(cs))
+			n++
+		}
+		r.ncands = C.int(n)
+		r.hdr_set, r.hdr_set_len = cbuf([]byte(eppHeaderLines(dec.HdrSet)))
+		var del strings.Builder
+		for _, k := range dec.HdrDel {
+			del.WriteString(k)
+			del.WriteString("\r\n")
+		}
+		r.hdr_del, r.hdr_del_len = cbuf([]byte(del.String()))
+		if dec.BodyChanged {
+			r.new_body, r.new_body_len = cbuf(dec.NewBody)
+		}
+	case epp.StatusImmediate:
+		r.status = C.EPP_RES_IMMEDIATE
+		r.imm_code = C.int(dec.ImmCode)
+		r.imm_body, r.imm_body_len = cbuf(dec.ImmBody)
+		r.hdr_set, r.hdr_set_len = cbuf([]byte(eppHeaderLines(dec.ImmHeaders)))
+	default:
+		r.status = C.EPP_RES_ERROR
+	}
+	rc := int(C.proxy_epp_complete(fl.ns, C.int(fl.fd), C.uint64_t(fl.gen), C.uint64_t(fl.sid), &r))
+	if rc != 0 {
+		tk.LogIt(tk.LogDebug, "[EPP] sid=%d fd=%d: decision not delivered (%d)\n", fl.sid, fl.fd, rc)
+	}
+	return rc
+}
+
+// eppHeaderLines renders headers as the "k: v\r\n" lines the C ABI takes.
+func eppHeaderLines(hdrs []epp.Header) string {
+	var b strings.Builder
+	for _, h := range hdrs {
+		b.WriteString(h.Key)
+		b.WriteString(": ")
+		b.WriteString(h.Value)
+		b.WriteString("\r\n")
+	}
+	return b.String()
+}
+
+// end closes the flight once: the stream is aborted if still open.
+func (fl *eppFlight) end() {
+	fl.mu.Lock()
+	if fl.ended {
+		fl.mu.Unlock()
+		return
+	}
+	fl.ended = true
+	s := fl.stream
+	fl.stream = nil
+	fl.mu.Unlock()
+	fl.cancel() // a Submit still waiting returns now and aborts its stream
+	if s != nil {
+		s.Abort()
+	}
+	eppFlights.Delete(fl.sid)
+	eppInflight.Add(-1)
+}
+
+//export llb_epp_resp_event
+func llb_epp_resp_event(sid C.uint64_t, kind C.int, httpStatus C.int,
+	respHdrs *C.char, respHdrsLen C.int, served *C.char, servedLen C.int) {
+	defer cgoRecover("llb_epp_resp_event")
+	v, ok := eppFlights.Load(uint64(sid))
+	if !ok {
+		return
+	}
+	fl := v.(*eppFlight)
+	switch int(kind) {
+	case C.EPP_EV_RESP_HEADERS:
+		var hdrs []epp.Header
+		if respHdrsLen > 0 {
+			hdrs = eppParseHeaderLines(C.GoStringN(respHdrs, respHdrsLen))
+		}
+		servedStr := ""
+		if servedLen > 0 {
+			servedStr = C.GoStringN(served, servedLen)
+		}
+		status := int(httpStatus)
+		fl.mu.Lock()
+		s := fl.stream
+		fl.mu.Unlock()
+		if s != nil {
+			go func() {
+				defer cgoRecover("eppFlight.responseHeaders")
+				if err := s.ReportResponseHeaders(status, hdrs, servedStr); err != nil {
+					tk.LogIt(tk.LogDebug, "[EPP] sid=%d: response headers report: %v\n", fl.sid, err)
+				}
+			}()
+		}
+	case C.EPP_EV_RESP_EOS:
+		fl.mu.Lock()
+		s := fl.stream
+		fl.stream = nil
+		fl.mu.Unlock()
+		if s != nil {
+			go func() {
+				defer cgoRecover("eppFlight.responseEnd")
+				if err := s.ReportResponseEnd(); err != nil {
+					tk.LogIt(tk.LogDebug, "[EPP] sid=%d: end-of-stream report: %v\n", fl.sid, err)
+				}
+				fl.end()
+			}()
+		} else {
+			fl.end()
+		}
+	default: // EPP_EV_ABORT
+		fl.end()
+	}
+}
+
+// eppParseHeaderLines reads "k: v\r\n" lines back into headers.
+func eppParseHeaderLines(raw string) []epp.Header {
+	var out []epp.Header
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimRight(line, "\r")
+		k, v, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		out = append(out, epp.Header{Key: strings.ToLower(strings.TrimSpace(k)), Value: strings.TrimSpace(v)})
+	}
+	return out
+}

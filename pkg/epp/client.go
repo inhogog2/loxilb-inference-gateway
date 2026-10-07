@@ -59,8 +59,8 @@ const (
 	HeaderSubset            = "x-gateway-destination-endpoint-subset"
 	MetadataNamespace       = "envoy.lb"
 	MetadataSubsetNamespace = "envoy.lb.subset_hint"
-	// bodyChunk bounds one RequestBody message; the EPP reassembles.
-	bodyChunk = 64 * 1024
+	// BodyChunk bounds one RequestBody message; the EPP reassembles.
+	BodyChunk = 64 * 1024
 	// responseDrain bounds how long the end-of-stream report waits for
 	// the EPP to close its side before the stream is torn down anyway.
 	responseDrain = 2 * time.Second
@@ -275,8 +275,8 @@ func (s *Stream) sendRequest(req *Request) error {
 	if err := s.stream.Send(first); err != nil {
 		return fmt.Errorf("epp: send headers: %w", err)
 	}
-	for off := 0; off < len(req.Body); off += bodyChunk {
-		end := off + bodyChunk
+	for off := 0; off < len(req.Body); off += BodyChunk {
+		end := off + BodyChunk
 		if end > len(req.Body) {
 			end = len(req.Body)
 		}

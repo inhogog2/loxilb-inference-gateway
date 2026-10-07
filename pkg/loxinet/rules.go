@@ -4649,6 +4649,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		eRule.eppFailureMode = serv.EppFailureMode
 		eRule.eppTimeoutMs = serv.EppTimeoutMs
 		eRule.eppPlaintext = serv.EppPlaintext
+		eppRuleRegister(eRule.ruleNum, &serv)
 		eRule.chwblPrefixHashLevel = serv.CHWBLPrefixHashLevel
 		eRule.chwblPrefixHashFlags = serv.CHWBLPrefixHashFlags
 		eRule.chwblMeanLoadFactor = serv.CHWBLMeanLoadFactor
@@ -5087,6 +5088,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	R.tables[RtLB].eMap[rt.ruleKey()] = r
 	if r.ruleNum < RtMaximumLbs {
 		R.tables[RtLB].rArr[r.ruleNum] = r
+		eppRuleRegister(r.ruleNum, &serv) // the EPP client resolves the rule by this number
 	}
 	// register id->rule. Runs on both live add and boot replay
 	// (nlp.go applyLoadBalancerConfig -> NetLbRuleAdd -> AddLbRule), so the index
@@ -5459,6 +5461,7 @@ func (R *RuleH) DeleteLbRule(serv cmn.LbServiceArg) (int, error) {
 	l7ClearAttached(serv.ServIP, serv.ServPort, serv.Proto)
 	if rule.ruleNum < RtMaximumLbs {
 		R.tables[RtLB].rArr[rule.ruleNum] = nil
+		eppRuleUnregister(rule.ruleNum)
 	}
 
 	R.deleteVIPSys(rule)
