@@ -4725,9 +4725,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			}
 		}
 		DpBrokerSyncBarrier(mh.dp)
-		if lBActs.mode == cmn.LBModeFullProxy && eRule.sync != 0 {
+		if lBActs.mode == cmn.LBModeFullProxy && eRule.sync != 0 && !R.lbStandbyKeeps(eRule) {
 			if !backendTLSStaged {
-				return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(false)}
+				return RuleArgsErr, lbPushRefusedError(eRule.tuples.l3Dst.addr.IP, false)
 			}
 			// The listener still runs the policy the rule had. Put the
 			// rule back to it and push once more, so that what is stored,
@@ -4737,7 +4737,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			DpBrokerSyncBarrier(mh.dp)
 			tk.LogIt(tk.LogError, "lb-rule %s backend TLS policy not replaced, the previous policy stays (sync %d)\n",
 				eRule.tuples.String(), eRule.sync)
-			return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(true)}
+			return RuleArgsErr, lbPushRefusedError(eRule.tuples.l3Dst.addr.IP, true)
 		}
 		eRule.backendTLSKept = false
 		if chwblTxn {
@@ -5137,14 +5137,15 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	// taken back out, so the caller is told and nothing is left to be retried
 	// behind its back. A restored configuration is kept whole instead and the
 	// rule is retried, as before.
-	if lBActs.mode == cmn.LBModeFullProxy && r.sync != 0 && !lbConfigReplay(&serv) {
+	if lBActs.mode == cmn.LBModeFullProxy && r.sync != 0 && !lbConfigReplay(&serv) && !R.lbStandbyKeeps(r) {
 		tk.LogIt(tk.LogError, "lb-rule %s not installed by the data plane, removed (sync %d)\n",
 			r.tuples.String(), r.sync)
+		refusal := lbPushRefusedError(r.tuples.l3Dst.addr.IP, false)
 		if _, derr := R.DeleteLbRule(serv); derr != nil {
 			tk.LogIt(tk.LogError, "lb-rule %s could not be removed after a refused install: %v\n",
 				r.tuples.String(), derr)
 		}
-		return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(false)}
+		return RuleArgsErr, refusal
 	}
 	R.flushLBCtEntries(r, CtFlushRidZeroOnly)
 
