@@ -20,7 +20,9 @@
 //
 // and appends the nonce of the request (query argument "nonce") to the
 // receipt file. A nonce in the receipt file is a request that reached this
-// server; a nonce that is not there did not.
+// server; a nonce that is not there did not. A request with the query
+// argument "wait" (milliseconds) is answered after that long: the receipt is
+// written first, so a request that is waiting has provably arrived.
 //
 // pair is a client that sends two requests on one connection: the first at
 // once, the second when the gate file exists. It prints one line for each:
@@ -54,6 +56,7 @@ import (
 	"net/http/httptrace"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -297,6 +300,9 @@ func cmdServe(args []string) {
 				f.Close()
 			}
 			mu.Unlock()
+		}
+		if ms, err := strconv.Atoi(r.URL.Query().Get("wait")); err == nil && ms > 0 {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
 		}
 		fmt.Fprintf(w, "name=%s proto=%s peer=%s sni=%s nonce=%s\n", *name, r.Proto, peer, sni, nonce)
 	})

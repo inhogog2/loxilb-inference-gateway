@@ -49,6 +49,13 @@ gw_pid() { $dexec llb1 pidof loxilb 2>/dev/null | tr -d '\r'; }
 dp_log() { $dexec llb1 cat /var/log/loxilbdp.log 2>/dev/null; }
 replaced() { dp_log | grep -c ":$1 rule [0-9]* backend TLS policy replaced"; }
 kept() { dp_log | grep -c ":$1 rule [0-9]* backend TLS policy not replaced"; }
+# Client connections of a listener closed because their backend connection
+# was made under a policy that has since been replaced, by the reason logged.
+drained() { dp_log | grep -c ":$1 backend TLS policy replaced: closing client fd=[0-9]*, .*($2)"; }
+expect_drained() { # port, reason, count before, seconds to wait, what
+  for i in $(seq 1 $4); do [ "$(drained $1 "$2")" -gt "$3" ] && break; sleep 1; done
+  [ "$(drained $1 "$2")" -gt "$3" ] && pass "$5" || fail "not seen in the data plane log within $4 s: $5"
+}
 # Failed TLS handshakes of the gateway with one backend.
 hs_failed() { dp_log | grep -cF "ssl-connect $1:$2(failed)"; }
 # Backend legs that failed after their handshake, before any response.
@@ -431,6 +438,13 @@ pair 2052 ""
 n=$(replaced 2052)
 rc=$(post_rule 2052 $EP1 9443 ", $VERIFY"', "backend_client_cert_id": "qual-client-ecdsa"'"$H2"); echo "  POST -> $rc"
 expect_replaced 2052 $n
+# The pass that closes HTTP/1.1 client connections made under a replaced
+# policy runs once a second and must leave this connection alone. Three
+# seconds is at least two passes; that this wait is long enough to catch a
+# pass that does close it is what the scenario's mutation run checks.
+sleep 3
+[ "$(drained 2052 "no answer owed")" == "0" ] && pass "three seconds after the change the HTTP/2 client connection has not been closed" \
+  || fail "the HTTP/2 client connection was closed after the policy change"
 pair_second
 echo "  record: case='one HTTP/2 client connection' first='${P_FIRST:0:170}' second='${P_SECOND:0:170}' generation=$(generation 2052)"
 [[ "$P_SECOND" == "second status=200 reused=true "* ]] && pass "the second stream is served on the same client connection" \
@@ -440,23 +454,73 @@ echo "  record: case='one HTTP/2 client connection' first='${P_FIRST:0:170}' sec
   || fail "the second stream did not travel under the new policy: ${P_SECOND:0:200}"
 
 echo "One HTTP/1.1 client connection across a policy change"
-# A policy change does not re-create the listener, so a client connection
-# that is open survives it. Which policy its next request travels under is
-# recorded and not judged here; a connection opened after the change travels
-# under the new one, which every other leg of this scenario judges.
+# A relayed HTTP/1.1 client keeps the backend connection it has, so a policy
+# change reaches it by ending the client connection once nothing is owed on
+# it. The client then connects again, and that connection is made under the
+# new policy.
 pair 2051 -http1
 [[ "$P_FIRST" == "first status=200 "*"peer=$(fp client-ecdsa) "* && "$(receipt_of good $P_N1)" == "1" ]] \
   && pass "the first request is served with the client certificate of the policy in service" \
   || fail "the first request on the connection: ${P_FIRST:0:200}"
-n=$(replaced 2051)
+n=$(replaced 2051); d=$(drained 2051 "no answer owed")
 rc=$(post_rule 2051 $EP1 9443 ", $VERIFY"', "backend_client_cert_id": "qual-client-rsa"'); echo "  POST -> $rc"
 expect_replaced 2051 $n
+expect_drained 2051 "no answer owed" $d 15 "the idle client connection made under the earlier policy was closed"
 pair_second
 echo "  record: case='one HTTP/1.1 client connection' first='${P_FIRST:0:170}' second='${P_SECOND:0:170}' generation=$(generation 2051)"
-[[ "$P_SECOND" == "second status=200 reused=true "* && "$(receipt_of good $P_N2)" == "1" ]] \
-  && pass "the client connection outlived the change and its next request was served" \
-  || fail "the client connection did not outlive the policy change: ${P_SECOND:0:200}"
+[[ "$P_SECOND" == "second status=200 reused=false "* && "$(receipt_of good $P_N2)" == "1" ]] \
+  && pass "the client's next request was served on a new connection" \
+  || fail "the client's next request after the change: ${P_SECOND:0:200}"
+[[ "$P_SECOND" == *"peer=$(fp client-rsa) "* ]] \
+  && pass "and reached the backend with the client certificate of the new policy" \
+  || fail "the next request did not travel under the new policy: ${P_SECOND:0:200}"
 expect_served "a connection opened after the change" 2051 http1.1 good client-rsa none
+
+echo "A request in flight across a policy change"
+# The answer to a request that was forwarded before the change is not cut:
+# the connection is closed after it, not during it.
+seq=$((seq + 1)); w="q$RUN-$seq"
+$hexec l3h1 curl -s --http1.1 --cacert pki/ca-a.crt --max-time 30 -o pki/inflight.out \
+  -w '%{http_code} %{exitcode}' "https://$VIP:2051/?nonce=$w&wait=5000" > pki/inflight.code 2>/dev/null &
+w_pid=$!
+for i in $(seq 1 50); do [ "$(receipts $w)" == "1" ] && break; sleep 0.1; done
+[ "$(receipts $w)" == "1" ] && pass "a request is waiting for its answer at the backend" || fail "precondition: the slow request did not reach the backend"
+n=$(replaced 2051); d=$(drained 2051 "no answer owed")
+rc=$(post_rule 2051 $EP1 9443 ", $VERIFY"', "backend_client_cert_id": "qual-client-ecdsa"'); echo "  POST -> $rc"
+expect_replaced 2051 $n
+sleep 2
+[ "$(drained 2051 "no answer owed")" == "$d" ] && [ "$(drained 2051 "an answer still owed after the bound")" == "0" ] \
+  && pass "two passes later the connection with an answer owed is still open" \
+  || fail "a connection with an answer owed was closed before the bound"
+wait $w_pid
+echo "  record: case='a request in flight' nonce=$w answer='$(cat pki/inflight.code) $(head -c 160 pki/inflight.out)'"
+[ "$(cat pki/inflight.code)" == "200 0" ] && grep -q "peer=$(fp client-rsa) .*nonce=$w" pki/inflight.out \
+  && pass "the request in flight got its whole answer, from the connection it was sent on" \
+  || fail "the request in flight was not answered whole: $(cat pki/inflight.code) $(head -c 160 pki/inflight.out)"
+expect_served "a connection opened after that change" 2051 http1.1 good client-ecdsa none
+
+echo "An answer that does not end within the bound"
+# A connection that never reaches a point where nothing is owed is closed
+# when the bound (30 s) is up, and not before.
+seq=$((seq + 1)); w="q$RUN-$seq"
+$hexec l3h1 curl -s --http1.1 --cacert pki/ca-a.crt --max-time 90 -o /dev/null \
+  -w '%{http_code} %{exitcode} %{time_total}' "https://$VIP:2051/?nonce=$w&wait=60000" > pki/bound.code 2>/dev/null &
+w_pid=$!
+for i in $(seq 1 50); do [ "$(receipts $w)" == "1" ] && break; sleep 0.1; done
+[ "$(receipts $w)" == "1" ] && pass "a request that will not be answered for a minute is at the backend" || fail "precondition: the slow request did not reach the backend"
+n=$(replaced 2051); d=$(drained 2051 "an answer still owed after the bound"); t0=$(date +%s)
+rc=$(post_rule 2051 $EP1 9443 ", $VERIFY"', "backend_client_cert_id": "qual-client-rsa"'); echo "  POST -> $rc"
+expect_replaced 2051 $n
+sleep 20
+[ "$(drained 2051 "an answer still owed after the bound")" == "$d" ] && kill -0 $w_pid 2>/dev/null \
+  && pass "20 s after the change the connection is still open" || fail "the connection was closed before the bound"
+expect_drained 2051 "an answer still owed after the bound" $d 20 "the connection was closed when the bound was up"
+wait $w_pid; t1=$(date +%s)
+echo "  record: case='an answer that does not end' nonce=$w curl='$(cat pki/bound.code)' closed_after=$((t1 - t0))s"
+[[ "$(cat pki/bound.code)" != "200 0 "* ]] && [ $((t1 - t0)) -ge 28 ] && [ $((t1 - t0)) -le 40 ] \
+  && pass "the client's request ended $((t1 - t0)) s after the change, without an answer" \
+  || fail "the request ended after $((t1 - t0)) s with '$(cat pki/bound.code)', want no answer at about 30 s"
+expect_served "a connection opened after the bound" 2051 http1.1 good client-rsa none
 
 echo "A client certificate rotated under its ID"
 expect_served "before the rotation" 2051 http1.1 good client-rsa none

@@ -84,7 +84,7 @@ bpftool map list  | head
 | `502` (h1) / `503` (h2) on every request after verification was enabled | No endpoint passes: wrong CA, expired, or the certificate does not name the endpoint | Endpoint IP as IP SAN, or set `backend_tls_server_name` to a DNS SAN the certificates carry |
 | `502` (h1) / `503` (h2) `backend_unreachable` on a `security=2` rule, and `ssl-read <address>:<port>(failed after handshake, before any response)` in the data plane log | Backend requires a client certificate; the rule names none, or names one the backend does not accept (the listener certificate is no longer presented). The alert in the log line says which | Register a `usage: client` entry and set `backend_client_cert_id` |
 | `backend_tls_effective.status` = `failed` | Listener could not load a rotated certificate; it runs the earlier context | `PUT /config/cert/{certId}` again with valid material |
-| Policy change not seen by long-lived clients | A rule that relays without inspecting requests keeps a client on its backend connection | Delete and re-create the rule |
+| A keep-alive HTTP/1.1 client is disconnected after a backend TLS policy change or a certificate rotation | Expected on a rule that relays without inspecting requests: the client connection is closed once nothing is owed on it (at the latest 30 s after the change), so that its next connection is made under the new policy. The data plane log has `backend TLS policy replaced: closing client` | None: the client reconnects. A request that was still unanswered after 30 s is cut; retry it |
 | mTLS probe can't see cert in netns | Cert not visible to `ip netns exec` probe | Place fixtures where the netns probe reads them |
 
 ---
