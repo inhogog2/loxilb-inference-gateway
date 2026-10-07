@@ -500,3 +500,52 @@ func TestEppFailureHandlingAndMetrics(t *testing.T) {
 		eppTestSettled(t)
 	})
 }
+
+// Two requests on one keep-alive connection are two EPP decisions: the
+// second must not ride the first one's state (it would skip the EPP and
+// take the rule's selector).
+func TestEppKeepAliveRequestsEachAskTheEPP(t *testing.T) {
+	if mh.zr == nil || mh.dpEbpf == nil {
+		t.Skip("loxinet harness not initialized (run the whole package as root)")
+	}
+	_, epA, _ := eppTestBackendSeen(t, "a")
+	_, epB, _ := eppTestBackendSeen(t, "b")
+	f := epptest.New("echo")
+	f.Dest = eppAddr(epB)
+	addr, stop := epptest.Start(t, f, false)
+	defer stop()
+	eppTestRule(t, 28140, addr, cmn.EppFailureModeFailClose, 3000, epA, epB)
+	body := `{"model":"alias","prompt":"hello"}`
+
+	conn, err := net.Dial("tcp", net.JoinHostPort(eppTestVIP, "28140"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	rd := bufio.NewReader(conn)
+	for i := 1; i <= 3; i++ {
+		fmt.Fprintf(conn, "POST /v1/completions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+		resp, err := http.ReadResponse(rd, nil)
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || !strings.Contains(string(b), `"served":"b"`) {
+			t.Fatalf("request %d on the kept connection: code=%d body=%q (want the EPP's pod b)", i, resp.StatusCode, b)
+		}
+		select {
+		case <-f.StreamClosed:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("request %d: the EPP stream did not end", i)
+		}
+	}
+	f.Mu.Lock()
+	streams := f.Streams
+	f.Mu.Unlock()
+	if streams != 3 {
+		t.Fatalf("the EPP saw %d streams for 3 keep-alive requests", streams)
+	}
+	eppTestSettled(t)
+}

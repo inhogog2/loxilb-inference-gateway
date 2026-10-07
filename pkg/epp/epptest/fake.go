@@ -48,6 +48,7 @@ type Fake struct {
 	Dest string
 
 	Mu           sync.Mutex
+	Streams      int // ext_proc streams opened so far
 	ReqHeaders   map[string]string
 	Subset       []string
 	Body         []byte
@@ -66,6 +67,9 @@ func hv(k, v string) *corev3.HeaderValueOption {
 }
 
 func (f *Fake) Process(st extprocv3.ExternalProcessor_ProcessServer) error {
+	f.Mu.Lock()
+	f.Streams++
+	f.Mu.Unlock()
 	defer func() { f.StreamClosed <- struct{}{} }()
 	var body []byte
 	headersEOS := false

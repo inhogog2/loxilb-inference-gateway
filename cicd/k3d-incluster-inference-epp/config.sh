@@ -9,9 +9,21 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 
 igw_cluster_up igw-epp            || exit 1
-igw_prepare_images                || exit 1
-igw_import_images                 || exit 1
+# Only the loxilb image: this scenario needs no kube-loxilb (rules over REST).
+docker image inspect "$IGW_IMAGE" >/dev/null 2>&1 || docker pull -q "$IGW_IMAGE" >/dev/null || exit 1
+say "importing $IGW_IMAGE"; "$K3D" image import "$IGW_IMAGE" -c "$CLUSTER" >/dev/null || exit 1
 say "loxilb (in-cluster DaemonSet)";      igw_deploy_loxilb      || exit 1
+# The manifest names :latest; this scenario tests the image it was given.
+if [ "$IGW_IMAGE" != "ghcr.io/loxilb-io/loxilb-inference-gateway:latest" ]; then
+  cname=$(kubectl -n kube-system get ds loxilb-lb -o jsonpath='{.spec.template.spec.containers[0].name}')
+  kubectl -n kube-system set image "ds/loxilb-lb" "$cname=$IGW_IMAGE" >/dev/null || exit 1
+  kubectl -n kube-system rollout status ds/loxilb-lb --timeout=180s >/dev/null || exit 1
+  for i in $(seq 1 30); do
+    curl -s --max-time 3 "http://$NODE_IP:11111/netlox/v1/version" | grep -q '"product":"loxilb-inference-gateway"' && break
+    sleep 2
+  done
+  say "loxilb runs $IGW_IMAGE"
+fi
 say "mock vLLM servers";                  igw_deploy_mock        || exit 1
 say "client container";                   igw_client_up          || exit 1
 
