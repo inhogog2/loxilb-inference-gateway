@@ -28,6 +28,22 @@ post_rule() { # port, extra serviceArguments (JSON members, leading comma)
     { "endpointIP": "33.33.33.1", "targetPort": 8080, "weight": 1 }
   ]}'
 }
+# What GET reports for a rule's arguments and endpoints. The generation of
+# the backend TLS context counts installs, and a rule put back is installed
+# again, so it is left out.
+rule_of() { # port
+  $dexec llb1 curl -s $API/all | jq -cS --argjson p "$1" \
+    '.lbAttr[] | select(.serviceArguments.port==$p) | {a: (.serviceArguments | del(.backend_tls_effective.generation)), e: [.endpoints[] | {endpointIP, targetPort, weight}]}'
+}
+serves() { # port
+  local res=""
+  for i in $(seq 1 10); do
+    res=$($hexec l3h1 curl --max-time 10 -H "HOST: $VIP" --insecure -s https://$VIP:$1)
+    [[ "$res" == server[123] ]] && return 0
+    sleep 1
+  done
+  return 1
+}
 del_rule() {
   $dexec llb1 curl -s -o /dev/null -w '%{http_code}' -X DELETE \
     "$API/hosturl/$VIP/externalipaddress/$VIP/port/$1/protocol/tcp"
@@ -75,6 +91,35 @@ refused_leg() { # name, port, extra serviceArguments
   echo "  DELETE -> $(del_rule $port)"
 }
 
+# A replace the data plane refuses: the rule that was there stays as it was,
+# stored and installed, and the same request is not taken for "no change".
+replaced_leg() { # port
+  local port=$1 rc before seen res
+  echo "Leg refused-replace (port $port)"
+  rc=$(post_rule $port ', "inactiveTimeOut": 60')
+  [ "$rc" == "200" ] || { fail "precondition: the rule on $port was answered $rc"; return; }
+  serves $port || { fail "precondition: the rule on $port does not serve"; echo "  DELETE -> $(del_rule $port)"; return; }
+  before=$(rule_of $port); seen=$(not_installed $port)
+  rc=$(post_rule $port ', "inactiveTimeOut": 90, "tls_ciphers": "NOT-A-CIPHER"')
+  echo "  POST (replace) -> $rc"
+  [ "$rc" == "412" ] && pass "the replace the data plane did not install is answered 412" \
+    || fail "the refused replace was answered $rc, want 412"
+  [ "$(not_installed $port)" -gt "$seen" ] && pass "data plane logged the refusal" \
+    || fail "no refusal was logged for port $port: the replace did not reach the TLS context"
+  [ "$(rule_of $port)" == "$before" ] && pass "the rule reads back as it was" \
+    || fail "the refused values are stored: $(rule_of $port)"
+  serves $port && pass "the rule serves as before" || fail "the rule does not serve after the refused replace"
+  rc=$(post_rule $port ', "inactiveTimeOut": 90, "tls_ciphers": "NOT-A-CIPHER"')
+  [ "$rc" == "412" ] && pass "the same request again is refused again, not taken for no change" \
+    || fail "the same refused request was answered $rc the second time, want 412"
+  serves $port && pass "the rule still serves" || fail "the rule does not serve after the second refusal"
+  rc=$(post_rule $port ', "inactiveTimeOut": 90')
+  [ "$rc" == "200" ] && pass "the replace without the bad value is accepted" || fail "the valid replace was answered $rc, want 200"
+  [ "$(rule_of $port)" != "$before" ] && pass "the new value reads back" || fail "the valid replace was not stored"
+  serves $port && pass "the rule serves after the valid replace" || fail "the rule does not serve after the valid replace"
+  echo "  DELETE -> $(del_rule $port)"
+}
+
 $hexec l3ep1 node ../common/tcp_https_server.js server1 $VIP &
 track_helper
 $hexec l3ep2 node ../common/tcp_https_server.js server2 $VIP &
@@ -90,6 +135,11 @@ LEGS=${TLSCTX_LEGS:-frontend backend}
 # Frontend context: a cipher string no TLS library accepts.
 if [[ " $LEGS " == *" frontend "* ]]; then
   refused_leg frontend-ciphers 2030 ', "tls_ciphers": "NOT-A-CIPHER"'
+fi
+
+# The same refusal on a rule that exists.
+if [[ " $LEGS " == *" frontend "* ]]; then
+  replaced_leg 2034
 fi
 
 # Backend context: a client certificate ID whose files are not PEM.
