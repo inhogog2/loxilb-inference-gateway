@@ -189,9 +189,14 @@ Measured by `cicd/e2ehttpsproxy-betls`:
 
 | Case | What the client gets |
 |---|---|
-| No endpoint passes verification (another CA, an expired certificate, an address or name the certificate does not carry) | HTTP/1.1: `502` `backend_unreachable`. HTTP/2: `503`. No endpoint receives the request. |
-| An endpoint requires a client certificate, the rule names none, and the endpoint rejects the gateway only after the handshake completed (TLS 1.3) | The client connection is closed without an HTTP answer. |
+| No endpoint passes verification (another CA, an expired certificate, an address or name the certificate does not carry) | HTTP/1.1: `502` `backend_unreachable`. HTTP/2: `503` `backend_unreachable`. No endpoint receives the request. |
+| An endpoint requires a client certificate and the rule names none, or names one the endpoint does not accept. With TLS 1.3 the endpoint turns the gateway away only after the handshake completed. | The same answer: HTTP/1.1 `502`, HTTP/2 `503`, both `backend_unreachable`. No endpoint receives the request. The data plane log names the endpoint: `ssl-read <address>:<port>(failed after handshake, before any response)`, followed by the TLS alert when the endpoint sent one. |
 | A certificate rotation the data plane refuses (for example a key it does not accept) | `PUT` answers `400`; the rule reads `failed` and its `generation` does not move; traffic continues on the earlier context. |
+
+The gateway's own answer is a complete response. The HTTP/1.1 `502` carries `Content-Length` and
+`Connection: close`, and a TLS client is sent a close_notify before the connection is closed, so
+a client reads it as an answer and not as a connection that was cut. The JSON body names the
+error in `error`; the sentence beside it is in `detail` on HTTP/1.1 and in `message` on HTTP/2.
 
 ## 9. Upgrading
 

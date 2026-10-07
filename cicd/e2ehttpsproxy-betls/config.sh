@@ -54,6 +54,8 @@ $F leaf -ca pki/ca-a -out pki/default-ecdsa -alg ecdsa -ip 10.10.10.254 -usage b
 # Client certificates a rule can name.
 $F leaf -ca pki/ca-a -out pki/client-rsa -alg rsa -usage client
 $F leaf -ca pki/ca-a -out pki/client-ecdsa -alg ecdsa -usage client
+# A usable pair from a CA the backends do not accept client certificates from.
+$F leaf -ca pki/ca-b -out pki/client-otherca -alg rsa -usage client
 # A pair that is well formed but too weak for the data plane's TLS library.
 $F leaf -ca pki/ca-a -out pki/client-weak -alg rsa -bits 1024 -usage client
 
