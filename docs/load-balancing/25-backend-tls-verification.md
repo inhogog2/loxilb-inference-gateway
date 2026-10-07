@@ -94,17 +94,28 @@ check is not connected to; the request fails as it does for an endpoint that is 
 ## 4. Changing the policy of a rule that is serving
 
 Post the rule again with the changed arguments. The gateway builds the new backend TLS context
-first and puts it in service only when that succeeds; the listener is not re-created and client
-connections are not dropped.
+first and puts it in service only when that succeeds; the listener is not re-created.
 
 - Backend connections already established keep the context they were made with. A request or an
   HTTP/2 stream in flight finishes on its connection.
 - No new work starts on a connection made under the replaced policy. On a listener that inspects
   requests (AI gateway mode) the next keep-alive request gets a new backend connection; a new
   HTTP/2 stream is never added to a backend connection made under the replaced policy.
-- A client connection on a listener that relays bytes without inspecting requests stays bound to
-  its backend connection until the client closes it. To cut those over at once, delete and
-  re-create the rule.
+- An HTTP/1.1 client connection on a listener that relays bytes without inspecting requests keeps
+  the backend connection it has, so the gateway ends the client connection instead. It does so
+  within about a second when every request the client sent has been answered: an idle keep-alive
+  connection is closed, the client connects again, and the new connection is made under the new
+  policy. A request in flight is answered first. A connection that still has an answer owed 30
+  seconds after the change is closed then. Each such close is one line in the data plane log:
+  `<address>:<port> backend TLS policy replaced: closing client fd=<n>, its backend connection
+  was made under an earlier policy`, followed by `(no answer owed)` or `(an answer still owed
+  after the bound)`.
+- HTTP/2 client connections and AI gateway listeners are not closed: they move the next stream or
+  request to a new backend connection, as above.
+
+A client that sends a request at the moment its idle connection is closed sees that request
+fail, as it does when any server closes an idle keep-alive connection; HTTP clients retry it on
+a new connection.
 
 The request waits for the data plane. When the new context cannot be built, the answer is 400, the
 rule keeps the policy it had, in the gateway and on `GET`, and the listener goes on serving with
