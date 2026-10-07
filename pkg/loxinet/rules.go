@@ -6762,6 +6762,40 @@ func (r *ruleEnt) VIP2DP(work DpWorkT) int {
 }
 
 // LB2DP - Sync state of lb-rule entity to data-path
+// Endpoint Picker mode words of dp_proxy_tacts.epp_mode, mirroring
+// EPP_MODE_* in loxilb-ebpf/common/sockproxy.h.
+const (
+	eppDpModeOff       uint8 = 0
+	eppDpModeFailOpen  uint8 = 1
+	eppDpModeFailClose uint8 = 2
+)
+
+// eppDpMode is what the data plane receives for the rule's Endpoint
+// Picker: OFF unless the rule names an EPP, else its resolved failure mode.
+// The EPP address and TLS settings never cross into C — the Go ext_proc
+// client resolves them by the rule number the data plane hands back.
+func (r *ruleEnt) eppDpMode() uint8 {
+	if r.eppEndpoint == "" {
+		return eppDpModeOff
+	}
+	if r.eppFailureMode == cmn.EppFailureModeFailOpen {
+		return eppDpModeFailOpen
+	}
+	return eppDpModeFailClose
+}
+
+// eppDpTimeoutMs is the request-phase deadline the data plane receives:
+// 0 without an EPP, else the admission-resolved value (never 0).
+func (r *ruleEnt) eppDpTimeoutMs() uint32 {
+	if r.eppEndpoint == "" {
+		return 0
+	}
+	if r.eppTimeoutMs == 0 {
+		return cmn.EppDefaultTimeoutMs
+	}
+	return r.eppTimeoutMs
+}
+
 func (r *ruleEnt) LB2DP(work DpWorkT) int {
 
 	// [CP-DEBUG] Stage 3: LB2DP gate - log entry and addrRslv state
@@ -6849,6 +6883,8 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.KvEngineType = r.kvEngineType // engine + DP rank count
 	nWork.KvDpRankCount = r.kvDpRankCount
 	nWork.PDBootstrapPort = r.pdBootstrapPort
+	nWork.EppMode = r.eppDpMode() // Endpoint Picker: mode + deadline; address/TLS stay Go-side
+	nWork.EppTimeoutMs = r.eppDpTimeoutMs()
 	nWork.CatalogID = r.tracingCatalogID // Tracing catalog ID for deep inspection
 	nWork.MTLSFrontend = r.mtlsFrontend  // mTLS frontend configuration
 	nWork.MTLSBackend = r.mtlsBackend    // mTLS backend configuration

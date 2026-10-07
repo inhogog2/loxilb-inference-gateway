@@ -1885,6 +1885,11 @@ func DpLBRuleMod(w *LBDpWorkQ) int {
 	// is applied at proxy_add (pd_cache_threshold defaulting idiom lives C-side
 	// here so the wire value stays the operator's literal config).
 	dat.pd_bootstrap_port = C.uint16_t(w.PDBootstrapPort)
+	// Endpoint Picker: mode word + request-phase deadline. Zero on a rule
+	// without an EPP (byte-identical default); the address and TLS settings
+	// stay in Go, resolved by rule number.
+	dat.epp_mode = C.uint8_t(w.EppMode)
+	dat.epp_timeout_ms = C.uint32_t(w.EppTimeoutMs)
 
 	// Data-plane X-Api-Key enforcement. Set from the service's own policy and
 	// from NOTHING else — not from sse_mode, not from pd_disagg_mode. That

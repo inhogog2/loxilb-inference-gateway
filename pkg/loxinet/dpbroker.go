@@ -409,6 +409,8 @@ type LBDpWorkQ struct {
 	KvEngineType                string                  // KV-event engine: ""/"vllm" (default) or "sglang" (SGL-03)
 	KvDpRankCount               uint16                  // SGLang DP rank count (1..8, 0 ⇒ 1)
 	PDBootstrapPort             uint16                  // SGLang P/D bootstrap port on prefill EPs (0 ⇒ 8998 at proxy_add)
+	EppMode                     uint8                   // Endpoint Picker: 0 off, 1 FailOpen, 2 FailClose (EPP_MODE_* in sockproxy.h)
+	EppTimeoutMs                uint32                  // Endpoint Picker request-phase deadline in ms (0 when EppMode is off)
 	MTLSFrontend                *cmn.MTLSFrontendConfig // mTLS frontend configuration
 	MTLSBackend                 *cmn.MTLSBackendConfig  // mTLS backend configuration
 	// TLS-hardening scalars. All additive/default-off — empty/0
