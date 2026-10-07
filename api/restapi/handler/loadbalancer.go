@@ -669,6 +669,16 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	if lb.Serv.BackendKeepaliveIntervalSec != 0 {
 		tmpSvc.BackendKeepaliveIntervalSec = int32(lb.Serv.BackendKeepaliveIntervalSec)
 	}
+	// Member timeouts (ms) and the TLS hardening values, as the rule stores them.
+	tmpSvc.TimeoutMemberConnect = lb.Serv.TimeoutMemberConnect
+	tmpSvc.TimeoutMemberData = lb.Serv.TimeoutMemberData
+	tmpSvc.TimeoutTCPInspect = lb.Serv.TimeoutTcpInspect
+	tmpSvc.AlpnProtocols = lb.Serv.AlpnProtocols
+	tmpSvc.TLSCiphers = lb.Serv.TlsCiphers
+	tmpSvc.TLSVersions = lb.Serv.TlsVersions
+	tmpSvc.HstsMaxAge = lb.Serv.HstsMaxAge
+	tmpSvc.HstsIncludeSubdomains = lb.Serv.HstsIncludeSubdomains
+	tmpSvc.HstsPreload = lb.Serv.HstsPreload
 
 	// P/D disaggregation mode
 	if lb.Serv.PDDisaggMode {
@@ -818,6 +828,7 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 			ClientCaCertData: lb.Serv.MTLSFrontend.ClientCACertData,
 			RequireClientCn:  &requireClientCN,
 			ClientCnPattern:  lb.Serv.MTLSFrontend.ClientCNPattern,
+			ClientCrlPath:    lb.Serv.MTLSFrontend.ClientCRLPath,
 		}
 		tmpSvc.MtlsFrontend = mtlsFrontend
 	}

@@ -15,7 +15,7 @@ import (
 	"github.com/go-openapi/validate"
 )
 
-// Cert Managed PEM input and partial read model. POST currently returns empty 201, including when it mints an ID; callers cannot obtain that minted handle from the response. PUT uses the path ID and ignores body ID and hostnames. Known lifecycle gaps: duplicate POST persists before rejecting registration and can remove existing material; failed rotation does not roll back files; hostname ownership conflicts and multi-host swaps are not transactional; rotation retains the old hostname set. Do not claim atomic certificate transactions, automatic SAN migration, or verified zero downtime. GET returns no private-key material, although the shared schema still requires keyPem and the generated response can serialize it as null.
+// Cert Managed PEM input and partial read model. POST answers 201 with the certId in the body, including when it mints one. PUT uses the path ID and ignores body ID and hostnames. Known lifecycle gaps: duplicate POST persists before rejecting registration and can remove existing material; failed rotation does not roll back files; hostname ownership conflicts and multi-host swaps are not transactional; rotation retains the old hostname set. Do not claim atomic certificate transactions, automatic SAN migration, or verified zero downtime. GET returns no private-key material, although the shared schema still requires keyPem and the generated response can serialize it as null.
 //
 // swagger:model Cert
 type Cert struct {

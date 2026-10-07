@@ -677,7 +677,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	BackendKeepaliveIntervalSec int32 `json:"backend_keepalive_interval_sec,omitempty"`
 
-	// FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. GET reports this field only for FullProxy.
+	// FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. The default applies to a new rule; a replace that omits the field keeps the value the rule has. GET reports this field only for FullProxy.
 	// Enum: [http1 http2 both]
 	BackendProtocol *string `json:"backend_protocol,omitempty"`
 
