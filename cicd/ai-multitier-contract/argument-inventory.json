@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "0ecf7e0407e510ea4eee77d9480a18b13e9b00b38a9c3bcdbf9a1ab145496df8"
+    "swagger.yml": "9932ef4a04644b5631c47102bc4bdce519c1a4fa4acedde542812aeb51aad0d5"
   },
   "fields": [
     {
@@ -386,7 +386,7 @@
       "required": false,
       "contract": {
         "default": "http1",
-        "description": "FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. GET reports this field only for FullProxy.",
+        "description": "FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. The default applies to a new rule; a replace that omits the field keeps the value the rule has. GET reports this field only for FullProxy.",
         "enum": [
           "http1",
           "http2",

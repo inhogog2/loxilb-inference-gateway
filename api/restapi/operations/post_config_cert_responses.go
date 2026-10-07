@@ -17,11 +17,16 @@ import (
 const PostConfigCertCreatedCode int = 201
 
 /*
-PostConfigCertCreated Created
+PostConfigCertCreated Created. The body carries the certId the certificate is stored under.
 
 swagger:response postConfigCertCreated
 */
 type PostConfigCertCreated struct {
+
+	/*
+	  In: Body
+	*/
+	Payload *models.CertCreated `json:"body,omitempty"`
 }
 
 // NewPostConfigCertCreated creates PostConfigCertCreated with default headers values
@@ -30,12 +35,27 @@ func NewPostConfigCertCreated() *PostConfigCertCreated {
 	return &PostConfigCertCreated{}
 }
 
+// WithPayload adds the payload to the post config cert created response
+func (o *PostConfigCertCreated) WithPayload(payload *models.CertCreated) *PostConfigCertCreated {
+	o.Payload = payload
+	return o
+}
+
+// SetPayload sets the payload to the post config cert created response
+func (o *PostConfigCertCreated) SetPayload(payload *models.CertCreated) {
+	o.Payload = payload
+}
+
 // WriteResponse to the client
 func (o *PostConfigCertCreated) WriteResponse(rw http.ResponseWriter, producer runtime.Producer) {
 
-	rw.Header().Del(runtime.HeaderContentType) //Remove Content-Type on empty responses
-
 	rw.WriteHeader(201)
+	if o.Payload != nil {
+		payload := o.Payload
+		if err := producer.Produce(rw, payload); err != nil {
+			panic(err) // let the recovery middleware deal with this
+		}
+	}
 }
 
 // PostConfigCertBadRequestCode is the HTTP code returned for type PostConfigCertBadRequest
