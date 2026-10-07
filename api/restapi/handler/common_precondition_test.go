@@ -116,3 +116,21 @@ func TestPreconditionStatusReachesTheWire(t *testing.T) {
 		t.Fatalf("HTTP status written = %d, want 412", got)
 	}
 }
+
+// TestDataplaneInstallFailureIs412 pins the class of a full-proxy rule the
+// data plane did not install on an address the gateway holds: the request was
+// valid, so it is not answered as a malformed one, and the sentence that sends
+// the operator to the data plane log arrives verbatim.
+func TestDataplaneInstallFailureIs412(t *testing.T) {
+	const sentence = "the data plane did not install the rule: its listener or a TLS context could not be built, see the data plane log"
+	got := ResultErrorResponseError(&cmn.ServerPreconditionError{
+		Reason: cmn.ReasonLbDataplaneInstallFailed,
+		Err:    errors.New(sentence),
+	})
+	if got.Code != 412 {
+		t.Errorf("Code = %d, want 412", got.Code)
+	}
+	if got.Result != sentence {
+		t.Errorf("Result = %q, want the sentence verbatim", got.Result)
+	}
+}

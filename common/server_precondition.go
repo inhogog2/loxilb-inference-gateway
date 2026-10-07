@@ -68,4 +68,10 @@ const (
 	// ReasonLbRulesUnavailable: this gateway is not serving load-balancer
 	// rules at all (bgp-only mode), so no rule capability can be admitted.
 	ReasonLbRulesUnavailable = "LB_RULES_UNAVAILABLE"
+	// ReasonLbDataplaneInstallFailed: the data plane did not install a
+	// full-proxy rule although the address of its listener is one this
+	// gateway holds, so the cause is on the gateway (a TLS context that
+	// could not be built, a listener that could not be opened) and is
+	// written in the data plane log.
+	ReasonLbDataplaneInstallFailed = "LB_DATAPLANE_INSTALL_FAILED"
 )
