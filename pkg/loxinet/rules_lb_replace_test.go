@@ -165,3 +165,49 @@ func TestNameClass(t *testing.T) {
 		}
 	}
 }
+
+// A rule put back after a refused replace has the values it had, and keeps
+// what it has measured and been told by the data plane since.
+func TestReplaceUndoApply(t *testing.T) {
+	acts := &ruleLBActs{mode: cmn.LBModeFullProxy, sel: cmn.LbSelRr,
+		endPoints: []ruleLBEp{replaceTestEp("31.31.31.1", 8080)}}
+	acts.endPoints[0].epCreated = true
+	r := &ruleEnt{name: "before", iTO: 60, tlsCiphers: "", id: "id-1"}
+	r.act.action = acts
+	r.hChk.prbTimeo = 20
+
+	u := lbReplaceUndoOf(r)
+
+	// The replace writes into the rule, and the data plane answers.
+	r.name, r.iTO, r.tlsCiphers = "after", 90, "NOT-A-CIPHER"
+	r.hChk.prbTimeo = 40
+	acts.sel = cmn.LbSelHash
+	acts.endPoints = []ruleLBEp{replaceTestEp("31.31.31.1", 8080), replaceTestEp("31.31.31.2", 8080)}
+	acts.endPoints[0].weight = 9
+	r.sync = DpCreateErr
+	r.totalConns, r.stat.packets = 7, 11
+	kept := []*allowedSrcElem{{}}
+	r.srcList = kept
+
+	u.apply(r)
+
+	if r.name != "before" || r.iTO != 60 || r.tlsCiphers != "" || r.hChk.prbTimeo != 20 {
+		t.Errorf("declared values not put back: name %q iTO %d ciphers %q probe %d", r.name, r.iTO, r.tlsCiphers, r.hChk.prbTimeo)
+	}
+	got := r.act.action.(*ruleLBActs)
+	if got != acts {
+		t.Fatal("the rule's action was replaced, not written back into")
+	}
+	if got.sel != cmn.LbSelRr || len(got.endPoints) != 1 || got.endPoints[0].weight != 1 {
+		t.Errorf("selection or endpoints not put back: sel %v endpoints %+v", got.sel, got.endPoints)
+	}
+	if got.endPoints[0].epCreated {
+		t.Error("an endpoint put back is marked as having a probe, so the attach would skip it")
+	}
+	if r.sync != DpCreateErr || r.totalConns != 7 || r.stat.packets != 11 {
+		t.Errorf("what the data plane reported was rolled back: sync %d conns %d packets %d", r.sync, r.totalConns, r.stat.packets)
+	}
+	if len(r.srcList) != 1 || r.srcList[0] != kept[0] {
+		t.Error("the allowed sources registered by the caller were overwritten")
+	}
+}

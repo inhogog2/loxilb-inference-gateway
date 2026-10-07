@@ -135,6 +135,95 @@ func lbPushRefusedError(vip net.IP, policyKept bool) error {
 	}
 }
 
+// lbReplaceUndo is a full-proxy rule as it stood before a replace wrote
+// into it: the rule's own values, its endpoints and its allowed sources.
+type lbReplaceUndo struct {
+	ent  ruleEnt
+	acts ruleLBActs
+	srcs []string
+}
+
+func lbReplaceUndoOf(r *ruleEnt) *lbReplaceUndo {
+	acts, ok := r.act.action.(*ruleLBActs)
+	if !ok {
+		return nil
+	}
+	u := &lbReplaceUndo{ent: *r, acts: *acts}
+	u.acts.endPoints = snapshotLBEndpoints(acts.endPoints)
+	for _, src := range r.srcList {
+		u.srcs = append(u.srcs, src.srcPref.String())
+	}
+	return u
+}
+
+// apply writes the values back. What the rule has measured or been told by
+// the data plane since is not part of what a request declares and stays.
+func (u *lbReplaceUndo) apply(r *ruleEnt) {
+	live := *r
+	*r = u.ent
+	r.sync = live.sync
+	r.stat = live.stat
+	r.activeConns, r.totalConns = live.activeConns, live.totalConns
+	r.bytesIn, r.bytesOut = live.bytesIn, live.bytesOut
+	r.vllmScraper = live.vllmScraper
+	r.srcList = live.srcList
+
+	acts := r.act.action.(*ruleLBActs)
+	acts.mode, acts.sel = u.acts.mode, u.acts.sel
+	acts.endPoints = snapshotLBEndpoints(u.acts.endPoints)
+	for i := range acts.endPoints {
+		// Every probe was detached before; the attach registers them anew.
+		acts.endPoints[i].epCreated = false
+	}
+}
+
+// lbReplaceUndo puts a rule back to what it was before a replace the data
+// plane refused, and pushes it. The probes of the endpoints it has now are
+// detached under the settings they were attached with, and the ones it had
+// are attached again; the allowed sources it had are registered again.
+func (R *RuleH) lbReplaceUndo(r *ruleEnt, u *lbReplaceUndo, activateProbe bool) {
+	if u == nil {
+		return
+	}
+	acts := r.act.action.(*ruleLBActs)
+	R.modNatEpHost(r, acts.endPoints, false, activateProbe, r.egress)
+
+	// The sources the rule had are registered before the ones it has now
+	// are dropped, so a source in both sets is never without its entry.
+	var srcs []*allowedSrcElem
+	for _, pref := range u.srcs {
+		src, err := R.addAllowedLbSrc(pref, uint32(r.ruleNum))
+		if err != nil {
+			tk.LogIt(tk.LogError, "lb-rule %s allowed source %s not registered again: %v\n", r.tuples.String(), pref, err)
+			continue
+		}
+		srcs = append(srcs, src)
+	}
+	for _, src := range r.srcList {
+		R.deleteAllowedLbSrc(src.srcPref.String(), uint32(r.ruleNum))
+	}
+	r.srcList = srcs
+
+	if r.id != u.ent.id {
+		R.unregisterOpaqueID(r)
+	}
+	movedID := r.id != u.ent.id
+	catalogID := r.tracingCatalogID
+	u.apply(r)
+	if movedID {
+		R.registerOpaqueID(r)
+	}
+	if r.tracingCatalogID != 0 && r.tracingCatalogID != catalogID &&
+		mh.dpEbpf != nil && mh.dpEbpf.catalogSyncManager != nil {
+		_ = mh.dpEbpf.catalogSyncManager.AddServiceCatalogMapping(
+			r.tuples.l3Dst.addr.IP, r.tuples.l4Dst.valMin, r.tuples.l4Prot.val, r.tracingCatalogID)
+	}
+
+	R.modNatEpHost(r, acts.endPoints, true, activateProbe, r.egress)
+	R.electEPSrc(r)
+	r.DP(DpCreate)
+}
+
 // lbRulesOfBackendCert returns the full-proxy rules whose backend leg refers
 // to a certificate ID, in key order.
 func (R *RuleH) lbRulesOfBackendCert(certID string) []*ruleEnt {

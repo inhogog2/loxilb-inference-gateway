@@ -4581,6 +4581,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.DP(DpRemove)
 		}
 
+		// The rule as it stands, for a replace the data plane refuses.
+		replaceUndo := lbReplaceUndoOf(eRule)
+
 		eSrcList := eRule.srcList
 		eRule.srcList = nil
 
@@ -4838,7 +4841,21 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		DpBrokerSyncBarrier(mh.dp)
 		if lBActs.mode == cmn.LBModeFullProxy && eRule.sync != 0 && !R.lbStandbyKeeps(eRule) {
 			if !backendTLSStaged {
-				return RuleArgsErr, lbPushRefusedError(eRule.tuples.l3Dst.addr.IP, false)
+				// Taken first: it asks the host about the VIP, and the
+				// answer must be about the request that was refused.
+				refusal := lbPushRefusedError(eRule.tuples.l3Dst.addr.IP, false)
+				// The rule goes back to what it was and is pushed again,
+				// so that what is stored, what is reported and what is
+				// installed agree, and the same request can be sent again
+				// once its cause is gone.
+				if chwblTxn {
+					restoreCHWBLState()
+				}
+				R.lbReplaceUndo(eRule, replaceUndo, activateProbe)
+				DpBrokerSyncBarrier(mh.dp)
+				tk.LogIt(tk.LogError, "lb-rule %s replace not installed by the data plane, the rule is put back (sync %d)\n",
+					eRule.tuples.String(), eRule.sync)
+				return RuleArgsErr, refusal
 			}
 			// The listener still runs the policy the rule had. Put the
 			// rule back to it and push once more, so that what is stored,
