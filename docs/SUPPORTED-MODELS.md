@@ -136,6 +136,7 @@ Arguments beyond the engine's usual KV-event settings. A row without an entry ne
 | Qwen3.8-27B-FP8 | vllm v0.28.0 | `--max-num-seqs 64` on one 48 GB GPU |
 | Qwen3.8-27B-FP8 | vllm v0.28.0 | `VLLM_SSM_CONV_STATE_LAYOUT=DS` on both members of a prefill/decode pair |
 | Qwen3.8-27B-FP8 | sglang v0.5.18 | prefill/decode: start the decode engines without `--disaggregation-decode-enable-radix-cache`; SGLang refuses it for this model (state-space layers) and the decode engine exits at start |
+| Qwen3.8-27B-FP8 | sglang v0.5.18 | one pool of engines on one 48 GB GPU each: `--mem-fraction-static 0.85`. The engine keeps a prefix's recurrent state in a pool sized by this argument: 12 slots at 0.70 (two running requests, and a second request in flight evicts the saved state of other prefixes, whose next request is computed in full), 36 slots at 0.85 |
 | Qwen3.8-27B-FP8 | trtllm 1.3.0rc24 | `--max_batch_size 16` on one 48 GB GPU |
 | gpt-oss-20b | sglang v0.5.18 | SGLang 0.5.12–0.5.18 answer `/v1/tokenize` with HTTP 500 for this model (`model_max_length` beyond 64 bits): mount the fixed `serving_tokenize.py` from `cicd/kv-model-compat-pd/sglang-tokenize-fix/` (0.5.19 and later need nothing) |
 | gpt-oss-20b | sglang v0.5.18 | 48 GB GPU per member; alone on the GPU with `--mem-fraction-static` above 0.5 |
