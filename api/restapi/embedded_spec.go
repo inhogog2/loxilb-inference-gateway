@@ -1499,7 +1499,7 @@ func init() {
       "type": "object"
     },
     "Cert": {
-      "description": "Managed PEM input and partial read model. POST currently returns empty 201, including when it mints an ID; callers cannot obtain that minted handle from the response. PUT uses the path ID and ignores body ID and hostnames. Known lifecycle gaps: duplicate POST persists before rejecting registration and can remove existing material; failed rotation does not roll back files; hostname ownership conflicts and multi-host swaps are not transactional; rotation retains the old hostname set. Do not claim atomic certificate transactions, automatic SAN migration, or verified zero downtime. GET returns no private-key material, although the shared schema still requires keyPem and the generated response can serialize it as null.",
+      "description": "Managed PEM input and partial read model. POST answers 201 with the certId in the body, including when it mints one. PUT uses the path ID and ignores body ID and hostnames. Known lifecycle gaps: duplicate POST persists before rejecting registration and can remove existing material; failed rotation does not roll back files; hostname ownership conflicts and multi-host swaps are not transactional; rotation retains the old hostname set. Do not claim atomic certificate transactions, automatic SAN migration, or verified zero downtime. GET returns no private-key material, although the shared schema still requires keyPem and the generated response can serialize it as null.",
       "properties": {
         "certId": {
           "description": "Opaque handle, client-supplied or minted when absent/empty on POST. PUT uses the path handle. Current validation permits at most 63 bytes and rejects path separators and any '..' substring; NUL validation is incomplete. Minted handles are currently not returned by POST.",
@@ -1541,6 +1541,19 @@ func init() {
       "required": [
         "certPem",
         "keyPem"
+      ],
+      "type": "object"
+    },
+    "CertCreated": {
+      "description": "The handle of a certificate that was created.",
+      "properties": {
+        "certId": {
+          "description": "The ID the certificate is stored under - the one the request named, or the one the server minted when it named none. It is the handle for rotate and delete, and what a load-balancer rule refers to.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "certId"
       ],
       "type": "object"
     },
@@ -4769,7 +4782,7 @@ func init() {
             },
             "backend_protocol": {
               "default": "http1",
-              "description": "FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. GET reports this field only for FullProxy.",
+              "description": "FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. The default applies to a new rule; a replace that omits the field keeps the value the rule has. GET reports this field only for FullProxy.",
               "enum": [
                 "http1",
                 "http2",
@@ -11167,7 +11180,10 @@ func init() {
         ],
         "responses": {
           "201": {
-            "description": "Created"
+            "description": "Created. The body carries the certId the certificate is stored under.",
+            "schema": {
+              "$ref": "#/definitions/CertCreated"
+            }
           },
           "400": {
             "description": "Malformed PEM / missing material",
@@ -15024,7 +15040,7 @@ func init() {
     },
     "/config/loadbalancer": {
       "post": {
-        "description": "Create a new load balancer service. A well-formed request can still be refused by this Gateway's own deployment state with 412 - a vLLM KV-exact rule without the launch seed or without a loadable tokenizer for its model_name, or allowedSources on a rule allocated a slot past the source-check range - and no request body can satisfy such a refusal; GET /status/capabilities reports the same verdicts before submission.",
+        "description": "Create a new load balancer service. A well-formed request can still be refused by this Gateway's own deployment state with 412 - a vLLM KV-exact rule without the launch seed or without a loadable tokenizer for its model_name, or allowedSources on a rule allocated a slot past the source-check range - and no request body can satisfy such a refusal; GET /status/capabilities reports the same verdicts before submission. A request for a rule that exists replaces it: a request that changes nothing is answered 409 lbrule-exists, and a field the request omits takes its default, except the fields a replace keeps when omitted - id, the administrative state, projectId, annotations, the secondary VIPs, api_key_auth, backend_protocol, half_close_mode, the fc_ fields, pd_cache_threshold and pd_balance_abs_threshold. A replace of a FullProxy rule keeps the listening socket. Unless the change is one the rule takes in place, its endpoint pool is built again: the requests waiting in its capacity queue are ended, and its session and conversation affinity and its counts start over.",
         "parameters": [
           {
             "description": "Attributes for load balance service",
@@ -19699,7 +19715,7 @@ func init() {
     },
     "/maintenance": {
       "get": {
-        "description": "Reports an ephemeral operator maintenance episode, its management-write gate and drain observations. The episode does not itself refuse new inference traffic. The in-flight count covers SSE streams, not all requests; elapsed time and deadline overrun do not prove a completed traffic drain.",
+        "description": "Reports an ephemeral operator maintenance episode, its management-write gate and drain observations. On a gateway whose data path is attached the episode also refuses new inference requests, and refusing_new_inference reports whether it does; on a management plane with no data path behind it, it does not. The in-flight count covers SSE streams, not all requests; elapsed time and deadline overrun do not prove a completed traffic drain.",
         "produces": [
           "application/json"
         ],
@@ -24183,7 +24199,10 @@ func init() {
         ],
         "responses": {
           "201": {
-            "description": "Created"
+            "description": "Created. The body carries the certId the certificate is stored under.",
+            "schema": {
+              "$ref": "#/definitions/CertCreated"
+            }
           },
           "400": {
             "description": "Malformed PEM / missing material",
@@ -28374,7 +28393,7 @@ func init() {
     },
     "/config/loadbalancer": {
       "post": {
-        "description": "Create a new load balancer service. A well-formed request can still be refused by this Gateway's own deployment state with 412 - a vLLM KV-exact rule without the launch seed or without a loadable tokenizer for its model_name, or allowedSources on a rule allocated a slot past the source-check range - and no request body can satisfy such a refusal; GET /status/capabilities reports the same verdicts before submission.",
+        "description": "Create a new load balancer service. A well-formed request can still be refused by this Gateway's own deployment state with 412 - a vLLM KV-exact rule without the launch seed or without a loadable tokenizer for its model_name, or allowedSources on a rule allocated a slot past the source-check range - and no request body can satisfy such a refusal; GET /status/capabilities reports the same verdicts before submission. A request for a rule that exists replaces it: a request that changes nothing is answered 409 lbrule-exists, and a field the request omits takes its default, except the fields a replace keeps when omitted - id, the administrative state, projectId, annotations, the secondary VIPs, api_key_auth, backend_protocol, half_close_mode, the fc_ fields, pd_cache_threshold and pd_balance_abs_threshold. A replace of a FullProxy rule keeps the listening socket. Unless the change is one the rule takes in place, its endpoint pool is built again: the requests waiting in its capacity queue are ended, and its session and conversation affinity and its counts start over.",
         "summary": "Create a new Load balancer service",
         "parameters": [
           {
@@ -33285,7 +33304,7 @@ func init() {
     },
     "/maintenance": {
       "get": {
-        "description": "Reports an ephemeral operator maintenance episode, its management-write gate and drain observations. The episode does not itself refuse new inference traffic. The in-flight count covers SSE streams, not all requests; elapsed time and deadline overrun do not prove a completed traffic drain.",
+        "description": "Reports an ephemeral operator maintenance episode, its management-write gate and drain observations. On a gateway whose data path is attached the episode also refuses new inference requests, and refusing_new_inference reports whether it does; on a management plane with no data path behind it, it does not. The in-flight count covers SSE streams, not all requests; elapsed time and deadline overrun do not prove a completed traffic drain.",
         "produces": [
           "application/json"
         ],
@@ -36447,7 +36466,7 @@ func init() {
       }
     },
     "Cert": {
-      "description": "Managed PEM input and partial read model. POST currently returns empty 201, including when it mints an ID; callers cannot obtain that minted handle from the response. PUT uses the path ID and ignores body ID and hostnames. Known lifecycle gaps: duplicate POST persists before rejecting registration and can remove existing material; failed rotation does not roll back files; hostname ownership conflicts and multi-host swaps are not transactional; rotation retains the old hostname set. Do not claim atomic certificate transactions, automatic SAN migration, or verified zero downtime. GET returns no private-key material, although the shared schema still requires keyPem and the generated response can serialize it as null.",
+      "description": "Managed PEM input and partial read model. POST answers 201 with the certId in the body, including when it mints one. PUT uses the path ID and ignores body ID and hostnames. Known lifecycle gaps: duplicate POST persists before rejecting registration and can remove existing material; failed rotation does not roll back files; hostname ownership conflicts and multi-host swaps are not transactional; rotation retains the old hostname set. Do not claim atomic certificate transactions, automatic SAN migration, or verified zero downtime. GET returns no private-key material, although the shared schema still requires keyPem and the generated response can serialize it as null.",
       "type": "object",
       "required": [
         "certPem",
@@ -36489,6 +36508,19 @@ func init() {
             "ca",
             "client"
           ]
+        }
+      }
+    },
+    "CertCreated": {
+      "description": "The handle of a certificate that was created.",
+      "type": "object",
+      "required": [
+        "certId"
+      ],
+      "properties": {
+        "certId": {
+          "description": "The ID the certificate is stored under - the one the request named, or the one the server minted when it named none. It is the handle for rotate and delete, and what a load-balancer rule refers to.",
+          "type": "string"
         }
       }
     },
@@ -39730,7 +39762,7 @@ func init() {
               "x-nullable": false
             },
             "backend_protocol": {
-              "description": "FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. GET reports this field only for FullProxy.",
+              "description": "FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. The default applies to a new rule; a replace that omits the field keeps the value the rule has. GET reports this field only for FullProxy.",
               "type": "string",
               "default": "http1",
               "enum": [
@@ -40871,7 +40903,7 @@ func init() {
           "x-nullable": false
         },
         "backend_protocol": {
-          "description": "FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. GET reports this field only for FullProxy.",
+          "description": "FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. The default applies to a new rule; a replace that omits the field keeps the value the rule has. GET reports this field only for FullProxy.",
           "type": "string",
           "default": "http1",
           "enum": [

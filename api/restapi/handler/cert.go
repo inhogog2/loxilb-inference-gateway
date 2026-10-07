@@ -455,7 +455,7 @@ func ConfigPostCert(params operations.PostConfigCertParams, principal interface{
 		// by SNI, so it does not enter the SNI registry.
 		certStoreBackend(cert)
 		tk.LogIt(tk.LogInfo, "api: Cert %s uploaded (usage %s)\n", cert.CertId, cert.Usage)
-		return operations.NewPostConfigCertCreated()
+		return operations.NewPostConfigCertCreated().WithPayload(&models.CertCreated{CertID: &cert.CertId})
 	}
 
 	n, err := certRegister(cert.CertId)
@@ -471,7 +471,7 @@ func ConfigPostCert(params operations.PostConfigCertParams, principal interface{
 	certStoreMu.Unlock()
 
 	tk.LogIt(tk.LogInfo, "api: Cert %s uploaded (%d hostname(s) registered)\n", cert.CertId, n)
-	return operations.NewPostConfigCertCreated()
+	return operations.NewPostConfigCertCreated().WithPayload(&models.CertCreated{CertID: &cert.CertId})
 }
 
 // ConfigPutCert rotates the material under a STABLE certId (atomic swap). Unknown
