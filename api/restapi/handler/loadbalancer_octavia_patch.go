@@ -190,10 +190,10 @@ func ConfigPatchLoadbalancer(params operations.PatchConfigLoadbalancerExternalip
 		if pres.svcPresent("proberesp") {
 			merged.Serv.ProbeResp = sa.Proberesp
 		}
-		if pres.svcPresent("probetimeout") {
+		if pres.svcPresent("probeTimeout") {
 			merged.Serv.ProbeTimeout = uint32(sa.ProbeTimeout)
 		}
-		if pres.svcPresent("proberetries") {
+		if pres.svcPresent("probeRetries") {
 			merged.Serv.ProbeRetries = int(sa.ProbeRetries)
 		}
 		// admin_state_up. AdminStateUp is a *bool in the API model only when

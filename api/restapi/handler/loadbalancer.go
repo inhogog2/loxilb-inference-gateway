@@ -149,11 +149,10 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	lbRules.Serv.Egress = params.Attr.ServiceArguments.Egress
 	lbRules.Serv.TraceType = params.Attr.ServiceArguments.TraceType // Tracing catalog (independent from GPU routing)
 
-	// Backend protocol capability - default to "http1" for backward compatibility
+	// Backend protocol capability. An omission is passed on as one: the rule
+	// layer gives a new rule "http1" and leaves an existing rule's value alone.
 	if params.Attr.ServiceArguments.BackendProtocol != nil {
 		lbRules.Serv.BackendProtocol = *params.Attr.ServiceArguments.BackendProtocol
-	} else {
-		lbRules.Serv.BackendProtocol = "http1" // Safe default: HTTP/1.1 only
 	}
 
 	// AI model name for pool selection (empty = wildcard, backward compatible)

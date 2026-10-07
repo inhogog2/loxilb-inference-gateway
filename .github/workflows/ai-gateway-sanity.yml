@@ -207,6 +207,13 @@ jobs:
           ./validation.sh
           ./rmconfig.sh
           cd -
+      - name: LB rule replace and merge-patch (every accepted value reads back)
+        run: |
+          cd cicd/lbreplace/
+          ./config.sh
+          ./validation.sh
+          ./rmconfig.sh
+          cd -
       - name: JWT bearer admission against a live Keycloak realm
         run: |
           cd cicd/ai-jwtauth/

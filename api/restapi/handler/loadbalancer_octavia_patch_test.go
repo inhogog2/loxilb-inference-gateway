@@ -291,3 +291,56 @@ func TestPatchSourceCheckSlotPreconditionIs412(t *testing.T) {
 		t.Fatalf("ordinary refusal status %d, want 400", rec.Code)
 	}
 }
+
+type patchCaptureHook struct {
+	cmn.NetHookInterface
+	rules  []cmn.LbRuleMod
+	merged *cmn.LbRuleMod
+}
+
+func (h *patchCaptureHook) NetLbRuleGet() ([]cmn.LbRuleMod, error) { return h.rules, nil }
+func (h *patchCaptureHook) NetLbRuleAdd(m *cmn.LbRuleMod) (int, error) {
+	h.merged = m
+	return 0, nil
+}
+
+// A merge-patch names its fields as the model's JSON does. The two probe
+// fields are camelCase there, unlike the four beside them, and a patch that
+// carries them has to reach the rule engine with the new values. The control
+// is a patch without them: the rule's own values go through.
+func TestPatchAppliesProbeTimeoutAndRetries(t *testing.T) {
+	prev := ApiHooks
+	t.Cleanup(func() { ApiHooks = prev })
+	current := cmn.LbRuleMod{Serv: cmn.LbServiceArg{ServIP: "20.20.20.5", ServPort: 8080, Proto: "tcp",
+		ProbeTimeout: 3, ProbeRetries: 2}}
+
+	patch := func(raw string, attr *models.LoadbalanceEntry) *cmn.LbRuleMod {
+		hook := &patchCaptureHook{rules: []cmn.LbRuleMod{current}}
+		ApiHooks = hook
+		req, _ := http.NewRequest("PATCH", "/config/loadbalancer/externalipaddress/20.20.20.5/port/8080/protocol/tcp", nil)
+		req = req.WithContext(WithRawPatchBody(req.Context(), []byte(raw)))
+		params := operations.PatchConfigLoadbalancerExternalipaddressIPAddressPortPortProtocolProtoParams{
+			HTTPRequest: req, IPAddress: "20.20.20.5", Port: 8080, Proto: "tcp", Attr: attr,
+		}
+		rec := httptest.NewRecorder()
+		ConfigPatchLoadbalancer(params, nil).WriteResponse(rec, runtime.JSONProducer())
+		if rec.Code != 200 || hook.merged == nil {
+			t.Fatalf("patch %s: status %d body %s", raw, rec.Code, rec.Body.String())
+		}
+		return hook.merged
+	}
+
+	got := patch(`{"serviceArguments":{"probeTimeout":7,"probeRetries":4}}`,
+		&models.LoadbalanceEntry{ServiceArguments: &models.LoadbalanceEntryServiceArguments{ProbeTimeout: 7, ProbeRetries: 4}})
+	if got.Serv.ProbeTimeout != 7 || got.Serv.ProbeRetries != 4 {
+		t.Errorf("probeTimeout/probeRetries sent as 7/4 reached the rule engine as %d/%d",
+			got.Serv.ProbeTimeout, got.Serv.ProbeRetries)
+	}
+
+	got = patch(`{"serviceArguments":{"inactiveTimeOut":30}}`,
+		&models.LoadbalanceEntry{ServiceArguments: &models.LoadbalanceEntryServiceArguments{InactiveTimeOut: 30}})
+	if got.Serv.ProbeTimeout != 3 || got.Serv.ProbeRetries != 2 {
+		t.Errorf("a patch without the probe fields changed them to %d/%d, want the rule's 3/2",
+			got.Serv.ProbeTimeout, got.Serv.ProbeRetries)
+	}
+}
