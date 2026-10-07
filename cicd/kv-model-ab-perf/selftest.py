@@ -7,7 +7,9 @@ Every case states the verdict it expects, including the ones where the tool must
 """
 import http.server
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -355,6 +357,60 @@ def main():
               rc == 1 and [r["completed"] for r in rec].count(False) == 2, (rc, rec))
         for srv in (p0, p1, d, bad):
             srv.shutdown()
+
+    # The decode engines' launch arguments. validation.sh itself is run, beside a stand-in for the engine
+    # launcher that records what each engine would have been started with.
+    print("decode-side prefix cache")
+    arg = "--disaggregation-decode-enable-radix-cache"
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = pathlib.Path(tmp)
+        ab, compat, prof = tmp / "cicd/kv-model-ab-perf", tmp / "cicd/kv-model-compat-pd", tmp / "cicd/common/kv_hash/fixtures/profiles"
+        for d in (ab, compat, prof):
+            d.mkdir(parents=True)
+        for f in ("validation.sh", "env.sh"):
+            shutil.copy(HERE / f, ab / f)
+        shutil.copy(HERE.parent / "kv-model-compat-pd/env.sh", compat / "env.sh")
+        (compat / "engine.sh").write_text('#!/bin/bash\necho "$3 $4 [${SGL_EXTRA:-}]" >> "$STARTS"\n')
+        (compat / "engine.sh").chmod(0o755)
+        for name in ("r1-distill-qwen-15b-v1", "gemma4-e2b-it-v1", "qwen38-27b-fp8-v1", "never-started-v1"):
+            (prof / f"{name}.yaml").write_text(f"profileId: {name}\nbaseModel: org/{name}\n")
+        def fleet(eng, name, topology="pd", **env):
+            starts = tmp / "starts.txt"
+            starts.unlink(missing_ok=True)
+            e = {"PATH": os.environ["PATH"], "TOPOLOGY": topology, "VIP": "10.0.0.12", "LOGD": str(tmp), "ABROOT": str(tmp / "ev"),
+                 "STARTS": str(starts), **env}
+            e.update({"PREFILLS": "10.0.0.7 10.0.0.8", "DECODES": "10.0.0.10 10.0.0.11"} if topology == "pd" else {"ENGINES": "10.0.0.7 10.0.0.8"})
+            r = subprocess.run(["bash", str(ab / "validation.sh"), "fleet-up", eng, name], capture_output=True, text=True, env=e)
+            lines = starts.read_text().splitlines() if starts.exists() else []
+            return r.returncode, r.stdout, [x for x in lines if x.startswith("decode ")], [x for x in lines if not x.startswith("decode ")]
+        def state(n):
+            f = tmp / "ev" / f"sglang-{n}" / "decode-cache.txt"
+            return f.read_text().strip() if f.exists() else "(no file)"
+        rc, out, dec, pre = fleet("sglang", "r1-distill-qwen-15b-v1")
+        check("D1 SGLang prefill/decode, a measured model: both decode engines get the argument, no prefill engine does",
+              rc == 0 and len(dec) == 2 and all(arg in x for x in dec) and len(pre) == 2 and not any(arg in x for x in pre)
+              and "DECODE_CACHE_" not in out, (rc, out, dec, pre))
+        for name, why in (("gemma4-e2b-it-v1", "refused"), ("qwen38-27b-fp8-v1", "refused"), ("never-started-v1", "unmeasured")):
+            rc, out, dec, pre = fleet("sglang", name)
+            check(f"D2 {name}: no decode engine gets the argument, and the run says DECODE_CACHE_SKIPPED {why}",
+                  rc == 0 and len(dec) == 2 and not any(arg in x for x in dec + pre) and f"DECODE_CACHE_SKIPPED {why}" in out, (rc, out, dec))
+        rc, out, dec, pre = fleet("sglang", "r1-distill-qwen-15b-v1", SGL_DECODE_CACHE="0")
+        check("D3 SGL_DECODE_CACHE=0: off for a measured model too, and the run says DECODE_CACHE_OFF",
+              rc == 0 and len(dec) == 2 and not any(arg in x for x in dec) and "DECODE_CACHE_OFF" in out, (rc, out, dec))
+        rc, out, dec, pre = fleet("sglang", "never-started-v1", SGL_EXTRA_DECODE=arg)
+        check("D4 SGL_EXTRA_DECODE still reaches the decode engines only; the argument in it is recorded as forced",
+              len(dec) == 2 and all(arg in x for x in dec) and not any(arg in x for x in pre)
+              and state("never-started-v1") == "forced" and "DECODE_CACHE_" not in out, (out, dec, pre))
+        fleet("sglang", "never-started-v1")
+        rc, out, dec, pre = fleet("vllm", "r1-distill-qwen-15b-v1")
+        rc2, out2, dec2, pre2 = fleet("sglang", "r1-distill-qwen-15b-v1", topology="converged")
+        check("D5 vLLM, and SGLang converged: no engine gets the argument and no line is printed",
+              rc == rc2 == 0 and len(dec) == 2 and not dec2 and len(pre2) == 2 and not any(arg in x for x in dec + pre + pre2)
+              and "DECODE_CACHE_" not in out + out2 and "decode-side" not in out + out2, (out, out2, dec, pre2))
+        rc, out, dec, pre = fleet("sglang", "r1-distill-qwen-15b-v1", SGL_DECODE_CACHE="yes")
+        check("D6 SGL_DECODE_CACHE other than 0 or 1 is refused before any engine starts", rc == 64 and not dec and not pre, (rc, dec, pre))
+        check("D7 the state is kept with the evidence",
+              (state("gemma4-e2b-it-v1"), state("never-started-v1")) == ("refused", "unmeasured"), state("gemma4-e2b-it-v1"))
     print(f"SELFTEST kv-model-ab-perf: {'PASS' if not failed else f'FAIL ({failed})'}")
     return 1 if failed else 0
 
