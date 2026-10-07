@@ -2699,6 +2699,17 @@ func getLBConsolidatedEPs(oldEps []ruleLBEp, newEps []ruleLBEp, oper cmn.LBOp) (
 					ruleChg = true
 					e.weight = nEp.weight
 				}
+				// The other members a request declares for an endpoint are
+				// taken from it as the weight is. A detach names endpoints
+				// to remove and declares nothing about them.
+				if oper != cmn.LBOPDetach && lbEpDeclaredDiffers(e, &nEp) {
+					ruleChg = true
+					e.epRole = nEp.epRole
+					e.nixlPort = nEp.nixlPort
+					e.backup = nEp.backup
+					e.subnetId = nEp.subnetId
+					e.monAddr = nEp.monAddr
+				}
 				e.chkVal = true
 				n.chkVal = true
 				matched = true
@@ -2762,6 +2773,87 @@ func getLBConsolidatedEPs(oldEps []ruleLBEp, newEps []ruleLBEp, oper cmn.LBOp) (
 	}
 
 	return ruleChg, retEps, delEps
+}
+
+// lbEpDeclaredDiffers reports whether a request declares another role, NIXL
+// port, backup flag, subnet or probe address for an endpoint than it has.
+func lbEpDeclaredDiffers(have, want *ruleLBEp) bool {
+	return have.epRole != want.epRole || have.nixlPort != want.nixlPort ||
+		have.backup != want.backup || have.subnetId != want.subnetId ||
+		have.monAddr != want.monAddr
+}
+
+// lbAllowedSourcesChanged reports whether a request declares another set of
+// allowed sources than the rule has. The order is not part of the set.
+func lbAllowedSourcesChanged(have []*allowedSrcElem, want []cmn.LbAllowedSrcIPArg) bool {
+	if len(have) != len(want) {
+		return true
+	}
+	set := make(map[string]int, len(have))
+	for _, src := range have {
+		set[src.srcPref.String()]++
+	}
+	for _, src := range want {
+		pref := src.Prefix
+		if _, ipNet, err := net.ParseCIDR(pref); err == nil {
+			pref = ipNet.String()
+		}
+		if set[pref] == 0 {
+			return true
+		}
+		set[pref]--
+	}
+	return false
+}
+
+// lbEpsToReprobe returns the endpoints of a rule whose probe has to be
+// registered again: all of them when the rule's probe settings change, else
+// those whose probe address changes. They are returned as the rule has them,
+// so that they are detached under the key they were attached with.
+func lbEpsToReprobe(oldEps, newEps []ruleLBEp, all bool) []ruleLBEp {
+	var eps []ruleLBEp
+	for i := range oldEps {
+		o := &oldEps[i]
+		if !o.epCreated {
+			continue
+		}
+		if all {
+			eps = append(eps, *o)
+			continue
+		}
+		for j := range newEps {
+			n := &newEps[j]
+			if o.xIP.Equal(n.xIP) && o.xPort == n.xPort && o.monAddr != n.monAddr {
+				eps = append(eps, *o)
+				break
+			}
+		}
+	}
+	return eps
+}
+
+// lbEpsMarkDetached clears the probe registration mark of the listed
+// endpoints in a set, so that the next attach registers them again.
+func lbEpsMarkDetached(eps, detached []ruleLBEp) {
+	for i := range eps {
+		for j := range detached {
+			if eps[i].xIP.Equal(detached[j].xIP) && eps[i].xPort == detached[j].xPort {
+				eps[i].epCreated = false
+				break
+			}
+		}
+	}
+}
+
+// lbNameClass is what a rule's name decides besides naming it: whether the
+// rule's VIP is managed by the gateway, and its cluster instance. A rule
+// cannot move from one to another while it is installed.
+func lbNameClass(name string) (unmanagedVIP bool, inst string) {
+	inst = cmn.CIDefault
+	if names := strings.Split(name, ":"); len(names) >= 2 {
+		inst = names[1]
+	}
+	return strings.Contains(name, "ipvs") || strings.Contains(name, "static"), inst
 }
 
 // strSliceEqual reports whether two string slices are element-wise equal (order-sensitive).
@@ -4321,6 +4413,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 		if eRule.hChk.prbType != serv.ProbeType || eRule.hChk.prbPort != serv.ProbePort ||
 			eRule.hChk.prbReq != serv.ProbeReq || eRule.hChk.prbResp != serv.ProbeResp ||
+			eRule.hChk.prbTimeo != serv.ProbeTimeout || eRule.hChk.prbRetries != serv.ProbeRetries ||
 			eRule.pTO != serv.PersistTimeout || eRule.act.action.(*ruleLBActs).sel != lBActs.sel ||
 			eRule.act.action.(*ruleLBActs).mode != lBActs.mode ||
 			eRule.sockMapMode != sockMapCode ||
@@ -4332,7 +4425,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 		// Detect changes to all extended mutable fields
 		if eRule.traceType != serv.TraceType ||
-			eRule.backendProtocol != serv.BackendProtocol ||
+			(serv.BackendProtocol != "" && eRule.backendProtocol != serv.BackendProtocol) ||
 			eRule.sessionHeaderName != serv.SessionHeaderName ||
 			eRule.sseMode != serv.SSEMode ||
 			(serv.ApiKeyAuth != "" && eRule.apiKeyAuth != serv.ApiKeyAuth) ||
@@ -4372,24 +4465,13 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.hstsPreload != serv.HstsPreload ||
 			!strSliceEqual(eRule.alpnProtocols, serv.AlpnProtocols) ||
 			!strSliceEqual(eRule.tlsVersions, serv.TlsVersions) ||
+			!reflect.DeepEqual(eRule.mtlsFrontend, serv.MTLSFrontend) ||
 			eRule.name != serv.Name {
 			ruleChg = true
 		}
 
-		if len(allowedSources) == len(eRule.srcList) {
-			for _, newSrc := range allowedSources {
-				srcMatch := false
-				for _, src := range eRule.srcList {
-					if src.srcPref.String() != newSrc.Prefix {
-						srcMatch = true
-						break
-					}
-				}
-				if !srcMatch {
-					ruleChg = true
-					break
-				}
-			}
+		if lbAllowedSourcesChanged(eRule.srcList, allowedSources) {
+			ruleChg = true
 		}
 
 		// an explicit admin_state that differs from the current
@@ -4470,6 +4552,14 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			return RuleExistsErr, errors.New("lbrule-exist error: cant modify rule egress mode")
 		}
 
+		if eRule.name != serv.Name {
+			oldUnmanaged, oldInst := lbNameClass(eRule.name)
+			newUnmanaged, newInst := lbNameClass(serv.Name)
+			if oldUnmanaged != newUnmanaged || oldInst != newInst {
+				return RuleExistsErr, errors.New("lbrule-exist error: cant modify the cluster instance or the VIP handling a rule name declares")
+			}
+		}
+
 		if len(retEps) == 0 {
 			tk.LogIt(tk.LogDebug, "lb-rule %s has no-endpoints: to be deleted\n", eRule.tuples.String())
 			return R.DeleteLbRule(serv)
@@ -4511,7 +4601,18 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			R.deleteAllowedLbSrc(srcElem.srcPref.String(), uint32(eRule.ruleNum))
 		}
 
+		// A probe is registered under the rule's probe settings and the
+		// endpoint's probe address. The endpoints for which either changes
+		// are noted as the rule has them now, with the settings they were
+		// attached under.
+		prevHChk := eRule.hChk
+		probeChg := prevHChk.prbType != serv.ProbeType || prevHChk.prbPort != serv.ProbePort ||
+			prevHChk.prbReq != serv.ProbeReq || prevHChk.prbResp != serv.ProbeResp ||
+			prevHChk.prbTimeo != serv.ProbeTimeout || prevHChk.prbRetries != serv.ProbeRetries
+		reprobeEps := lbEpsToReprobe(eRule.act.action.(*ruleLBActs).endPoints, retEps, probeChg)
+
 		// Update the rule
+		eRule.name = serv.Name
 		eRule.hChk.prbType = serv.ProbeType
 		eRule.hChk.prbPort = serv.ProbePort
 		eRule.hChk.prbReq = serv.ProbeReq
@@ -4708,6 +4809,16 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		// (in place, NO DpRemove) if the dataplane push fails. The SNAT path has no
 		// per-EP NAT reconcile, so it keeps the plain in-place DpCreate.
 		if !serv.Snat {
+			// Detached under the settings they were attached with, right
+			// before the reconcile attaches them under the new ones.
+			if len(reprobeEps) > 0 {
+				nextHChk := eRule.hChk
+				eRule.hChk = prevHChk
+				R.modNatEpHost(eRule, reprobeEps, false, activateProbe, eRule.egress)
+				eRule.hChk = nextHChk
+				lbEpsMarkDetached(retEps, reprobeEps)
+				lbEpsMarkDetached(delEps, reprobeEps)
+			}
 			var restoreRuleState func()
 			if chwblTxn {
 				restoreRuleState = restoreCHWBLState
