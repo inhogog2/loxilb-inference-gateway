@@ -16,7 +16,17 @@
 #              handshake and closed the connection afterwards (it wanted a
 #              client certificate it was not shown, or does not accept the
 #              one it was shown). The gateway logs that failure under its
-#              own line, and the nonce is in no receipt file.
+#              own line, and the nonce is in no receipt file. Such a backend
+#              closes in one of two ways. The fixture server has read all the
+#              client sent, so its close is orderly and the gateway fails on
+#              the read of an answer. A server on OpenSSL stops at the message
+#              it refuses and leaves the rest unread, so its close is a reset;
+#              when the reset arrives before the gateway has written the
+#              request, the gateway fails on that write, or earlier still,
+#              while it sets the connection up. All of them must end in the
+#              same whole answer, so the second kind of backend is here too,
+#              and is asked many times: where in that race a connection falls
+#              is not the test's to choose.
 #
 # An answer the gateway writes itself must also be whole: curl has to end
 # with exit 0. A status line followed by a cut connection is not an answer
@@ -39,6 +49,8 @@ EP1=31.31.31.1
 EP2=32.32.32.1
 NAME=backend.betls.test
 RUN=$(date +%s)$$
+# Connections asked of each rule whose backend answers a refusal with a reset.
+RESET_REPEAT=${RESET_REPEAT:-30}
 code=0
 seq=0
 
@@ -60,6 +72,10 @@ expect_drained() { # port, reason, count before, seconds to wait, what
 hs_failed() { dp_log | grep -cF "ssl-connect $1:$2(failed)"; }
 # Backend legs that failed after their handshake, before any response.
 late_failed() { dp_log | grep -cF "ssl-read $1:$2(failed after handshake, before any response)"; }
+# The same, for a leg that failed on the write of the request.
+write_failed() { dp_log | grep -cF "ssl-write $1:$2(failed after handshake, before any response)"; }
+# The same, for a leg found reset before the request could be written.
+setup_failed() { dp_log | grep -cF "ssl-setup $1:$2(failed after handshake, before any response)"; }
 fp() { cat pki/$1.fp; }
 receipts() { cat pki/receipts/*.txt 2>/dev/null | grep -cx "$1"; }
 receipt_of() { grep -cx "$2" pki/receipts/$1.txt 2>/dev/null; }
@@ -248,6 +264,33 @@ expect_turned_away() { # case, port, protocol, endpoint address, endpoint port
   [ "$3" == "http1.1" ] && expect_strict "$1" $2
 }
 
+# Requests, each on a connection of its own, through a rule whose backend
+# turns the gateway away. Every one must get the whole 502 a strict client
+# accepts and reach no backend, and the gateway must have logged a cause for
+# every one: a failed handshake, or a leg that failed after it on a read, on
+# the write of the request, or before the request could be written.
+expect_each_turned_away() { # case, port, endpoint address, endpoint port, count
+  local i n got st cl bl end whole=0 cut=0 r0 w0 s0 h0 r w s h
+  r0=$(late_failed $3 $4); w0=$(write_failed $3 $4); s0=$(setup_failed $3 $4); h0=$(hs_failed $3 $4)
+  for i in $(seq 1 $5); do
+    seq=$((seq + 1)); n="q$RUN-$seq"
+    got=$($hexec l3h1 python3 -c "$STRICT_CLIENT" $VIP $2 pki/ca-a.crt $n 2>&1 | tail -1)
+    read -r st cl bl end <<< "$got"
+    if [[ "$st" == "502" && "$cl" != "none" && "$cl" == "$bl" && "$bl" -gt 0 && "$end" == "clean" && "$(receipts $n)" == "0" ]]; then
+      whole=$((whole + 1))
+    else
+      cut=$((cut + 1))
+      [ $cut -le 5 ] && echo "  record: case='$1' nonce=$n strict client: '$got' receipts=$(receipts $n)"
+    fi
+  done
+  r=$(($(late_failed $3 $4) - r0)); w=$(($(write_failed $3 $4) - w0)); s=$(($(setup_failed $3 $4) - s0)); h=$(($(hs_failed $3 $4) - h0))
+  echo "  record: case='$1' connections=$5 whole=$whole not_whole=$cut gateway log for $3:$4: handshake_failed=$h failed_on_read=$r failed_on_write=$w failed_before_write=$s"
+  [ $cut == 0 ] && pass "$1: each of $5 connections got the whole 502 with a close_notify, and no backend has a request" \
+    || fail "$1: $cut of $5 connections did not get a whole 502"
+  [ $((r + w + s + h)) -ge $5 ] && pass "$1: the gateway logged why, for every connection" \
+    || fail "$1: the gateway logged a cause for $((r + w + s + h)) of $5 connections"
+}
+
 serve() { # host, name, port, certificate, extra arguments
   $hexec $1 ./fixture serve -name $2 -port $3 -cert pki/$4.crt -key pki/$4.key \
     -receipts pki/receipts/$2.txt -clientca pki/ca-a.crt $5 > /dev/null 2>&1 &
@@ -261,6 +304,15 @@ serve l3ep1 wrongip 9447 wrongip
 serve l3ep1 dnsonly 9448 dnsonly
 serve l3ep1 wrongdns 9449 wrongdns
 serve l3ep2 good-ecdsa 9443 good-ecdsa -require
+# A backend on OpenSSL that requires a client certificate, one per TLS version.
+serve_resetting() { # name, port, TLS version
+  $hexec l3ep1 python3 ../common/betls/resetting_backend.py --name $1 --port $2 --tls $3 \
+    --cert pki/good-rsa.crt --key pki/good-rsa.key --clientca pki/ca-a.crt \
+    --receipts pki/receipts/$1.txt > /dev/null 2>&1 &
+  track_helper
+}
+serve_resetting reset13 9460 1.3
+serve_resetting reset12 9461 1.2
 sleep 5
 
 VERIFY='"mtls_backend": {"verify_server_cert": true}, "backend_ca_cert_id": "qual-ca"'
@@ -584,8 +636,46 @@ rc=$(post_rule 2054 $EP1 9443 ", $VERIFY"', "backend_client_cert_id": "qual-clie
 expect_taken 2054 $n
 expect_served "HTTP/2 on the listener that spoke HTTP/1.1" 2054 http2 good client-rsa none
 
+echo "A backend that turns the gateway away with a reset, TLS 1.3"
+# The arrangement first: this backend serves a client it accepts, over the
+# version it is pinned to, and refuses one that shows no certificate.
+out=$($hexec l3ep1 curl -s --cacert pki/ca-a.crt --cert pki/client-rsa.crt --key pki/client-rsa.key --max-time 10 "https://$EP1:9460/?nonce=direct13$RUN")
+[[ "$out" == *"peer=$(fp client-rsa) "* && "$out" == *"tls=TLSv1.3 "* ]] && pass "the backend serves a client it accepts, over TLS 1.3" \
+  || fail "precondition: the TLS 1.3 backend did not serve an accepted client: ${out:0:160}"
+out=$($hexec l3ep1 curl -s -o /dev/null -w '%{http_code}' --cacert pki/ca-a.crt --max-time 10 "https://$EP1:9460/?nonce=direct13$RUN")
+[ "$out" == "000" ] && pass "the backend refuses a client without a certificate" \
+  || fail "precondition: the TLS 1.3 backend served a client without a certificate ($out)"
+rc=$(post_rule 2071 $EP1 9460 ", $VERIFY"', "backend_client_cert_id": "qual-client-rsa"'); echo "  POST -> $rc"
+expect_served "the client certificate the backend accepts" 2071 http1.1 reset13 client-rsa none
+rc=$(post_rule 2072 $EP1 9460 ", $VERIFY"); echo "  POST -> $rc"
+expect_each_turned_away "no client certificate named" 2072 $EP1 9460 $RESET_REPEAT
+rc=$(post_rule 2073 $EP1 9460 ", $VERIFY"', "backend_client_cert_id": "qual-client-otherca"'); echo "  POST -> $rc"
+expect_each_turned_away "a client certificate from another CA" 2073 $EP1 9460 $RESET_REPEAT
+# Which connections lose to the reset is the backend's race, not this
+# scenario's. It asks again, a bounded number of times, until the reset has
+# arrived before the request was on its way.
+early() { echo $(($(write_failed $EP1 9460) + $(setup_failed $EP1 9460))); }
+for i in 1 2 3 4; do
+  [ "$(early)" -gt 0 ] && break
+  expect_each_turned_away "no client certificate named, asked again ($i)" 2072 $EP1 9460 $RESET_REPEAT
+done
+[ "$(early)" -gt 0 ] && pass "the reset came before the request was on its way for $(early) of these connections ($(write_failed $EP1 9460) on the write, $(setup_failed $EP1 9460) before it), and each was answered" \
+  || echo "  note: in this run no reset arrived before the request was on its way"
+expect_served "the accepted client certificate, after the refusals" 2071 http1.1 reset13 client-rsa none
+
+echo "The same backend over TLS 1.2, where the handshake itself fails"
+out=$($hexec l3ep1 curl -s --cacert pki/ca-a.crt --cert pki/client-rsa.crt --key pki/client-rsa.key --max-time 10 "https://$EP1:9461/?nonce=direct12$RUN")
+[[ "$out" == *"peer=$(fp client-rsa) "* && "$out" == *"tls=TLSv1.2 "* ]] && pass "the backend serves a client it accepts, over TLS 1.2" \
+  || fail "precondition: the TLS 1.2 backend did not serve an accepted client: ${out:0:160}"
+rc=$(post_rule 2074 $EP1 9461 ", $VERIFY"', "backend_client_cert_id": "qual-client-rsa"'); echo "  POST -> $rc"
+expect_served "the client certificate the backend accepts, TLS 1.2" 2074 http1.1 reset12 client-rsa none
+rc=$(post_rule 2075 $EP1 9461 ", $VERIFY"); echo "  POST -> $rc"
+expect_each_turned_away "no client certificate named, TLS 1.2" 2075 $EP1 9461 $RESET_REPEAT
+rc=$(post_rule 2076 $EP1 9461 ", $VERIFY"', "backend_client_cert_id": "qual-client-otherca"'); echo "  POST -> $rc"
+expect_each_turned_away "a client certificate from another CA, TLS 1.2" 2076 $EP1 9461 $RESET_REPEAT
+
 [ "$(gw_pid)" == "$pid0" ] && pass "gateway pid unchanged ($pid0)" || fail "gateway pid changed $pid0 -> $(gw_pid)"
-for p in 2051 2052 2053 2054 2055 2056 2057 2058 2061 2062 2063 2064 2065 2066 2067; do
+for p in 2051 2052 2053 2054 2055 2056 2057 2058 2061 2062 2063 2064 2065 2066 2067 2071 2072 2073 2074 2075 2076; do
   [ "$(del_rule $p)" == "200" ] || fail "the rule on $p could not be deleted"
 done
 for c in qual-ca qual-otherca qual-client-rsa qual-client-ecdsa qual-client-otherca; do
