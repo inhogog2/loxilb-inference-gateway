@@ -165,6 +165,8 @@ cmp -s "$W/model.safetensors" "$SNAP/model.safetensors" && cmp -s "$W/config.jso
   && ok "I4d weights downloaded" || bad "I4d weights"
 run "I5 --engine sglang stages the sglang engine manifest" 0 "installed 1 model" -- inst --include-candidates --engine sglang --models $PID_OK
 cmp -s "$REG/manifests/$PID_OK.yaml" "$FIXT/manifests-sglang/$PID_OK.yaml" && ok "I5b" || bad "I5b manifest set"
+run "I5c --engine trtllm stages the TensorRT-LLM engine manifest" 0 "installed 1 model" -- inst --include-candidates --engine trtllm --models $PID_OK
+cmp -s "$REG/manifests/$PID_OK.yaml" "$FIXT/manifests-trtllm/$PID_OK.yaml" && ok "I5d" || bad "I5d manifest set"
 stop_stub
 run "I6 re-run with the hub down" 0 "installed 1 model" -- inst --include-candidates --models $PID_OK --weights-dir "$WD"
 grep -q "already staged and verified" <<<"$OUT" && grep -q "3/3 files already verified" <<<"$OUT" \

@@ -49,7 +49,7 @@ PERF_KEYS = ("topology", "surface", "corpus", "rateRps", "requestsPerArm", "exac
              "exactTtftP50Ms", "baselineTtftP50Ms", "date")
 GATE_VALUES = ("pass", "fail", "not_run", "n_a")
 # The engine manifest set a registry stages for each engine (the identity probe compares it with the engine).
-MANIFEST_SETS = {"vllm": "manifests", "sglang": "manifests-sglang"}
+MANIFEST_SETS = {"vllm": "manifests", "sglang": "manifests-sglang", "trtllm": "manifests-trtllm"}
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,62}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -419,7 +419,8 @@ def check(m, doc_path=DOC):
                 e = m["_engines"].get(key, {})
                 if em.get("imageDigest") != e.get("digest"):
                     errs.append(f"{where}: {mset} imageDigest {em.get('imageDigest')} != engine digest {e.get('digest')}")
-                if "v" + str(em.get("engineVersion")) != str(key[1]):
+                # The engines report their version without the tag's leading "v"; the identity probe compares exactly.
+                if str(em.get("engineVersion")) != str(key[1]).removeprefix("v"):
                     errs.append(f"{where}: {mset} engineVersion {em.get('engineVersion')} != {key[1]}")
                 if em.get("modelRevision") != mod["revision"]:
                     errs.append(f"{where}: {mset} modelRevision != manifest revision")
@@ -575,7 +576,7 @@ def install_one(mod, m, args, token, work):
         raise Refusal("INDEX_SHA_MISMATCH", f"{pid}: weights index is not {mod['weightsIndexSha256']}")
     fixtures = []
     fxroot = os.path.join(FIX, "probefixtures", pid)
-    for sub in ("", "sglang"):
+    for sub in ("", "sglang", "trtllm"):
         d = os.path.join(fxroot, sub)
         if not os.path.isdir(d) or os.path.islink(d):
             continue

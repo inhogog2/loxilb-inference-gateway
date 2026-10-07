@@ -17,7 +17,7 @@
 #
 # Usage:
 #   install-models.sh --list
-#   install-models.sh [--dry-run] [--engine vllm|sglang] [--models id[,id...]] [--include-candidates]
+#   install-models.sh [--dry-run] [--engine vllm|sglang|trtllm] [--models id[,id...]] [--include-candidates]
 #                     [--registry-dir DIR] [--tokenizer-dir DIR] [--weights-dir DIR] [--pull-image]
 #                     [--hf-token-file FILE]
 #

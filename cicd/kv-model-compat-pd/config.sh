@@ -4,8 +4,8 @@
 # Additive: only the named profiles (default: every committed candidate profile) are written; nothing else in
 # REG is touched. For each profile it installs, root-owned 0644 as the registry's trusted-file checks require:
 #   REG/<id>.yaml                           the committed profile
-#   REG/manifests/<id>.yaml                 the vLLM manifest (a leg swaps in the SGLang one for its run)
-#   REG/probefixtures/<id>/[sglang/]        the committed probe fixtures
+#   REG/manifests/<id>.yaml                 the vLLM manifest (a run on another engine swaps in that engine's)
+#   REG/probefixtures/<id>/[sglang/|trtllm/] the committed probe fixtures
 #   REG/artifacts/sha256/<sha>              the tokenizer.json and the chat template, content-addressed
 #   TOKDIR/<org__name>/tokenizer.json       the tokenizer the serving path loads
 #
@@ -39,10 +39,11 @@ for id in "${IDS[@]}"; do
   rm -rf "${REG:?}/probefixtures/$id"
   install -d -o root -g root -m 0755 "$REG/probefixtures/$id"
   install -o root -g root -m 0644 "${FIX}/probefixtures/$id"/*.json "$REG/probefixtures/$id/"
-  if [ -d "${FIX}/probefixtures/$id/sglang" ]; then
-    install -d -o root -g root -m 0755 "$REG/probefixtures/$id/sglang"
-    install -o root -g root -m 0644 "${FIX}/probefixtures/$id/sglang"/*.json "$REG/probefixtures/$id/sglang/"
-  fi
+  for sub in sglang trtllm; do   # the engine-scoped sets (an engine's rule is attested against its own)
+    [ -d "${FIX}/probefixtures/$id/$sub" ] || continue
+    install -d -o root -g root -m 0755 "$REG/probefixtures/$id/$sub"
+    install -o root -g root -m 0644 "${FIX}/probefixtures/$id/$sub"/*.json "$REG/probefixtures/$id/$sub/"
+  done
   install -d -o root -g root -m 0755 "$TOKDIR/$slug"
   install -o root -g root -m 0644 "$TMP/tok.json" "$TOKDIR/$slug/tokenizer.json"
   echo "STAGED $id ($model@${rev:0:12}) tokenizer=${toksha:0:12} template=${tplsha:0:12}"
