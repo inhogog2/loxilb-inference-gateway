@@ -1,7 +1,9 @@
 #!/bin/bash
 # A rule whose TLS context cannot be built is refused by the data plane and
 # leaves nothing behind: the gateway keeps running, the port has no listener,
-# and the same port can be used by a valid rule afterwards.
+# and the same port can be used by a valid rule afterwards. A cipher string
+# the TLS library does not take is the caller's to correct: it is refused
+# before the data plane is asked.
 source ../common.sh
 echo SCENARIO-e2ehttps-tlsctx
 
@@ -18,7 +20,7 @@ listens() { $dexec llb1 ss -Hltn "sport = :$1" 2>/dev/null | grep -q LISTEN; }
 not_installed() { gw_log | grep -c "vip port $1 not installed: TLS context"; }
 
 post_rule() { # port, extra serviceArguments (JSON members, leading comma)
-  $dexec llb1 curl -s -o /dev/null -w '%{http_code}' -X POST $API \
+  $dexec llb1 curl -s -o /tmp/tlsctx-answer -w '%{http_code}' -X POST $API \
     -H "Content-Type: application/json" -d '{
   "serviceArguments": { "externalIP": "'$VIP'", "port": '$1', "protocol": "tcp",
     "security": 2, "mode": 4, "host": "'$VIP'"'"$2"' },
@@ -47,6 +49,39 @@ serves() { # port
 del_rule() {
   $dexec llb1 curl -s -o /dev/null -w '%{http_code}' -X DELETE \
     "$API/hosturl/$VIP/externalipaddress/$VIP/port/$1/protocol/tcp"
+}
+
+answer() { $dexec llb1 cat /tmp/tlsctx-answer 2>/dev/null; }
+
+# A client CRL file that is not a CRL: the API does not read the file, the
+# TLS library does when the listener's context is built.
+BAD_CRL=', "mtls_frontend": { "client_cert_mode": "required", "client_ca_path": "/opt/loxilb/cert/rootCA.crt", "client_crl_path": "/opt/loxilb/cert/tlsctx-not-a-crl.pem" }'
+BAD_CIPHERS=', "tls_ciphers": "NOT-A-CIPHER"'
+
+# A cipher string the TLS library does not take: refused as the caller's
+# argument, with the field named, and the data plane is never asked.
+ciphers_leg() { # port
+  local port=$1 rc seen before
+  echo "Leg ciphers (port $port)"
+  seen=$(not_installed $port)
+  rc=$(post_rule $port "$BAD_CIPHERS")
+  echo "  POST -> $rc"
+  [ "$rc" == "400" ] && pass "a rule with an unusable cipher string is answered 400" \
+    || fail "the rule was answered $rc, want 400: the caller can correct tls_ciphers"
+  answer | grep -q "tls_ciphers" && pass "the answer names tls_ciphers" || fail "the answer does not name tls_ciphers: $(answer)"
+  [ "$(not_installed $port)" == "$seen" ] && pass "the data plane was not asked" || fail "the data plane logged a refusal for port $port"
+  listens $port && fail "port $port has a listener" || pass "port $port has no listener"
+  [ -z "$(rule_of $port)" ] && pass "no rule is stored" || fail "a rule is stored: $(rule_of $port)"
+  rc=$(post_rule $port ', "tls_ciphers": "TLS_AES_256_GCM_SHA384:ECDHE-RSA-AES256-GCM-SHA384"')
+  [ "$rc" == "200" ] && pass "a rule with a usable cipher string is accepted" || fail "the usable cipher string was answered $rc, want 200: $(answer)"
+  serves $port && pass "it serves" || fail "the rule with a usable cipher string does not serve"
+  before=$(rule_of $port)
+  rc=$(post_rule $port ', "inactiveTimeOut": 90, "tls_ciphers": "NOT-A-CIPHER"')
+  [ "$rc" == "400" ] && pass "a replace with an unusable cipher string is answered 400" \
+    || fail "the replace was answered $rc, want 400"
+  [ "$(rule_of $port)" == "$before" ] && pass "the rule reads back as it was" || fail "the refused values are stored: $(rule_of $port)"
+  serves $port && pass "the rule serves as before" || fail "the rule does not serve after the refused replace"
+  echo "  DELETE -> $(del_rule $port)"
 }
 
 # One leg: the rule is posted, the data plane must refuse it and survive.
@@ -100,16 +135,16 @@ replaced_leg() { # port
   [ "$rc" == "200" ] || { fail "precondition: the rule on $port was answered $rc"; return; }
   serves $port || { fail "precondition: the rule on $port does not serve"; echo "  DELETE -> $(del_rule $port)"; return; }
   before=$(rule_of $port); seen=$(not_installed $port)
-  rc=$(post_rule $port ', "inactiveTimeOut": 90, "tls_ciphers": "NOT-A-CIPHER"')
+  rc=$(post_rule $port ', "inactiveTimeOut": 90'"$BAD_CRL")
   echo "  POST (replace) -> $rc"
   [ "$rc" == "412" ] && pass "the replace the data plane did not install is answered 412" \
     || fail "the refused replace was answered $rc, want 412"
   [ "$(not_installed $port)" -gt "$seen" ] && pass "data plane logged the refusal" \
-    || fail "no refusal was logged for port $port: the replace did not reach the TLS context"
+    || fail "no refusal was logged for port $port: the replace did not reach the TLS context: $(answer)"
   [ "$(rule_of $port)" == "$before" ] && pass "the rule reads back as it was" \
     || fail "the refused values are stored: $(rule_of $port)"
   serves $port && pass "the rule serves as before" || fail "the rule does not serve after the refused replace"
-  rc=$(post_rule $port ', "inactiveTimeOut": 90, "tls_ciphers": "NOT-A-CIPHER"')
+  rc=$(post_rule $port ', "inactiveTimeOut": 90'"$BAD_CRL")
   [ "$rc" == "412" ] && pass "the same request again is refused again, not taken for no change" \
     || fail "the same refused request was answered $rc the second time, want 412"
   serves $port && pass "the rule still serves" || fail "the rule does not serve after the second refusal"
@@ -132,14 +167,21 @@ listens 2020 || fail "precondition: the scenario's rule on 2020 has no listener"
 
 LEGS=${TLSCTX_LEGS:-frontend backend}
 
-# Frontend context: a cipher string no TLS library accepts.
+# A cipher string no TLS library accepts never reaches the data plane.
 if [[ " $LEGS " == *" frontend "* ]]; then
-  refused_leg frontend-ciphers 2030 ', "tls_ciphers": "NOT-A-CIPHER"'
+  ciphers_leg 2036
+fi
+
+# Frontend context: a client CRL file that is not a CRL.
+if [[ " $LEGS " == *" frontend "* ]]; then
+  $dexec llb1 sh -c 'echo not-a-crl > /opt/loxilb/cert/tlsctx-not-a-crl.pem'
+  refused_leg frontend-crl 2030 "$BAD_CRL"
 fi
 
 # The same refusal on a rule that exists.
 if [[ " $LEGS " == *" frontend "* ]]; then
   replaced_leg 2034
+  $dexec llb1 rm -f /opt/loxilb/cert/tlsctx-not-a-crl.pem
 fi
 
 # Backend context: a client certificate ID whose files are not PEM.
