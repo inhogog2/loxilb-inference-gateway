@@ -156,7 +156,44 @@ client-certificate support. On one built without it, `ready` is false with the r
 is refused with 412 and the same sentence. A client should offer these arguments only when the
 capability is ready.
 
-## 7. Upgrading
+## 7. The same through `loxicmd`
+
+```
+loxicmd create cert --usage=ca     --cert-id=backend-ca     --cert-file=ca.pem
+loxicmd create cert --usage=client --cert-id=backend-client --cert-file=client.pem --key-file=client.key
+
+loxicmd create lb 10.10.10.254 --tcp=2020:8443 --endpoints=31.31.31.1:1 --mode=fullproxy \
+    --security=e2ehttps --host=10.10.10.254 \
+    --backend-ca-cert-id=backend-ca --backend-client-cert-id=backend-client \
+    [--backend-tls-server-name=backend.example.test]
+```
+
+- Naming a CA is what asks for verification: `--backend-ca-cert-id` sends
+  `mtls_backend.verify_server_cert: true` with the ID. There is no separate verify flag.
+- `create cert` refuses a CA with a key and a client certificate without one before it sends
+  anything.
+- `--mtls-backend-ca-path`, `--mtls-backend-cert-path`, `--mtls-backend-key-path` and
+  `--mtls-backend-verify-server` are retired. The command fails, names the replacement, and
+  creates nothing.
+- `get lb -o wide` has a `Backend TLS` column with the installed policy, for example
+  `applied: verify, client, name`. The certificate IDs and the server name are in `-o json`
+  (`backend_tls_effective`).
+
+The published images embed a CLI with these arguments. The scenarios `cicd/e2ehttpsproxy`, `e2ehttpsproxy-prefix` and
+`e2ehttpsproxy-mtls` configure their backend leg this way, and
+`cicd/e2ehttpsproxy/validation-betls-cli.sh` checks the commands above.
+
+## 8. What a client sees when the backend leg fails
+
+Measured by `cicd/e2ehttpsproxy-betls`:
+
+| Case | What the client gets |
+|---|---|
+| No endpoint passes verification (another CA, an expired certificate, an address or name the certificate does not carry) | HTTP/1.1: `502` `backend_unreachable`. HTTP/2: `503`. No endpoint receives the request. |
+| An endpoint requires a client certificate, the rule names none, and the endpoint rejects the gateway only after the handshake completed (TLS 1.3) | The client connection is closed without an HTTP answer. |
+| A certificate rotation the data plane refuses (for example a key it does not accept) | `PUT` answers `400`; the rule reads `failed` and its `generation` does not move; traffic continues on the earlier context. |
+
+## 9. Upgrading
 
 - A backend that requires a client certificate used to receive the listener's default certificate.
   It no longer does. Name a client certificate on the rule (sections 1 and 2).

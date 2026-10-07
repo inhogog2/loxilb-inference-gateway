@@ -53,8 +53,12 @@ Remove the retired path and inline-material arguments from every request body an
 `loxicmd create lb` invocations:
 
 ```
---mtls-backend-ca-path  --mtls-backend-cert-path  --mtls-backend-key-path
+--mtls-backend-ca-path  --mtls-backend-cert-path  --mtls-backend-key-path  --mtls-backend-verify-server
 ```
+
+A `loxicmd` that knows the certificate-ID arguments refuses these four itself and names the
+replacement (`--backend-ca-cert-id`, `--backend-client-cert-id`); an earlier `loxicmd` still sends
+them and the gateway refuses the request.
 
 A request that still sends one of them fails with `400` and creates nothing. This includes a rule
 file saved from an earlier release and re-applied through the API: remove the keys from the file
