@@ -270,6 +270,16 @@ func gzipFile(path string) error {
 // crash never leaves a truncated archive under the final name; the
 // original is removed only after the rename succeeded.
 func GzipFile(path string, perm os.FileMode) error {
+	return GzipFileWith(path, perm, func(replace func() error) error { return replace() })
+}
+
+// GzipFileWith is GzipFile with the caller around its last step. replace
+// renames the finished archive into place and removes the original, and
+// around decides whether that happens and what is held while it does: a
+// caller that also removes these files elsewhere takes its lock there.
+// When around returns without replace having put the archive in place,
+// the archive is discarded and path is left as it was.
+func GzipFileWith(path string, perm os.FileMode, around func(replace func() error) error) error {
 	src, err := os.Open(path)
 	if err != nil {
 		return err
@@ -293,11 +303,18 @@ func GzipFile(path string, perm os.FileMode) error {
 		os.Remove(tmp)
 		return err
 	}
-	if err = os.Rename(tmp, path+".gz"); err != nil {
+	inPlace := false
+	err = around(func() error {
+		if err := os.Rename(tmp, path+".gz"); err != nil {
+			return err
+		}
+		inPlace = true
+		return os.Remove(path)
+	})
+	if !inPlace {
 		os.Remove(tmp)
-		return err
 	}
-	return os.Remove(path)
+	return err
 }
 
 // pruneBackups enforces MaxBackups and MaxAgeDays for backups of orig.

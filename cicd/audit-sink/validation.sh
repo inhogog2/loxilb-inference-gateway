@@ -10,7 +10,8 @@
 #        never the same number twice — across a clean restart, a kill, a
 #        cursor file cut short, the whole state deleted, and a crash placed
 #        between two steps of the cursor protocol
-#   T5   a receiver outage loses nothing, with or without a gateway restart
+#   T5   a receiver outage loses nothing, with or without a gateway restart,
+#        and whether the receiver died or went silent with its session up
 #        in the middle of it
 #   T6   sealing the segment while the sink is behind keeps the order
 #   T16  a segment pruned before a sink had it is put on record first
@@ -142,6 +143,22 @@ rcv_stop() { # the receiver dies as a SIEM does: no close, no goodbye
   done
   echo "  the $1 receiver would not die"; return 1
 }
+# rcv_silence <role> / rcv_hear <role>: the receiver's host stops answering
+# and answers again. Its process and its sessions stay as they are; nothing
+# sent to it arrives and nothing comes back, which is how a failed host or a
+# cut path looks from the gateway. A receiver that is killed is a different
+# thing: its kernel refuses the next write, and the sender is told.
+rcv_silence() { $hexec "$(rcv_ns "$1")" iptables -I INPUT -p tcp --dport 6514 -j DROP; }
+rcv_hear()    { $hexec "$(rcv_ns "$1")" iptables -D INPUT -p tcp --dport 6514 -j DROP 2>/dev/null; }
+# rcv_copies <role> <boot> <after> <upto> [session] → how many records of
+# that boot in (after, upto] arrived more than once; with "session", more
+# than once on one session
+rcv_copies() {
+  local key='.seq'; [[ "${5:-}" == session ]] && key='"\(.conn) \(.seq)"'
+  rcv_ctl "$1" __records | jq -s "[.[] | select(.boot_id==\"$2\" and .seq!=null and .seq>$3 and .seq<=$4) | $key] | group_by(.) | map(select(length>1)) | length"
+}
+# cursor_file <sink> <jq path> → read from the cursor the sink saved
+cursor_file() { docker exec llb1 sh -c "head -n1 '$STATE_DIR/$1.cursor' 2>/dev/null" | jq -r "$2" 2>/dev/null; }
 # rcv_seqs <role> <boot> → the seq of every record of that boot that arrived
 rcv_seqs() { rcv_ctl "$1" __records | jq -r "select(.boot_id==\"$2\" and .seq!=null) | .seq" | sort -u; }
 # missing_at <role> <boot> <after> <upto> → MISSING, how many local records
@@ -472,7 +489,14 @@ chk    MT-2e "the other sink is not touched by that" 1 "$(metric_int loxilb_audi
 S1=$(astatus | jq -r '.seq_high')
 # The receiver that comes back remembers nothing, so the claim is about the
 # range written during the outage, not about holes counted from 1.
+HELD0=$(sudo sh -c 'cat /tmp/audit-sink-compliance.jsonl 2>/dev/null' | grep -c .)
+KEPT0=$(sudo sh -c 'cat /tmp/audit-sink-compliance.jsonl.[0-9]* 2>/dev/null' | grep -c .)
 rcv_start compliance || code=1
+# The receiver that comes back begins a new file. What the one before it
+# had written is the evidence of that session, and is still there.
+chk_ge T5-1h "the receiver that died had frames on disk" 1 "$HELD0"
+chk    T5-1i "and they are kept beside the new receiver's file, not emptied" "$((KEPT0 + HELD0))" \
+  "$(sudo sh -c 'cat /tmp/audit-sink-compliance.jsonl.[0-9]* 2>/dev/null' | grep -c .)"
 wait_arrived compliance "$BOOT" "$S1" 120
 chk    T5-1b "the last record written during the outage arrived after it" 0 $?
 missing_at compliance "$BOOT" "$S0" "$S1"
@@ -511,6 +535,71 @@ chk    T5-2d "and so did every record that boot wrote during the outage" 0 "$MIS
 chk_ge T5-2e "there were records that boot wrote during it" 10 "$LOCAL_N"
 wait_caught compliance 60; chk T5-2f "the sink goes on into the new boot's records" 0 $?
 chk_ge T5-2g "which arrive under the new boot" 1 "$(rcv_seqs compliance "$BOOT" | grep -c .)"
+
+# ════════════════════════════════════════════════════════════════════════════
+# A write that returned put its bytes in the socket and no more. While the
+# receiver is silent every write returns, the sink has no failure to act on,
+# and a gateway that stops then has to know what was never acknowledged, or
+# its next boot begins after records no receiver holds.
+# silent_restart <id> <stop|crash>
+silent_restart() {
+  local id=$1 how=$2 q0 q_end f0 owed i
+  wait_caught compliance 60 || code=1
+  q0=$(astatus | jq -r '.seq_high')
+  BOOT_PREV=$BOOT
+  f0=$(rcv_stat compliance '.frames')
+  rcv_silence compliance || code=1
+  drive 5
+  # The cursor is saved a moment after the last record was read, and says
+  # then what the receiver has not acknowledged.
+  for i in $(seq 1 20); do
+    owed=$(cursor_file compliance '.resend_from.seq // empty')
+    [[ -n "$owed" ]] && break
+    sleep 0.5
+  done
+  chk    "${id}a" "nothing written since the receiver went silent reached it" "$f0" "$(rcv_stat compliance '.frames')"
+  chk_ge "${id}b" "the saved cursor names where the unacknowledged records begin" 1 "${owed:-0}"
+  chk_le "${id}c" "which is no later than the last record the receiver took" "$q0" "${owed:-0}"
+  if [[ "$how" == crash ]]; then
+    gw_crash || fatal "the gateway could not be killed"
+  else
+    gw_stop || fatal "the gateway could not be stopped"
+  fi
+  q_end=$(trail | jq -s "[.[] | select(.boot_id==\"$BOOT_PREV\") | .seq] | max")
+  chk_ge "${id}d" "the cursor on disk still names them with the gateway down" 1 "$(cursor_file compliance '.resend_from.seq // 0')"
+  gw_start || fatal "the gateway did not come back"
+  rcv_hear compliance
+  sinks_up; chk "${id}e" "the sinks are configured again on the new boot" 0 $?
+  wait_arrived compliance "$BOOT_PREV" "$q_end" 120
+  chk    "${id}f" "the previous boot's last record arrived" 0 $?
+  missing_at compliance "$BOOT_PREV" "$q0" "$q_end"
+  chk    "${id}g" "and so did every record that boot wrote into the silent session" 0 "$MISSING"
+  chk_ge "${id}h" "there were records that boot wrote into it" 10 "$LOCAL_N"
+  # What the new boot sent again it sent once. A record can still arrive
+  # twice: the socket the old process left behind goes on retransmitting
+  # what was in it for a few seconds, and when the receiver hears again
+  # within them the head of it arrives on the old session as well. That is
+  # the transport's repeat and is the receiver's to remove by (instance_id,
+  # boot_id, seq); it is counted here and said, not asserted away.
+  chk    "${id}i" "none of them arrived twice on one session" 0 "$(rcv_copies compliance "$BOOT_PREV" "$q0" "$q_end" session)"
+  echo "    records of that range that arrived on more than one session: $(rcv_copies compliance "$BOOT_PREV" "$q0" "$q_end")"
+  wait_caught compliance 60; chk "${id}j" "the sink goes on into the new boot's records" 0 $?
+  for i in $(seq 1 20); do
+    [[ -z "$(cursor_file compliance '.resend_from.seq // empty')" ]] && break
+    sleep 0.5
+  done
+  chk    "${id}k" "and with everything acknowledged the saved cursor owes nothing" "" "$(cursor_file compliance '.resend_from.seq // empty')"
+}
+
+echo ""
+echo "T5 (c): the receiver goes silent and the gateway is stopped before the transport gives up"
+echo "════════════════════════════════════════════════════════════════════════"
+silent_restart T5-3 stop
+
+echo ""
+echo "T5 (d): the same, and the gateway is killed"
+echo "════════════════════════════════════════════════════════════════════════"
+silent_restart T5-4 crash
 
 # ════════════════════════════════════════════════════════════════════════════
 echo ""
@@ -684,6 +773,9 @@ wait_caught secondary 60 || code=1
 api GET /audit/policy
 POL0=$RESP_BODY
 LOST0=$(count '.event_type=="sys.segment.lost_to_retention"')
+S16=$(astatus | jq -r '.seq_high')
+M_LOST0=$(metric_int loxilb_audit_records_lost_to_retention_total)
+LOGE0=$(docker exec llb1 sh -c "cat /tmp/loxilb.out /tmp/loxilb.err 2>/dev/null" | grep -c 'audit: prune audit-[^ ]*: ')
 rcv_stop secondary || code=1
 api POST /audit/policy "${CT[@]}" -d "$(printf '%s' "$POL0" | jq -c '.max_segment_bytes = 4096 | .retention_max_bytes = 4096')"
 chk T16-1a "a quota of one small segment is accepted" 204 "$RESP_CODE"
@@ -691,19 +783,42 @@ drive 20
 # Prune passes run with the writer's heartbeat, every 30 seconds. The
 # records are captured the moment they appear: under this quota the segment
 # that holds them is itself pruned a few passes later.
-LOST=""; PRUNE=""
-for i in $(seq 1 60); do
+#
+# The run does not end at the first loss and its prune. A segment is in the
+# directory under two names while it is compressed, and a pass that listed
+# one of them can find it gone: whatever a pass does about that shows only
+# over several segments. Every record of a loss or a prune is collected as
+# it appears, for the rows that read the whole run.
+LOST=""; PRUNE=""; FIRST_PRUNE=""
+ACC=$(mktemp)
+segment_events() { # appends this arm's loss and prune records to $ACC, and reads the trail into T
   T=$(trail)
-  LOST=$(printf '%s\n' "$T" | jq -c 'select(.event_type=="sys.segment.lost_to_retention")' | tail -n +$((LOST0 + 1)) | head -n1)
-  if [[ -n "$LOST" ]]; then
-    RES=$(printf '%s' "$LOST" | jq -r '.detail.resource')
-    PRUNE=$(printf '%s\n' "$T" | jq -c "select(.event_type==\"sys.segment.prune\" and .detail.resource==\"$RES\")" | head -n1)
-    [[ -n "$PRUNE" ]] && break
+  printf '%s\n' "$T" | jq -c "select(.boot_id==\"$BOOT\" and .seq>$S16 and (.event_type|test(\"^sys\\\\.segment\\\\.(lost_to_retention|prune|prune_failed)$\")))" >> "$ACC"
+}
+# how many segments have both their loss and their prune collected
+pairs() {
+  sort -u "$ACC" | jq -s '[.[] | select(.event_type=="sys.segment.lost_to_retention") | .detail.resource] as $l
+    | [.[] | select(.event_type=="sys.segment.prune") | .detail.resource] | map(select(. as $r | $l | index($r))) | unique | length'
+}
+for i in $(seq 1 110); do
+  segment_events
+  if [[ -z "$FIRST_PRUNE" ]]; then
+    LOST=$(printf '%s\n' "$T" | jq -c 'select(.event_type=="sys.segment.lost_to_retention")' | tail -n +$((LOST0 + 1)) | head -n1)
+    if [[ -n "$LOST" ]]; then
+      RES=$(printf '%s' "$LOST" | jq -r '.detail.resource')
+      PRUNE=$(printf '%s\n' "$T" | jq -c "select(.event_type==\"sys.segment.prune\" and .detail.resource==\"$RES\")" | head -n1)
+      FIRST_PRUNE=$PRUNE
+    fi
   fi
+  [[ -n "$FIRST_PRUNE" && "$(pairs)" -ge 3 ]] && break
+  # More segments for the passes to come.
+  [[ -n "$FIRST_PRUNE" ]] && drive 3
   sleep 2
 done
 api POST /audit/policy "${CT[@]}" -d "$POL0"
 chk T16-1b "the policy is put back" 204 "$RESP_CODE"
+segment_events
+M_LOST1=$(metric_int loxilb_audit_records_lost_to_retention_total)
 
 chk_nonempty T16-2a "the loss is on the trail" "$(printf '%s' "$LOST" | jq -r '.event_type // empty')"
 chk    T16-2b "naming the sink that had not been sent the segment" '["secondary"]' "$(printf '%s' "$LOST" | jq -c '.detail.sinks_pending')"
@@ -730,6 +845,30 @@ while IFS= read -r rec; do
   held=$(rcv_seqs compliance "$(printf '%s' "$rec" | jq -r '.boot_id')" | awk -v a="$a" -v b="$b" '$1>=a && $1<=b' | grep -c .)
   echo "    loss at seq $(printf '%s' "$rec" | jq -r '.seq') names compliance for $a..$b; its receiver holds $held of $((b - a + 1)): $(printf '%s' "$rec" | jq -c '.detail')"
 done <<< "$AGAINST"
+
+# The whole run: every segment that went, went once.
+EV=$(sort -u "$ACC"); rm -f "$ACC"
+losses() { printf '%s\n' "$EV" | jq -c 'select(.event_type=="sys.segment.lost_to_retention")'; }
+prunes() { printf '%s\n' "$EV" | jq -c 'select(.event_type=="sys.segment.prune")'; }
+chk_ge T16-4a "the run went past the first pair: segments with their loss and their prune on the trail" 3 "$(losses | jq -s '[.[].detail.resource] | unique | length')"
+chk    T16-4b "no segment's loss is on the trail twice" 0 "$(losses | jq -s '[.[].detail.resource] | group_by(.) | map(select(length>1)) | length')"
+chk    T16-4c "no range of records is announced lost twice" 0 "$(losses | jq -s '[.[] | "\(.boot_id) \(.detail.seq_from) \(.detail.seq_to)"] | group_by(.) | map(select(length>1)) | length')"
+chk    T16-4d "no segment's prune is on the trail twice" 0 "$(prunes | jq -s '[.[].detail.resource] | group_by(.) | map(select(length>1)) | length')"
+chk    T16-4e "the counter moved by the records of those ranges, each counted once" \
+  "$(losses | jq -s '[.[] | .detail.seq_to - .detail.seq_from + 1] | add // 0')" "$(( ${M_LOST1:-0} - ${M_LOST0:-0} ))"
+# A segment that was pruned is in the directory under neither of its names.
+HEADS=$(docker exec llb1 sh -c "cd '$AUDIT_DIR' && for f in audit-*.jsonl audit-*.jsonl.gz; do [ -f \"\$f\" ] && zcat -f \"\$f\" | head -n1; done" 2>/dev/null)
+LEFT=0
+while IFS= read -r u; do
+  [[ -z "$u" ]] && continue
+  if printf '%s\n' "$HEADS" | grep -q "\"segment_uuid\":\"$u\""; then
+    LEFT=$((LEFT + 1)); echo "    pruned segment $u is still in the directory"
+  fi
+done < <(prunes | jq -r '.detail.resource | sub("^audit_segment:"; "")' | sort -u)
+chk    T16-4f "no pruned segment is left in the directory, plain or compressed" 0 "$LEFT"
+chk    T16-4g "no removal failed: the gateway logged none" "$LOGE0" \
+  "$(docker exec llb1 sh -c "cat /tmp/loxilb.out /tmp/loxilb.err 2>/dev/null" | grep -c 'audit: prune audit-[^ ]*: ')"
+chk    T16-4h "and none is on the trail as failed" 0 "$(printf '%s\n' "$EV" | jq -c 'select(.event_type=="sys.segment.prune_failed")' | grep -c .)"
 
 rcv_start secondary || code=1
 wait_caught secondary 120; chk T16-3a "with its receiver back the secondary sink catches up" 0 $?

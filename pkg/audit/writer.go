@@ -269,6 +269,11 @@ type Writer struct {
 	// passSaw is the name of the newest sealed segment the last prune pass
 	// listed; a later name was sealed since.
 	passSaw string
+	// pruneOwed holds the sealed segments whose prune is on the trail and
+	// whose files could not be removed, by name. The value says the
+	// failure has been recorded. A later pass removes them and announces
+	// nothing again.
+	pruneOwed map[string]bool
 }
 
 // New validates the directory, recovers any segment the previous process
@@ -1034,6 +1039,9 @@ type Stats struct {
 	CompressFailed  uint64
 	CompressSkipped uint64
 	Pruned          uint64
+	// PruneFailed counts the segments whose removal failed after it was
+	// announced; each is counted once, however often it is tried again.
+	PruneFailed uint64
 	// LostToRetention counts the records of segments pruned before every
 	// sink had been sent them.
 	LostToRetention uint64
@@ -1097,6 +1105,7 @@ func (w *Writer) Stats() Stats {
 		CompressFailed:    w.seg.stats.compressFailed.Load(),
 		CompressSkipped:   w.seg.stats.compressSkipped.Load(),
 		Pruned:            w.stats.pruned.Load(),
+		PruneFailed:       w.seg.stats.pruneFailed.Load(),
 		LostToRetention:   w.stats.lostToRetention.Load(),
 		ReserveBreaches:   w.stats.reserveBreaches.Load(),
 		ReserveBreached:   w.reserveBreached.Load(),
@@ -1159,5 +1168,5 @@ func (w *Writer) Stats() Stats {
 	return s
 }
 
-// removeFile is os.Remove behind a name the tests can read.
-func removeFile(path string) error { return os.Remove(path) }
+// removeFile is os.Remove behind a name the tests can replace.
+var removeFile = os.Remove

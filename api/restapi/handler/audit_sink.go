@@ -79,6 +79,10 @@ func (a syslogSubmitter) Submit(line []byte, xseq, epoch uint64) error {
 
 func (a syslogSubmitter) Peer() (string, time.Time, bool) { return a.s.Peer() }
 
+func (a syslogSubmitter) Unconfirmed() (int, bool) { return a.s.Unconfirmed() }
+
+func (a syslogSubmitter) Broken() bool { return a.s.Broken() }
+
 // newAuditSinkTailer builds the tailer that feeds s from w's trail. It is
 // not started: building it is what checks the name and the filter, and a
 // caller replacing a sink wants that answer before it stops the old one.

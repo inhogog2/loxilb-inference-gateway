@@ -721,6 +721,193 @@ func TestSinkTailerWindowSurvivesARestartDuringTheOutage(t *testing.T) {
 	}
 }
 
+// holeSink is a receiver that can go away without the sender finding out:
+// while hole is set a submission returns without error and arrives
+// nowhere, which is what a write into a socket whose peer is gone does
+// until the transport gives up. What it can still say is that none of it
+// was acknowledged.
+type holeSink struct {
+	fakeSink
+	hole      atomic.Bool
+	swallowed atomic.Int64
+	// closed is set when the receiver ends the session; it is told once.
+	closed atomic.Bool
+	// failAfter, when not zero, is how many more submissions the hole
+	// takes before the session fails on one and the receiver is back.
+	failAfter atomic.Int64
+}
+
+func (h *holeSink) Broken() bool { return h.closed.Swap(false) }
+
+func (h *holeSink) Submit(line []byte, xseq, epoch uint64) error {
+	if h.hole.Load() {
+		if h.failAfter.Load() > 0 && h.failAfter.Add(-1) == 0 {
+			h.hole.Store(false)
+			return errors.New("write: i/o timeout")
+		}
+		h.swallowed.Add(1)
+		return nil
+	}
+	h.swallowed.Store(0)
+	return h.fakeSink.Submit(line, xseq, epoch)
+}
+
+func (h *holeSink) Unconfirmed() (int, bool) { return int(h.swallowed.Load()), true }
+
+// A write that returned without error reached the socket, not the
+// receiver. A sink stopped before the failure showed has sent nothing it
+// can call received: the next run goes over the window again.
+func TestSinkTailerWindowSurvivesAStopBeforeTheFailureShowed(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		compliance bool
+	}{{"compliance", true}, {"filtered", false}} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			w := startWriter(t, cfg)
+			writeN(t, w, 6, "before")
+
+			sink := &holeSink{}
+			tc := tailerConfig(cfg.Dir, "siem", sink, w)
+			tc.Compliance = tt.compliance
+			if !tt.compliance {
+				tc.Filter = SinkFilter{Streams: []Stream{StreamMgmt}}
+			}
+			tl := startTailer(t, tc)
+			caughtUp := func() {
+				t.Helper()
+				waitFor(t, "the sink to be past the trail with its cursor saved", func() bool {
+					p := tl.Progress().Position
+					return p.Seq == w.SeqHigh() && tl.Stats().Cursor.Position == p
+				})
+			}
+			caughtUp()
+
+			// The receiver is gone and the transport has not said so.
+			sink.hole.Store(true)
+			writeN(t, w, 3, "during")
+			caughtUp()
+			if st := tl.Stats(); st.State != SinkConnected || st.SubmitErrors != 0 {
+				t.Fatalf("the sink noticed the outage (%+v); this test is about the one it cannot notice", st)
+			}
+			stopTailer(t, tl)
+
+			sink.hole.Store(false)
+			startTailer(t, tc)
+			waitFor(t, "the records written into the dead session", func() bool {
+				n := 0
+				for _, f := range sink.got() {
+					if strings.Contains(string(f.raw), `"/during/`) {
+						n++
+					}
+				}
+				return n == 3
+			})
+		})
+	}
+}
+
+// The run that sends again what the last one left can lose its session
+// part-way through: the receiver is still not there and takes the first of
+// them like the run before, until the transport gives up. What that
+// session took is sent again too, from the start of it.
+func TestSinkTailerResendThatLosesItsSessionStartsAgain(t *testing.T) {
+	cfg := testConfig(t)
+	w := startWriter(t, cfg)
+	writeN(t, w, 4, "before")
+
+	sink := &holeSink{}
+	tc := tailerConfig(cfg.Dir, "siem", sink, w)
+	tc.Filter = SinkFilter{Streams: []Stream{StreamMgmt}}
+	tc.ReconnectWindow = -1
+	tl := startTailer(t, tc)
+	caughtUp := func() {
+		t.Helper()
+		waitFor(t, "the sink to be past the trail with its cursor saved", func() bool {
+			p := tl.Progress().Position
+			return p.Seq == w.SeqHigh() && tl.Stats().Cursor.Position == p
+		})
+	}
+	caughtUp()
+	sink.hole.Store(true)
+	writeN(t, w, 6, "during")
+	caughtUp()
+	stopTailer(t, tl)
+
+	// The next run finds the receiver as the last one left it. The
+	// session takes three of the six and fails on the fourth.
+	sink.failAfter.Store(4)
+	startTailer(t, tc)
+	waitFor(t, "every record written into the dead sessions", func() bool {
+		seen := map[string]bool{}
+		for _, f := range sink.got() {
+			if strings.Contains(string(f.raw), `"/during/`) {
+				seen[f.field(t, "seq")] = true
+			}
+		}
+		return len(seen) == 6
+	})
+}
+
+// A receiver that ends the session while the sink has nothing to send is
+// not found out by a write. The sink asks, and what follows is what
+// follows a failed write: it is no longer connected, the outage is on the
+// trail, and the window is sent again.
+func TestSinkTailerLearnsThatAnIdleSessionEnded(t *testing.T) {
+	cfg := testConfig(t)
+	w := startWriter(t, cfg)
+	writeN(t, w, 6, "r")
+
+	sink := &holeSink{}
+	tc := tailerConfig(cfg.Dir, "siem", sink, w)
+	tc.Filter = SinkFilter{Streams: []Stream{StreamMgmt}}
+	tc.ReconnectWindow = 3
+	tl := startTailer(t, tc)
+	waitFor(t, "the six records and an idle sink", func() bool {
+		return len(sink.got()) == 6 && tl.Progress().Position.Seq == w.SeqHigh() &&
+			tl.Stats().Cursor.Position == tl.Progress().Position
+	})
+	if st := tl.Stats(); st.State != SinkConnected {
+		t.Fatalf("state %q before the receiver went, want connected", st.State)
+	}
+
+	// The receiver stays away for a while. The sink has nothing new to
+	// send and is behind all the same, by the window: that is what it
+	// says of itself, with the age of the oldest record it holds unsent.
+	sink.setVerdict(func(int, []byte) error { return fmt.Errorf("dial: %w", ErrSubmitNotAttempted) })
+	sink.closed.Store(true)
+	waitFor(t, "the sink to say it is behind", func() bool {
+		p := tl.Place()
+		return tl.Stats().State == SinkDisconnected && !p.Idle && !p.Oldest.IsZero()
+	})
+	if n := len(sink.got()); n != 6 {
+		t.Fatalf("%d frames arrived with the receiver away", n-6)
+	}
+
+	sink.setVerdict(nil)
+	waitFor(t, "the window to be sent again", func() bool { return len(sink.got()) == 9 })
+	waitFor(t, "the sink to hold nothing unsent again", func() bool {
+		p := tl.Place()
+		return p.Idle && p.Oldest.IsZero()
+	})
+	got := sink.got()
+	for i := 6; i < 9; i++ {
+		if got[i].field(t, "seq") != got[i-3].field(t, "seq") {
+			t.Fatalf("frame %d is seq %s, want the window's %s again", i, got[i].field(t, "seq"), got[i-3].field(t, "seq"))
+		}
+	}
+	if st := tl.Stats(); st.Resent != 3 {
+		t.Fatalf("stats %+v, want 3 resent", st)
+	}
+	d := eventsOf(t, cfg.Dir, "sys.sink.disconnect")
+	if len(d) != 1 {
+		t.Fatalf("%d sys.sink.disconnect records, want 1", len(d))
+	}
+	if detail := d[0]["detail"].(map[string]any); detail["reason"] != "unreachable" || detail["reconnect_window_records"] != float64(3) {
+		t.Fatalf("disconnect detail %v", detail)
+	}
+}
+
 // A resend ends at the record the sink had reached. Retention can take the
 // segment that record is in while the receiver is away; the resend must
 // end all the same, or the cursor never moves again.

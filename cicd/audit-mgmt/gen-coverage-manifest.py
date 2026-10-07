@@ -448,6 +448,21 @@ MATRIX = [
             assertions=["T16-2e", "T16-2f", "T16-2g", "T16-2i"],
             scenario="audit-sink",
             unit=["TestPruneOfAnExportedSegmentLosesNothing", "TestPruneWithoutSinksSaysNothingAboutSinks"]),
+        req("2", ["bytes"],
+            "a segment is pruned once, whichever of its two files a pass finds while it is being "
+            "compressed, and no file of it is left",
+            assertions=["T16-4d", "T16-4f"],
+            scenario="audit-sink",
+            unit=["TestPruneTakesASegmentHeldInBothFormsOnce", "TestPruneFollowsASegmentCompressedUnderThePass",
+                  "TestPruneOfASegmentBeingCompressedIsNotUndone"]),
+    ]),
+    entry("sys.segment.prune_failed", "A", [
+        req("2", ["errno_class"],
+            "the prune is on the trail and the segment could not be removed: it is said once, no newer "
+            "segment is taken ahead of it, and the pass that removes it announces and counts nothing again",
+            assertions=["T16-4g", "T16-4h"],
+            scenario="audit-sink",
+            unit=["TestPruneThatCannotRemoveIsSaidOnceAndTriedAgain"]),
     ]),
     entry("sys.segment.lost_to_retention", "A", [
         req("2", ["seq_from", "seq_to", "sinks_pending"],
@@ -459,6 +474,11 @@ MATRIX = [
             unit=["TestPruneRecordsWhatASinkWasNeverSent", "TestPruneWaitsForTheRangeOfASegmentItDidNotSeal",
                   "TestPruneDoesNotReadASegmentNoSinkIsBehind",
                   "TestPruneTakesASegmentWhoseHeaderCannotBeRead"]),
+        req("2", ["seq_from", "seq_to"],
+            "a range is announced lost once and counted once, over a run of several pruned segments",
+            assertions=["T16-4a", "T16-4b", "T16-4c", "T16-4e"],
+            scenario="audit-sink",
+            unit=["TestPruneTakesASegmentHeldInBothFormsOnce", "TestPruneFollowsASegmentCompressedUnderThePass"]),
         req("2", ["sinks_pending"],
             "a sink that was sent the segment is not named: the pass's own records can seal the "
             "active segment under it, and a sink standing in a segment sealed since the pass listed "
