@@ -63,6 +63,15 @@ state is kept in `decode-cache.txt` beside the points and printed by `report`. `
 points measured with and without it are not comparable. `SGL_EXTRA_DECODE` holds further SGLang arguments for
 the decode engines only; it can carry the argument for a profile that has no row yet, recorded as `forced`.
 
+A state-space model on SGLang is seeded twice. SGLang 0.5.18 keeps such a model's recurrent state only where a
+request saved one: a seed saves it at its own end, and the state at the end of the shared prefix is saved by the
+first later request that branches there. With one seed per family the first timed request of every family is
+computed in full, and the first-round check refuses the arm (`EXACT_ROUND1_COLD`, every round-1 request cold).
+For the profiles of `sgl_second_seed_plan` in `env.sh` every family therefore gets a second seed request, the
+same prefix with another ending (`seed.py --second-touch`, receipts in `seed2-receipts.jsonl`), on its owner
+engine in both arms. One row so far, measured on one pool of SGLang 0.5.18 engines: `qwen38-27b-fp8-v1`. Its
+converged engine also starts with a larger static memory share (`sgl_static_mem`, `../kv-model-compat-pd`).
+
 On a prefill/decode fleet the report prints the KV transfers of each arm from the engines' own counters: how
 many, MB each, ms each, failed. vLLM counts them on the decode engines, SGLang on the prefill engines. SGLang's
 time is its latency metric, which also holds the wait for the prefill scheduler's next pass: an upper bound.
