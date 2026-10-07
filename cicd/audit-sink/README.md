@@ -185,6 +185,16 @@ scenario found.
 | `llbigw-2-twin-2-sink-nosealed-r1` | a sink standing in a segment sealed during the prune pass is taken for one that lost its place | `T16-2j`: a loss recorded against the compliance sink, whose receiver holds the range |
 | `llbigw-2-twin-2-sink-nodomain-r1` | the audit sinks are not a domain of the configuration document: the registry does not list them | 24 rows of `PS`: the document names no sink, a restart leaves none, the restore of the saved document is refused, and with no sink back nothing arrives. The rows of `PS` that hold without the domain stay green |
 
+One more run is not a single mutation but the gateway as it was before the
+unacknowledged run was kept: this tree's scenario against the image built
+from `e94b3867` (eBPF `7c85a4d2`), on `llbigw-1`. That image carries no
+fault points, so `T23-5` is red on it for that reason alone and its arm is
+not scored.
+
+| run id | gateway | assertions that went red |
+|---|---|---|
+| `llbigw-1-twin-2-sink-noresend-r1` | a write that returned is taken for a record the receiver has: the cursor is saved past it, and nothing is kept of what was not acknowledged | `T5-3b`, `T5-3d`, `T5-4b`, `T5-4d` (the saved cursor names no resend), `T5-3f`, `T5-3g`, `T5-4f`, `T5-4g` (the ten and eleven records written into the silent session never arrive). 202 other rows green, the rows of `T16-4` among them: on that run no prune pass met a segment being compressed, so the run says nothing about them either way; the unit suite makes that meeting happen (`TestPruneTakesASegmentHeldInBothFormsOnce`, `TestPruneFollowsASegmentCompressedUnderThePass`) |
+
 ## Layout
 
 | file | what it does |
