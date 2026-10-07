@@ -102,6 +102,29 @@ func eppTestRequest(port uint16, body string, timeout time.Duration) (int, strin
 	return resp.StatusCode, string(b), nil
 }
 
+// eppTestResponsePhase waits for the fake EPP's stream to end and checks
+// what the response phase told it (M6): the status under the plain "status"
+// key, the served endpoint, and the end of stream.
+func eppTestResponsePhase(t *testing.T, f *epptest.Fake, wantStatus string, wantServed string) {
+	t.Helper()
+	select {
+	case <-f.StreamClosed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the EPP stream did not end after the response")
+	}
+	f.Mu.Lock()
+	defer f.Mu.Unlock()
+	if f.RespStatus["status"] != wantStatus || f.RespStatus[":status"] != wantStatus {
+		t.Fatalf("EPP saw response status %v, want %s", f.RespStatus, wantStatus)
+	}
+	if f.Served != wantServed {
+		t.Fatalf("EPP saw served=%q, want %q", f.Served, wantServed)
+	}
+	if !f.RespEOS {
+		t.Fatal("EPP did not get the end of stream")
+	}
+}
+
 func eppTestSettled(t *testing.T) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -139,6 +162,10 @@ func TestEppParkResumeThroughDataPlane(t *testing.T) {
 		if len(f.Subset) != 1 || f.Subset[0] != fmt.Sprintf("%s:%d", ep.EpIP, ep.EpPort) {
 			t.Fatalf("EPP saw subset %v, want the rule's healthy endpoint", f.Subset)
 		}
+		f.Mu.Unlock()
+		eppTestResponsePhase(t, f, "200", eppAddr(ep))
+		f.Mu.Lock()
+		eppTestSettled(t)
 	})
 
 	t.Run("deadline: FailOpen falls back, FailClose answers 503", func(t *testing.T) {
@@ -285,6 +312,9 @@ func TestEppDecisionPinsEndpoint(t *testing.T) {
 		if !strings.Contains(seenB.body, `"model":"served-model"`) || seenB.headers.Get("Content-Length") != fmt.Sprint(len(seenB.body)) {
 			t.Fatalf("rewritten body or its length wrong: body=%q cl=%q", seenB.body, seenB.headers.Get("Content-Length"))
 		}
+		seenB.mu.Unlock()
+		eppTestResponsePhase(t, f, "200", eppAddr(epB))
+		seenB.mu.Lock()
 		eppTestSettled(t)
 	})
 
@@ -298,6 +328,7 @@ func TestEppDecisionPinsEndpoint(t *testing.T) {
 		if err != nil || code != 200 || !strings.Contains(resp, `"served":"a"`) {
 			t.Fatalf("code=%d resp=%q err=%v (want backend a after the dead one)", code, resp, err)
 		}
+		eppTestResponsePhase(t, f, "200", eppAddr(epA))
 		eppTestSettled(t)
 	})
 

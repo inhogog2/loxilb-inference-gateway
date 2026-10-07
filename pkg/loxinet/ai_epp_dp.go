@@ -66,7 +66,22 @@ type eppFlight struct {
 	mu     sync.Mutex
 	stream *epp.Stream // nil until the decision is OK; nil again once ended
 	ended  bool
+	// resp carries the response-phase events in the order the data plane
+	// reported them to the one goroutine that sends them (respLoop):
+	// headers before end of stream, never blocking the worker thread.
+	resp chan eppRespEvent
 }
+
+type eppRespEvent struct {
+	kind   int
+	status int
+	hdrs   []epp.Header
+	served string
+}
+
+// eppRespQueue bounds the response events waiting per flight; a request
+// reports at most headers and an end, so a full queue is a bug, not load.
+const eppRespQueue = 4
 
 // eppRuleRegister records (or clears) the EPP configuration of a rule by
 // its number. Called by the rule layer whenever a rule is stored.
@@ -138,7 +153,7 @@ func llb_epp_submit(svcID C.uint32_t, ns unsafe.Pointer, fd C.int, gen C.uint64_
 		}
 	}
 	sid := eppNextSid.Add(1)
-	fl := &eppFlight{sid: sid, fd: int(fd), gen: uint64(gen), ns: ns}
+	fl := &eppFlight{sid: sid, fd: int(fd), gen: uint64(gen), ns: ns, resp: make(chan eppRespEvent, eppRespQueue)}
 	fl.ctx, fl.cancel = context.WithCancel(context.Background())
 	eppFlights.Store(sid, fl)
 	eppInflight.Add(1)
@@ -166,6 +181,29 @@ func (fl *eppFlight) run(cfg epp.RuleCfg, req *epp.Request) {
 			stream.Abort()
 		}
 		fl.end()
+		return
+	}
+	go fl.respLoop(stream)
+}
+
+// respLoop sends the response-phase events of one flight in order on the
+// stream the request keeps open, and ends the flight after the end of
+// stream. It exits when end() closes the queue.
+func (fl *eppFlight) respLoop(s *epp.Stream) {
+	defer cgoRecover("eppFlight.respLoop")
+	for ev := range fl.resp {
+		switch ev.kind {
+		case C.EPP_EV_RESP_HEADERS:
+			if err := s.ReportResponseHeaders(ev.status, ev.hdrs, ev.served); err != nil {
+				tk.LogIt(tk.LogDebug, "[EPP] sid=%d: response headers report: %v\n", fl.sid, err)
+			}
+		case C.EPP_EV_RESP_EOS:
+			if err := s.ReportResponseEnd(); err != nil {
+				tk.LogIt(tk.LogDebug, "[EPP] sid=%d: end-of-stream report: %v\n", fl.sid, err)
+			}
+			fl.end()
+			return
+		}
 	}
 }
 
@@ -250,6 +288,7 @@ func (fl *eppFlight) end() {
 	fl.ended = true
 	s := fl.stream
 	fl.stream = nil
+	close(fl.resp) // every enqueue checks ended under fl.mu first
 	fl.mu.Unlock()
 	fl.cancel() // a Submit still waiting returns now and aborts its stream
 	if s != nil {
@@ -268,46 +307,26 @@ func llb_epp_resp_event(sid C.uint64_t, kind C.int, httpStatus C.int,
 		return
 	}
 	fl := v.(*eppFlight)
-	switch int(kind) {
-	case C.EPP_EV_RESP_HEADERS:
-		var hdrs []epp.Header
-		if respHdrsLen > 0 {
-			hdrs = eppParseHeaderLines(C.GoStringN(respHdrs, respHdrsLen))
-		}
-		servedStr := ""
-		if servedLen > 0 {
-			servedStr = C.GoStringN(served, servedLen)
-		}
-		status := int(httpStatus)
-		fl.mu.Lock()
-		s := fl.stream
-		fl.mu.Unlock()
-		if s != nil {
-			go func() {
-				defer cgoRecover("eppFlight.responseHeaders")
-				if err := s.ReportResponseHeaders(status, hdrs, servedStr); err != nil {
-					tk.LogIt(tk.LogDebug, "[EPP] sid=%d: response headers report: %v\n", fl.sid, err)
-				}
-			}()
-		}
-	case C.EPP_EV_RESP_EOS:
-		fl.mu.Lock()
-		s := fl.stream
-		fl.stream = nil
-		fl.mu.Unlock()
-		if s != nil {
-			go func() {
-				defer cgoRecover("eppFlight.responseEnd")
-				if err := s.ReportResponseEnd(); err != nil {
-					tk.LogIt(tk.LogDebug, "[EPP] sid=%d: end-of-stream report: %v\n", fl.sid, err)
-				}
-				fl.end()
-			}()
-		} else {
-			fl.end()
-		}
-	default: // EPP_EV_ABORT
+	if int(kind) == C.EPP_EV_ABORT {
 		fl.end()
+		return
+	}
+	ev := eppRespEvent{kind: int(kind), status: int(httpStatus)}
+	if respHdrsLen > 0 {
+		ev.hdrs = eppParseHeaderLines(C.GoStringN(respHdrs, respHdrsLen))
+	}
+	if servedLen > 0 {
+		ev.served = C.GoStringN(served, servedLen)
+	}
+	fl.mu.Lock()
+	defer fl.mu.Unlock()
+	if fl.ended {
+		return
+	}
+	select {
+	case fl.resp <- ev:
+	default:
+		tk.LogIt(tk.LogWarning, "[EPP] sid=%d: response event %d dropped (queue full)\n", fl.sid, int(kind))
 	}
 }
 
