@@ -22,6 +22,14 @@ export PREFILL=${PNODES[0]} DECODE=${DNODES[0]:-${PNODES[0]}}     # the compat s
 AB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPAT="${AB_DIR}/../kv-model-compat-pd"
 source "${COMPAT}/env.sh"
+# ab_engine_check <engine> [api] — the engines the scenario drives, and the shapes it drives each in.
+# TensorRT-LLM is measured as one pool of converged engines on the chat surface: that is what its rows in
+# scripts/models/validated-models.yaml claim, and ../kv-model-compat-pd/engine.sh launches no other role of it.
+ab_engine_check() {
+  case $1 in vllm|sglang) return 0 ;; trtllm) ;; *) echo "engine must be vllm|sglang|trtllm" >&2; return 64 ;; esac
+  [ "$TOPOLOGY" = converged ] || { echo "TRTLLM_TOPOLOGY_UNSUPPORTED $TOPOLOGY: TensorRT-LLM is measured converged only (TOPOLOGY=converged ENGINES=...)" >&2; return 64; }
+  [ "${2:-chat}" = chat ] || { echo "TRTLLM_SURFACE_UNSUPPORTED $2: TensorRT-LLM is measured on the chat surface only" >&2; return 64; }
+}
 ABROOT=${ABROOT:-/var/tmp/kv-model-ab-perf}        # evidence root
 FAMILIES=${FAMILIES:-60}                           # prompt families (a multiple of the prefill count)
 TARGET_TOKENS=${TARGET_TOKENS:-3400}               # long-prefix prompt size, under the engines' 4096 context

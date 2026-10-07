@@ -1,7 +1,7 @@
 #!/bin/bash
 # validation.sh — A/B performance, KV-exact routing against round-robin, per model (LIVE GPU fleet).
 #
-#   ./validation.sh model <vllm|sglang> <profileId>     fleet up -> corpus -> calibration -> three points -> fleet down
+#   ./validation.sh model <vllm|sglang|trtllm> <profileId>   fleet up -> corpus -> calibration -> three points -> fleet down
 #   ./validation.sh fleet-up|fleet-down <engine> <profileId>
 #   ./validation.sh report <engine> <profileId>          print the banked points as manifest `perf` entries
 #
@@ -18,7 +18,8 @@
 set -u
 source "$(dirname "$0")/env.sh"
 MODE=${1:-}; ENG=${2:-}; PROF=${3:-}
-[ -n "$PROF" ] || { echo "usage: $0 model|fleet-up|fleet-down|report <vllm|sglang> <profileId>"; exit 64; }
+[ -n "$PROF" ] || { echo "usage: $0 model|fleet-up|fleet-down|report <vllm|sglang|trtllm> <profileId>"; exit 64; }
+ab_engine_check "$ENG" || exit 64
 MODEL=$(profile_field "$PROF" baseModel)
 [ "$TOPOLOGY" = pd ] && BASE=${ABROOT}/${ENG}-${PROF} || BASE=${ABROOT}/${ENG}-${PROF}-${TOPOLOGY}
 mkdir -p "$BASE"; export AB_BASE=$BASE
@@ -72,7 +73,7 @@ corpora() {
   python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-long.jsonl" --families "$FAMILIES" --owners "${#PNODES[@]}" --prefix-repetitions "$reps"
   python3 "$AB_DIR/gen_corpus.py" --output "$BASE/corpus-short.jsonl" --families "$FAMILIES" --owners "${#PNODES[@]}" --shape short
 }
-cal_snapshot() { local n; for n in "${PNODES[@]}" "${DNODES[@]}"; do curl -s -m 10 "http://$n:$EPORT/metrics" > "$BASE/$1-engine-$n.prom"; done; }
+cal_snapshot() { local n; for n in "${PNODES[@]}" "${DNODES[@]}"; do curl -s -m 10 "http://$n:$EPORT$(engine_metrics_path "$ENG")" > "$BASE/$1-engine-$n.prom"; done; }
 calibrate() {
   [ -s "$BASE/calibration.json" ] && { echo "  calibration already banked"; return 0; }
   local enc; enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MODEL")
@@ -164,7 +165,7 @@ case $MODE in
       report
     else code=1; fi
     fleet_down ;;
-  *) echo "usage: $0 model|fleet-up|fleet-down|report <vllm|sglang> <profileId>"; exit 64 ;;
+  *) echo "usage: $0 model|fleet-up|fleet-down|report <vllm|sglang|trtllm> <profileId>"; exit 64 ;;
 esac
 [ $code = 0 ] && echo "SCENARIO kv-model-ab-perf: PASS ($MODE $ENG $PROF)" || echo "SCENARIO kv-model-ab-perf: FAIL ($MODE $ENG $PROF)"
 exit $code

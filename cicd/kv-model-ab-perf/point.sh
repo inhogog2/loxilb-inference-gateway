@@ -1,5 +1,5 @@
 #!/bin/bash
-# point.sh vllm|sglang <profileId> <pointId> <corpus.jsonl> <rate req/s> <repeat> [chat|completions]
+# point.sh vllm|sglang|trtllm <profileId> <pointId> <corpus.jsonl> <rate req/s> <repeat> [chat|completions]
 #
 # One A/B point against a RUNNING fleet (validation.sh fleet-up) and the RUNNING gateway: REPS repetitions, the
 # two arms in alternating order (exact-baseline, baseline-exact, exact-baseline). Before EVERY arm the engines
@@ -20,6 +20,7 @@
 set -u
 source "$(dirname "$0")/env.sh"
 ENG=$1 PROF=$2 ID=$3 CORPUS=$4 RATE=$5 REPEAT=$6 API=${7:-chat}
+ab_engine_check "$ENG" "$API" || exit 64
 MODEL=$(profile_field "$PROF" baseModel)
 ENC_MODEL=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$MODEL")
 OUT=${AB_BASE:-${ABROOT}/${ENG}-${PROF}}/${ID}
@@ -29,8 +30,9 @@ rm -rf "$OUT"; mkdir -p "$OUT"; cp "$CORPUS" "$OUT/corpus.jsonl"
 case $ENG in
   vllm)   MSRC=$FIX/manifests/$PROF.yaml ;;
   sglang) MSRC=$FIX/manifests-sglang/$PROF.yaml ;;
-  *) echo "engine must be vllm|sglang"; exit 64 ;;
+  trtllm) MSRC=$FIX/manifests-trtllm/$PROF.yaml ;;
 esac
+[ -s "$MSRC" ] || { echo "ENGINE_MANIFEST_MISSING $MSRC"; exit 1; }
 restore_manifest() { install -o root -g root -m 0644 "$FIX/manifests/$PROF.yaml" "$REG/manifests/$PROF.yaml"; }
 del_rule() { curl -s -m 10 -o /dev/null -X DELETE "${LB}/hosturl/${VIP}/externalipaddress/${VIP}/port/${PORT}/protocol/tcp?model_name=${ENC_MODEL}"; sleep 2; }
 trap 'del_rule; restore_manifest' EXIT
@@ -47,8 +49,17 @@ rule() { # rule exact|baseline <dir>
 }
 restart_fleet() {
   local n
-  for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker restart $PNAME >/dev/null" & done
-  for n in "${DNODES[@]}"; do $SSH -n root@"$n" "docker restart kvmc-$ENG-decode >/dev/null" & done
+  if [ "$ENG" = trtllm ]; then
+    # A TensorRT-LLM engine cannot bind its port while the node still holds the stopped engine's connections
+    # (trt_port_free, ../kv-model-compat-pd/env.sh): stop, wait for the port, start.
+    for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker stop $PNAME >/dev/null" & done
+    wait
+    for n in "${PNODES[@]}"; do trt_port_free "$n" || return 1; done
+    for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker start $PNAME >/dev/null" & done
+  else
+    for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker restart $PNAME >/dev/null" & done
+    for n in "${DNODES[@]}"; do $SSH -n root@"$n" "docker restart kvmc-$ENG-decode >/dev/null" & done
+  fi
   wait
   for _ in $(seq 1 120); do
     local up=0
@@ -60,13 +71,13 @@ restart_fleet() {
   done
   echo "FLEET_NOT_READY after restart"; return 1
 }
-case $ENG in vllm) EREQ=vllm:request_success_total ;; sglang) EREQ=sglang:num_requests_total ;; esac
+case $ENG in vllm) EREQ=vllm:request_success_total ;; sglang) EREQ=sglang:num_requests_total ;; trtllm) EREQ=trtllm_request_success_total ;; esac
 # served <dir> <node>: requests the engine finished during the timed window (its own counter, after - before)
 served() {
   grep -q "^$EREQ" "$1/after-engine-$2.prom" || { echo "ENGINE_METRIC_MISSING $EREQ on $2" >&2; return 1; }
   echo $(( $(msum "$1/after-engine-$2.prom" "$EREQ") - $(msum "$1/before-engine-$2.prom" "$EREQ") ))
 }
-engines_snapshot() { local n; for n in "${PNODES[@]}" "${DNODES[@]}"; do curl -s -m 10 "http://$n:$EPORT/metrics" > "$1/$2-engine-$n.prom"; done; }
+engines_snapshot() { local n; for n in "${PNODES[@]}" "${DNODES[@]}"; do curl -s -m 10 "http://$n:$EPORT$(engine_metrics_path "$ENG")" > "$1/$2-engine-$n.prom"; done; }
 # The prefill engines' own logs for the arm (the containers were restarted at its start): the access lines name
 # the client of every request, so a request the scenario did not send can be attributed.
 engine_logs() { local n; for n in "${PNODES[@]}"; do $SSH -n root@"$n" "docker logs $PNAME 2>&1" | gzip > "$1/engine-$n.log.gz"; done; }

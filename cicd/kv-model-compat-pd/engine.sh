@@ -1,6 +1,6 @@
 #!/bin/bash
-# engine.sh start|stop vllm|sglang prefill|decode|converged <profileId> — one P/D pair member on its node, or one
-# converged engine (prefill and decode in one process, KV events on) on the node in CONVERGED.
+# engine.sh start|stop vllm|sglang|trtllm prefill|decode|converged <profileId> — one P/D pair member on its node,
+# or one converged engine (prefill and decode in one process, KV events on) on the node in CONVERGED.
 #
 # Launch lines are the P/D-proven ones: offline (HF_HUB_OFFLINE=1), digest-pinned image, UTC, block/page 16,
 # KV events on the prefill member. vLLM runs with PYTHONHASHSEED=0 (NONE_HASH seed) and NIXL; SGLang with
@@ -22,6 +22,11 @@
 #   1               require the mount (refused unless the image's file is an affected one)
 #   0               never mount (the red twin: the probe must then fail on the engine's 500)
 # A mounted file's sha256 is checked on the node before launch and inside the running container after readiness.
+#
+# TensorRT-LLM (PyTorch backend) runs converged only: its prefill/decode pair is not driven here. The image is a
+# local build pinned by id (env.sh). The engine publishes KV events on its own HTTP port (/kv_cache_events, a
+# queue the gateway drains: nothing else may read it), with 32 tokens per block. It is ready when it serves the
+# model id and /health answers. A model the engine cannot serve is refused before anything starts (trt_blocked).
 set -eu
 source "$(dirname "$0")/env.sh"
 ACT=$1 ENG=$2 ROLE=$3 PROF=$4
@@ -41,7 +46,13 @@ if [ "$ACT" = stop ]; then
   keep_log
   $SSH root@"$NODE" "docker rm -f $NAME >/dev/null 2>&1 || true"; exit 0
 fi
-[ "$ACT" = start ] || { echo "usage: $0 start|stop vllm|sglang prefill|decode|converged <profileId>"; exit 64; }
+[ "$ACT" = start ] || { echo "usage: $0 start|stop vllm|sglang|trtllm prefill|decode|converged <profileId>"; exit 64; }
+if [ "$ENG" = trtllm ]; then
+  [ "$ROLE" = converged ] || { echo "ENGINE_ROLE_UNSUPPORTED trtllm $ROLE: TensorRT-LLM is launched converged only"; exit 64; }
+  why=$(trt_blocked "$PROF"); [ -z "$why" ] || { echo "ENGINE_MODEL_BLOCKED trtllm $TRT_VERSION x $PROF: $why"; exit 1; }
+  got=$($SSH -n root@"$NODE" "docker image inspect -f '{{.Id}}' $TRT_IMAGE 2>/dev/null")
+  [ "$got" = "$TRT_IMAGE_ID" ] || { echo "ENGINE_IMAGE_MISMATCH $NODE: $TRT_IMAGE is ${got:-absent}, pinned $TRT_IMAGE_ID"; exit 1; }
+fi
 SNAP=$(snapshot "$MODEL" "$REV")
 # Per-version, per-profile SGLang launch arguments, each measured (a flag one release lacks stops its launch).
 # gemma-3 (0.5.18, L4): the prefill member's prefill CUDA graph ("breakable" backend) pads a ragged prefill batch,
@@ -99,7 +110,8 @@ sglang/prefill) DIS="--disaggregation-mode prefill --disaggregation-transfer-bac
 sglang/decode)  DIS="--disaggregation-mode decode --disaggregation-transfer-backend mooncake" ;;
 vllm/converged) KVT=""; EVX="--kv-events-config '$EVENTS'" ;;
 sglang/converged) DIS="--kv-events-config '{\"publisher\":\"zmq\",\"endpoint\":\"tcp://*:5557\"}'" ;;
-*) echo "engine must be vllm|sglang"; exit 64 ;;
+trtllm/converged) ;;
+*) echo "engine must be vllm|sglang|trtllm"; exit 64 ;;
 esac
 # SGLang builds its page-hash extension at the first prompt longer than one page and keeps the result in the
 # container; a node directory per image makes that one build per node instead of one per container.
@@ -112,6 +124,16 @@ if [ "$ENG" = vllm ]; then
     --served-model-name $MODEL --host 0.0.0.0 --port $EPORT --max-model-len 4096 --gpu-memory-utilization 0.85 \
     --enable-prefix-caching --prefix-caching-hash-algo sha256_cbor --block-size 16 --prefix-match-unit 16 --enforce-eager \
     ${KVT:+--kv-transfer-config '$KVT'} $EVX $VLLM_PROFILE_ARGS ${VLLM_EXTRA:-}" >/dev/null
+elif [ "$ENG" = trtllm ]; then
+  cfg=/var/tmp/kvmc/trtllm-converged.yaml
+  $SSH root@"$NODE" "install -d -m 0755 ${cfg%/*} && cat > $cfg" < "$TRT_CONVERGED_YAML"
+  $SSH -n root@"$NODE" "docker rm -f $NAME >/dev/null 2>&1 || true"
+  trt_port_free "$NODE" || exit 1
+  $SSH root@"$NODE" "docker run -d --name $NAME --gpus all --network host --ipc=host --shm-size 16g \
+    -v $HF_CACHE:$HF_CACHE -v $cfg:/cfg/trt.yaml:ro -e HF_HOME=$HF_CACHE -e HF_HUB_OFFLINE=1 -e NIXL_PLUGIN_DIR=$TRT_LIBS/nixl/plugins \
+    -e LD_LIBRARY_PATH=$TRT_LIBS/ucx:$TRT_LIBS/nixl:/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/lib/python3.12/dist-packages/torch_tensorrt/lib:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
+    $TRT_IMAGE trtllm-serve $SNAP --served_model_name $MODEL --host 0.0.0.0 --port $EPORT --backend pytorch --max_seq_len 4096 \
+    --extra_llm_api_options /cfg/trt.yaml ${TRT_EXTRA:-}" >/dev/null
 else
   $SSH root@"$NODE" "docker rm -f $NAME >/dev/null 2>&1; docker run -d --name $NAME --gpus all --network host --ipc=host --shm-size 16g \
     -v $HF_CACHE:$HF_CACHE -v $SGL_EXT_CACHE:/root/.cache/torch_extensions $TOKMNT -e HF_HOME=$HF_CACHE -e HF_HUB_OFFLINE=1 $SGL_IMAGE \
@@ -122,7 +144,8 @@ fi
 for _ in $(seq 1 120); do
   # SGLang answers /v1/models before its own start-up warm-up has run; it is ready when it says so.
   if curl -s -m 3 "http://$NODE:$EPORT/v1/models" | grep -qF "\"id\":\"$MODEL\"" &&
-     { [ "$ENG" != sglang ] || $SSH root@"$NODE" "docker logs $NAME 2>&1 | grep -q \"The server is fired up\""; }; then
+     { [ "$ENG" != sglang ] || $SSH root@"$NODE" "docker logs $NAME 2>&1 | grep -q \"The server is fired up\""; } &&
+     { [ "$ENG" != trtllm ] || curl -fsS -m 3 "http://$NODE:$EPORT/health" >/dev/null 2>&1; }; then
     if [ -n "$TOKMNT" ]; then
       got=$($SSH root@"$NODE" "docker exec $NAME sha256sum $SGL_TOKPATCH_TARGET" | cut -c1-64)
       [ "$got" = "$SGL_TOKPATCH_FILE_SHA" ] || { echo "TOKENIZE_PATCH_NOT_MOUNTED $NAME ${got:-unreadable}"; exit 1; }

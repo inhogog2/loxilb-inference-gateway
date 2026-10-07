@@ -127,6 +127,20 @@ def main():
         rc, s = analyze(tmp, "c3", rows([100, 110, 105], [300, 320, 310]), {"exact": (None, sg.format(7800))})
         check("C3 an after scrape without its before scrape -> no computed share", rc == 0 and s and
               s["arms"]["exact"]["computed_prompt_token_percent"] is None, (rc, s and s["arms"]["exact"]))
+        # TensorRT-LLM counts missed KV blocks; the block size is a gauge of the same scrape. 200 blocks of 32
+        # tokens = 6400 of 68000 prompt tokens, 1000 blocks = 32000. A series whose name only starts the same
+        # must not be counted, and a block count with no block size is not a token count.
+        tb = ('trtllm_kv_cache_missed_blocks_total{{engine_type="pytorch",model_name="m"}} {0}\n'
+              'trtllm_kv_cache_missed_blocks_total_other{{model_name="m"}} {0}\n')
+        tr = tb + 'trtllm_kv_cache_tokens_per_block{{engine_type="pytorch",model_name="m",pid="1"}} 32.0\n'
+        rc, s = analyze(tmp, "c6", rows([100, 110, 105], [300, 320, 310]),
+                        {"exact": (tr.format(50), tr.format(250)), "baseline": (tr.format(0), tr.format(1000))})
+        check("C6 TensorRT-LLM scrapes: 200 missed blocks of 32 tokens in the exact arm -> 9.4 %, 1000 in the baseline -> 47.1 %",
+              rc == 0 and s and s["arms"]["exact"]["computed_prompt_token_percent"] == 9.4 and
+              s["arms"]["baseline"]["computed_prompt_token_percent"] == 47.1, (rc, s and s["arms"]["exact"]))
+        rc, s = analyze(tmp, "c7", rows([100, 110, 105], [300, 320, 310]), {"exact": (tb.format(50), tb.format(250))})
+        check("C7 TensorRT-LLM missed blocks with no block size in the scrape -> no computed share", rc == 0 and s and
+              s["arms"]["exact"]["computed_prompt_token_percent"] is None, (rc, s and s["arms"]["exact"]))
         # KV transfers of a prefill/decode fleet, from the same scrapes. The helper writes one engine's pair into
         # each of the three repetitions, so an arm's totals are three times one pair's difference. A series whose
         # name only starts the same moves too: counting it doubles the count.
@@ -307,6 +321,12 @@ def main():
     check("G5 prefill/decode endpoints: prefill engines role 1, decode engines role 2",
           [(e["endpointIP"], e["ep_role"]) for e in eps] == [("10.0.0.7", 1), ("10.0.0.8", 1), ("10.0.0.10", 2), ("10.0.0.11", 2)], eps)
 
+    trt, sgl = sa("exact", "trtllm", "converged"), sa("exact", "sglang", "converged")
+    check("G6 TensorRT-LLM converged: the exact rule names the engine, mode 3 and its 32-token blocks (16 on the others); "
+          "the baseline rule names no engine",
+          (trt["kvEngineType"], trt["kvExactMode"], trt["kvBlockSize"], sgl["kvBlockSize"], sa("exact", "vllm", "pd")["kvBlockSize"])
+          == ("trtllm", 3, 32, 16, 16) and "kvEngineType" not in sa("baseline", "trtllm", "converged"), trt)
+
     # Seeding. An SGLang prefill engine keeps a prefix only for a request it serves together with a decode
     # engine: the same body, with the prefill engine as bootstrap host and one room, goes to both.
     print("seeding")
@@ -411,6 +431,62 @@ def main():
         check("D6 SGL_DECODE_CACHE other than 0 or 1 is refused before any engine starts", rc == 64 and not dec and not pre, (rc, dec, pre))
         check("D7 the state is kept with the evidence",
               (state("gemma4-e2b-it-v1"), state("never-started-v1")) == ("refused", "unmeasured"), state("gemma4-e2b-it-v1"))
+        # TensorRT-LLM is driven as one pool of converged engines on the chat surface; every other shape is
+        # refused before an engine starts.
+        print("TensorRT-LLM")
+        rc, out, dec, pre = fleet("trtllm", "r1-distill-qwen-15b-v1", topology="converged")
+        check("E1 TensorRT-LLM converged: one converged engine per node, no decode engine, no decode-cache line",
+              rc == 0 and not dec and len(pre) == 2 and all(x.startswith("converged ") for x in pre) and "DECODE_CACHE_" not in out, (rc, out, pre))
+        r = subprocess.run(["bash", str(ab / "validation.sh"), "fleet-up", "trtllm", "r1-distill-qwen-15b-v1"], capture_output=True, text=True,
+                           env={"PATH": os.environ["PATH"], "TOPOLOGY": "pd", "VIP": "10.0.0.12", "LOGD": str(tmp), "ABROOT": str(tmp / "ev"),
+                                "STARTS": str(tmp / "starts-pd.txt"), "PREFILLS": "10.0.0.7 10.0.0.8", "DECODES": "10.0.0.10 10.0.0.11"})
+        check("E2 TensorRT-LLM on a prefill/decode fleet is refused before any engine starts",
+              r.returncode == 64 and "TRTLLM_TOPOLOGY_UNSUPPORTED pd" in r.stderr and not (tmp / "starts-pd.txt").exists(), (r.returncode, r.stderr))
+        rc, out, dec, pre = fleet("tgi", "r1-distill-qwen-15b-v1", topology="converged")
+        check("E3 an engine the scenario does not drive is refused before any engine starts", rc == 64 and not dec and not pre, (rc, dec, pre))
+        shutil.copy(HERE / "point.sh", ab / "point.sh")
+        # The gateway address and the registry are stand-ins: a point that got past the refusal would otherwise
+        # reach for the ones of the machine this runs on.
+        conv = {"PATH": os.environ["PATH"], "TOPOLOGY": "converged", "ENGINES": "10.0.0.7 10.0.0.8", "VIP": "10.0.0.12", "LOGD": str(tmp),
+                "ABROOT": str(tmp / "ev"), "GW_API": "http://127.0.0.1:9/none", "REG": str(tmp / "registry"), "GW_CTR": "none"}
+        r = subprocess.run(["bash", str(ab / "point.sh"), "trtllm", "r1-distill-qwen-15b-v1", "p1", str(tmp / "none.jsonl"), "1.0", "3", "completions"],
+                           capture_output=True, text=True, env=conv)
+        check("E4 a completions point on TensorRT-LLM is refused before the point directory is made",
+              r.returncode == 64 and "TRTLLM_SURFACE_UNSUPPORTED completions" in r.stderr and not (tmp / "ev" / "trtllm-r1-distill-qwen-15b-v1-converged" / "p1").exists(),
+              (r.returncode, r.stderr))
+        # The launcher itself (../kv-model-compat-pd/engine.sh), with a stand-in for ssh that answers the image
+        # question and records every other command: a refusal must come before anything is started on a node.
+        real = HERE.parent / "kv-model-compat-pd"
+        for f in ("engine.sh", "env.sh"):
+            shutil.copy(real / f, compat / f)
+        (compat / "trtllm").mkdir()
+        shutil.copy(real / "trtllm/converged.yaml", compat / "trtllm/converged.yaml")
+        (prof / "olmo2-0425-1b-v1.yaml").write_text("profileId: olmo2-0425-1b-v1\nbaseModel: org/olmo\ntokenizerRevision: abc\n")
+        (prof / "r1-distill-qwen-15b-v1.yaml").write_text("profileId: r1-distill-qwen-15b-v1\nbaseModel: org/r1\ntokenizerRevision: abc\n")
+        ssh = tmp / "ssh-stub"
+        ssh.write_text('#!/bin/bash\ncase "$*" in *"docker image inspect"*) echo "$IMAGE_ID" ;; *) echo "$*" >> "$SSH_LOG"; exit 1 ;; esac\n')
+        ssh.chmod(0o755)
+        def launch(role, name, image_id):
+            log = tmp / "ssh.log"
+            log.unlink(missing_ok=True)
+            r = subprocess.run(["bash", str(compat / "engine.sh"), "start", "trtllm", role, name], capture_output=True, text=True,
+                               env={"PATH": os.environ["PATH"], "PREFILL": "10.0.0.7", "DECODE": "10.0.0.8", "CONVERGED": "10.0.0.7",
+                                    "VIP": "10.0.0.12", "LOGD": str(tmp), "SSH": str(ssh), "SSH_LOG": str(log), "IMAGE_ID": image_id,
+                                    "EVROOT": str(tmp / "ev-engine")})
+            return r.returncode, r.stdout, log.read_text() if log.exists() else ""
+        pinned = [x.split("=", 1)[1] for x in (real / "env.sh").read_text().splitlines() if x.startswith("TRT_IMAGE_ID=")][0]
+        rc, out, cmds = launch("converged", "olmo2-0425-1b-v1", pinned)
+        check("E5 a model TensorRT-LLM cannot serve: ENGINE_MODEL_BLOCKED, nothing run on the node",
+              rc == 1 and "ENGINE_MODEL_BLOCKED trtllm" in out and "architecture_unsupported" in out and not cmds, (rc, out, cmds))
+        rc, out, cmds = launch("prefill", "r1-distill-qwen-15b-v1", pinned)
+        check("E6 a TensorRT-LLM prefill engine: ENGINE_ROLE_UNSUPPORTED, nothing run on the node",
+              rc == 64 and "ENGINE_ROLE_UNSUPPORTED trtllm prefill" in out and not cmds, (rc, out, cmds))
+        rc, out, cmds = launch("converged", "r1-distill-qwen-15b-v1", "sha256:" + "0" * 64)
+        check("E7 the node's image is not the pinned one: ENGINE_IMAGE_MISMATCH, nothing run on the node",
+              rc == 1 and "ENGINE_IMAGE_MISMATCH 10.0.0.7" in out and not cmds, (rc, out, cmds))
+        rc, out, cmds = launch("converged", "r1-distill-qwen-15b-v1", pinned)
+        check("E8 the pinned image: the launch goes on to the node (the weights check is its first command there)",
+              rc == 1 and "WEIGHTS_MISSING 10.0.0.7" in out and "config.json" in cmds and "ENGINE_" not in out, (rc, out, cmds))
     print(f"SELFTEST kv-model-ab-perf: {'PASS' if not failed else f'FAIL ({failed})'}")
     return 1 if failed else 0
 
