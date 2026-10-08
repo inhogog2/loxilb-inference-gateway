@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -260,4 +261,96 @@ func TestEppClientEvictionDuringResponse(t *testing.T) {
 		t.Fatal("Evicted() false after the handler ran")
 	}
 	s.Abort()
+}
+
+// stallRelay forwards TCP connections to a backend until frozen; frozen
+// connections stay open but carry nothing more, the shape of an EPP pod
+// that died without closing (half-open TCP). New connections made after
+// unfreeze pass again.
+type stallRelay struct {
+	lis    net.Listener
+	frozen atomic.Bool
+	stop   chan struct{}
+}
+
+func newStallRelay(t *testing.T, backend string) *stallRelay {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &stallRelay{lis: lis, stop: make(chan struct{})}
+	go func() {
+		for {
+			c, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			b, err := net.Dial("tcp", backend)
+			if err != nil {
+				c.Close()
+				continue
+			}
+			pump := func(dst, src net.Conn) {
+				buf := make([]byte, 32<<10)
+				for {
+					n, err := src.Read(buf)
+					if err != nil {
+						dst.Close()
+						return
+					}
+					if r.frozen.Load() {
+						<-r.stop // swallow everything until the relay ends
+						return
+					}
+					if _, err := dst.Write(buf[:n]); err != nil {
+						return
+					}
+				}
+			}
+			go pump(b, c)
+			go pump(c, b)
+		}
+	}()
+	t.Cleanup(func() { close(r.stop); lis.Close() })
+	return r
+}
+
+func TestEppClientResetsAHalfOpenConnection(t *testing.T) {
+	f := epptest.New("ok")
+	f.Dest = "10.0.0.1:8000"
+	addr, stop := epptest.Start(t, f, false)
+	defer stop()
+	relay := newStallRelay(t, addr)
+	c := epp.NewClient()
+	defer c.Close()
+	cfg := epp.RuleCfg{Endpoint: relay.lis.Addr().String(), Plaintext: true, TimeoutMs: 300}
+
+	dec, s := c.Submit(context.Background(), cfg, sampleRequest())
+	if dec.Status != epp.StatusOK {
+		t.Fatalf("warm-up: %+v", dec)
+	}
+	s.Abort()
+
+	relay.frozen.Store(true)
+	for i := 1; i <= epp.SilentTimeoutsBeforeReset; i++ {
+		dec, _ = c.Submit(context.Background(), cfg, sampleRequest())
+		if dec.Status != epp.StatusError || !errors.Is(dec.Err, context.DeadlineExceeded) {
+			t.Fatalf("frozen submit %d: %+v", i, dec)
+		}
+	}
+	if got := c.Resets.Load(); got != 1 {
+		t.Fatalf("resets after %d silent timeouts = %d, want 1", epp.SilentTimeoutsBeforeReset, got)
+	}
+	// The EPP is back: a fresh connection goes through while the old,
+	// frozen one is forgotten.
+	relay.frozen.Store(false)
+	dec, s = c.Submit(context.Background(), cfg, sampleRequest())
+	if dec.Status != epp.StatusOK {
+		t.Fatalf("after reset: %+v", dec)
+	}
+	s.Abort()
+	if got := c.Resets.Load(); got != 1 {
+		t.Fatalf("resets after recovery = %d, want still 1", got)
+	}
 }

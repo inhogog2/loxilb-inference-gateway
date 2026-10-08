@@ -36,11 +36,13 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	tk "github.com/loxilb-io/loxilib"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
@@ -139,40 +141,109 @@ func (c RuleCfg) timeout() time.Duration {
 	return time.Duration(c.TimeoutMs) * time.Millisecond
 }
 
+// Dead-peer detection. An EPP pod that is killed outright (OOM, node
+// loss, a forced delete) sends no FIN or RST: the TCP connection stays
+// half-open, gRPC keeps the channel READY, every new stream's frames go
+// out unacknowledged and the decision deadline is the only thing that
+// fails. Two things end that:
+//
+//   - DeadPeerTimeout is set as TCP_USER_TIMEOUT on the dial socket, so
+//     the kernel errors the connection once sent data has gone that long
+//     without an ACK; gRPC then reconnects with the backoff below.
+//   - SilentTimeoutsBeforeReset consecutive request phases that hit the
+//     deadline without a single frame from the EPP make the client drop the
+//     cached connection and dial afresh on the next request, which covers
+//     a transport the kernel still considers fine (nothing in flight, or a
+//     middlebox that ACKs for a dead peer).
+//
+// Neither relies on gRPC keepalive pings, whose cadence the EPP server's
+// enforcement policy (default: one per 5 min) would have to permit.
+const (
+	DeadPeerTimeout           = 10 * time.Second
+	SilentTimeoutsBeforeReset = 2
+)
+
 // Client keeps one gRPC connection per EPP address and opens one
 // ext_proc stream per request on it.
 type Client struct {
 	mu    sync.Mutex
-	conns map[string]*grpc.ClientConn
+	conns map[string]*connEntry
+	// Resets counts the cached connections dropped by dead-peer detection.
+	Resets atomic.Int64
+}
+
+type connEntry struct {
+	cc *grpc.ClientConn
+	// silent counts consecutive request phases on this connection that
+	// timed out without any frame from the EPP; any received frame zeroes it.
+	silent atomic.Int32
 }
 
 // NewClient makes an empty connection pool.
 func NewClient() *Client {
-	return &Client{conns: make(map[string]*grpc.ClientConn)}
+	return &Client{conns: make(map[string]*connEntry)}
 }
 
 // Close drops every connection.
 func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for k, conn := range c.conns {
-		conn.Close()
+	for k, e := range c.conns {
+		e.cc.Close()
 		delete(c.conns, k)
 	}
 }
 
-func (c *Client) conn(cfg RuleCfg) (*grpc.ClientConn, error) {
+func connKey(cfg RuleCfg) string {
+	if cfg.Plaintext {
+		return cfg.Endpoint + "|plaintext"
+	}
+	return cfg.Endpoint
+}
+
+// silentTimeout records a request phase that saw nothing from the EPP on
+// e; after SilentTimeoutsBeforeReset in a row the connection is dropped.
+func (c *Client) silentTimeout(key string, e *connEntry) {
+	if e.silent.Add(1) < SilentTimeoutsBeforeReset {
+		return
+	}
+	c.mu.Lock()
+	cur, ok := c.conns[key]
+	if ok && cur == e {
+		delete(c.conns, key)
+	}
+	c.mu.Unlock()
+	if ok && cur == e {
+		c.Resets.Add(1)
+		tk.LogIt(tk.LogWarning, "[EPP] %s: no frame from the EPP in %d consecutive request phases, dropping the connection\n", key, SilentTimeoutsBeforeReset)
+		e.cc.Close()
+	}
+}
+
+// dialTCP connects with TCP_USER_TIMEOUT so a half-open connection errors
+// out instead of retransmitting for minutes (see DeadPeerTimeout).
+func dialTCP(ctx context.Context, addr string) (net.Conn, error) {
+	d := net.Dialer{Control: func(network, address string, rc syscall.RawConn) error {
+		var serr error
+		if err := rc.Control(func(fd uintptr) {
+			serr = unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_USER_TIMEOUT, int(DeadPeerTimeout/time.Millisecond))
+		}); err != nil {
+			return err
+		}
+		return serr
+	}}
+	return d.DialContext(ctx, "tcp", addr)
+}
+
+func (c *Client) conn(cfg RuleCfg) (*connEntry, error) {
 	if cfg.Endpoint == "" {
 		return nil, errors.New("epp: rule has no eppEndpoint")
 	}
-	key := cfg.Endpoint
-	if cfg.Plaintext {
-		key += "|plaintext"
-	}
+	key := connKey(cfg)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if conn, ok := c.conns[key]; ok {
-		return conn, nil
+	if e, ok := c.conns[key]; ok {
+		return e, nil
 	}
 	var creds credentials.TransportCredentials
 	if cfg.Plaintext {
@@ -186,6 +257,7 @@ func (c *Client) conn(cfg RuleCfg) (*grpc.ClientConn, error) {
 	// gap): gRPC's default backoff climbs to 120 s, during which every
 	// stream fails fast and the rule stays on its failure mode.
 	conn, err := grpc.NewClient(cfg.Endpoint, grpc.WithTransportCredentials(creds),
+		grpc.WithContextDialer(dialTCP),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff:           backoff.Config{BaseDelay: 100 * time.Millisecond, Multiplier: 1.6, Jitter: 0.2, MaxDelay: 2 * time.Second},
 			MinConnectTimeout: 2 * time.Second,
@@ -193,8 +265,9 @@ func (c *Client) conn(cfg RuleCfg) (*grpc.ClientConn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("epp: dial %s: %w", cfg.Endpoint, err)
 	}
-	c.conns[key] = conn
-	return conn, nil
+	e := &connEntry{cc: conn}
+	c.conns[key] = e
+	return e, nil
 }
 
 // Stream is the ext_proc stream of one request, open from the request
@@ -214,6 +287,8 @@ type Stream struct {
 	decided atomic.Bool
 	evicted atomic.Bool
 	onEvict atomic.Pointer[func(code int)]
+	// received is set by the first frame the EPP sends on this stream.
+	received atomic.Bool
 }
 
 // OnEvict installs the handler called, once, from the stream's receiver
@@ -237,12 +312,12 @@ type recvMsg struct {
 // returned stream is open for the response phase; otherwise it is already
 // closed and nil.
 func (c *Client) Submit(ctx context.Context, cfg RuleCfg, req *Request) (*Decision, *Stream) {
-	conn, err := c.conn(cfg)
+	e, err := c.conn(cfg)
 	if err != nil {
 		return &Decision{Status: StatusError, Err: err}, nil
 	}
 	sctx, cancel := context.WithCancel(context.Background())
-	stream, err := extprocv3.NewExternalProcessorClient(conn).Process(sctx)
+	stream, err := extprocv3.NewExternalProcessorClient(e.cc).Process(sctx)
 	if err != nil {
 		cancel()
 		return &Decision{Status: StatusError, Err: fmt.Errorf("epp: open stream: %w", err)}, nil
@@ -250,11 +325,32 @@ func (c *Client) Submit(ctx context.Context, cfg RuleCfg, req *Request) (*Decisi
 	s := &Stream{stream: stream, cancel: cancel, recv: make(chan recvMsg, 8)}
 	go s.receiver()
 
-	if err := s.sendRequest(req); err != nil {
-		s.Abort()
-		return &Decision{Status: StatusError, Err: err}, nil
+	// One deadline covers sending and the wait for the decision: on a
+	// dead or wedged connection Send itself can block (HTTP/2 flow-control
+	// window never replenished), and must not outlive the rule's timeout.
+	deadline := cfg.timeout()
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
+	sent := make(chan error, 1)
+	go func() { sent <- s.sendRequest(req) }()
+	var dec *Decision
+	select {
+	case err := <-sent:
+		if err != nil {
+			dec = &Decision{Status: StatusError, Err: err}
+		} else {
+			dec = s.awaitDecision(ctx, timer.C, deadline, req)
+		}
+	case <-timer.C:
+		dec = &Decision{Status: StatusError, Err: fmt.Errorf("epp: no decision within %s: %w", deadline, context.DeadlineExceeded)}
+	case <-ctx.Done():
+		dec = &Decision{Status: StatusError, Err: fmt.Errorf("epp: request abandoned: %w", ctx.Err())}
 	}
-	dec := s.awaitDecision(ctx, cfg.timeout(), req)
+	if s.received.Load() {
+		e.silent.Store(0)
+	} else if dec.Status != StatusOK && errors.Is(dec.Err, context.DeadlineExceeded) {
+		c.silentTimeout(connKey(cfg), e)
+	}
 	if dec.Status != StatusOK {
 		s.Abort()
 		return dec, nil
@@ -268,6 +364,9 @@ func (c *Client) Submit(ctx context.Context, cfg RuleCfg, req *Request) (*Decisi
 func (s *Stream) receiver() {
 	for {
 		msg, err := s.stream.Recv()
+		if err == nil {
+			s.received.Store(true)
+		}
 		if err == nil && s.decided.Load() {
 			if im, ok := msg.Response.(*extprocv3.ProcessingResponse_ImmediateResponse); ok && s.evicted.CompareAndSwap(false, true) {
 				code := immediateDecision(im.ImmediateResponse).ImmCode
@@ -337,10 +436,8 @@ func stringsToAny(in []string) []any {
 }
 
 // awaitDecision consumes responses until the request phase is decided.
-func (s *Stream) awaitDecision(ctx context.Context, deadline time.Duration, req *Request) *Decision {
+func (s *Stream) awaitDecision(ctx context.Context, expired <-chan time.Time, deadline time.Duration, req *Request) *Decision {
 	dec := &Decision{Status: StatusOK}
-	timer := time.NewTimer(deadline)
-	defer timer.Stop()
 	var body []byte
 	bodyExpected := len(req.Body) > 0
 	gotHeaders := false
@@ -348,7 +445,7 @@ func (s *Stream) awaitDecision(ctx context.Context, deadline time.Duration, req 
 		select {
 		case <-ctx.Done():
 			return &Decision{Status: StatusError, Err: fmt.Errorf("epp: request abandoned: %w", ctx.Err())}
-		case <-timer.C:
+		case <-expired:
 			return &Decision{Status: StatusError, Err: fmt.Errorf("epp: no decision within %s: %w", deadline, context.DeadlineExceeded)}
 		case r := <-s.recv:
 			if r.err != nil {
