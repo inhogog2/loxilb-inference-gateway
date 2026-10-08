@@ -228,6 +228,14 @@ given to carry (a TLS connection, or one already accelerated, is cut at its FIN 
 A held client is closed once its answers are written, once the backend ends the answer's
 connection, when no answer byte has reached it for the bound below, or on a release.
 
+A FIN does not say why it was sent: a client that half-closed after its request and a
+client that closed its socket and left look the same to the gateway. Under `hold` the one
+that left is held like any other, its backend request runs to its end or to the bound, and
+the usage of that answer is charged to the tenant as if it had been delivered. Do not set
+`hold` on a service with token quotas or billing. Clients should not shut down their write
+side before they have read the answer; under the default `off` the gateway cuts the
+connection at the FIN.
+
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/config/halfclose` | The settings in force: `{"allow": true, "capSeconds": 240, "defaultMode": "off"}` until set |
