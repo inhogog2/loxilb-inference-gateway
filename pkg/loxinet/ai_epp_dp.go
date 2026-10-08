@@ -57,6 +57,10 @@ var (
 	eppInflight atomic.Int64
 )
 
+func init() {
+	prom.SetEppStateProvider(func() (int, int) { return EppInflight(), EppPendingDecisions() })
+}
+
 // eppFlight is one request between its submit and its last response event.
 type eppFlight struct {
 	sid    uint64

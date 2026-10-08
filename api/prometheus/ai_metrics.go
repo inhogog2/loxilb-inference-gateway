@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -409,6 +410,26 @@ var (
 		[]string{"reason"},
 	)
 
+	// aiEppInflight and aiEppPending expose the EPP state the data plane
+	// holds right now, so a failover can be checked to have drained: requests
+	// between submit and their last report (the EPP's view of in-flight
+	// load), and decisions the C side table still holds. Both read the
+	// provider loxinet installs (SetEppStateProvider) at scrape time.
+	aiEppInflight = promauto.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "loxilb_ai_epp_inflight",
+			Help: "Requests currently handed to an Endpoint Picker and not yet reported finished (the EPP's in-flight view).",
+		},
+		func() float64 { a, _ := eppState(); return float64(a) },
+	)
+	aiEppPending = promauto.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "loxilb_ai_epp_pending",
+			Help: "Endpoint Picker decisions the data plane side table still holds (parked or being applied).",
+		},
+		func() float64 { _, p := eppState(); return float64(p) },
+	)
+
 	// aiNormalSessionHitsTotal counts normal-mode session-stickiness cache hits per model.
 	aiNormalSessionHitsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -498,6 +519,22 @@ func AdjustActiveStreams(model string, delta float64) {
 // a request is denied (decision != 0), and llb_ai_token_quota_reserve when
 // the pre-admission reservation refuses one.
 // If reason is empty it falls back to "rate_limit_exceeded".
+// eppStateProvider is installed by loxinet; nil reads as zero.
+var eppStateProvider atomic.Pointer[func() (inflight, pending int)]
+
+// SetEppStateProvider installs the function the EPP in-flight/pending
+// gauges read at scrape time.
+func SetEppStateProvider(fn func() (inflight, pending int)) {
+	eppStateProvider.Store(&fn)
+}
+
+func eppState() (int, int) {
+	if f := eppStateProvider.Load(); f != nil {
+		return (*f)()
+	}
+	return 0, 0
+}
+
 func RecordRateLimitHit(tenantID, reason string) {
 	if reason == "" {
 		reason = "rate_limit_exceeded"
