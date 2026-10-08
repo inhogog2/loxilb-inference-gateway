@@ -429,12 +429,16 @@ func (d *Decision) applyHeaderMutation(hm *extprocv3.HeaderMutation, dyn *struct
 		if val == "" {
 			val = h.GetValue()
 		}
-		switch key {
-		case HeaderDestination:
+		switch {
+		case key == HeaderDestination:
 			hdrDest = val
 			d.Candidates = parseCandidates(val)
-		case "content-length":
+		case key == "content-length":
 			// The data plane sets it from the body it forwards (risk R4).
+		case strings.HasPrefix(key, ":"):
+			// The llm-d EPP echoes the pseudo headers (:method, :path,
+			// :authority, :scheme) in its mutation; they are the request
+			// line, not header lines of an HTTP/1.1 request.
 		default:
 			d.HdrSet = append(d.HdrSet, Header{Key: key, Value: val})
 		}
@@ -495,7 +499,11 @@ func immediateDecision(im *extprocv3.ImmediateResponse) *Decision {
 		if val == "" {
 			val = h.GetValue()
 		}
-		dec.ImmHeaders = append(dec.ImmHeaders, Header{Key: strings.ToLower(h.GetKey()), Value: val})
+		key := strings.ToLower(h.GetKey())
+		if strings.HasPrefix(key, ":") || key == "content-length" {
+			continue // the status line and the length are the data plane's
+		}
+		dec.ImmHeaders = append(dec.ImmHeaders, Header{Key: key, Value: val})
 	}
 	return dec
 }

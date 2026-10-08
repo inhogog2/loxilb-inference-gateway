@@ -132,8 +132,10 @@ func (f *Fake) Process(st extprocv3.ExternalProcessor_ProcessServer) error {
 	case "disagree":
 		hm.SetHeaders = []*corev3.HeaderValueOption{hv(epp.HeaderDestination, "10.0.0.7:8000")}
 	default:
+		// The llm-d EPP echoes the pseudo headers in its mutation too.
 		hm.SetHeaders = []*corev3.HeaderValueOption{
 			hv(epp.HeaderDestination, dest), hv("x-prefiller-host-port", "10.0.0.9:8000"), hv("Content-Length", "5"),
+			hv(":method", "POST"), hv(":path", "/v1/completions"), hv(":authority", "vip:8080"), hv(":scheme", "http"),
 		}
 	}
 	if err := st.Send(&extprocv3.ProcessingResponse{

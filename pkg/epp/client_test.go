@@ -46,7 +46,7 @@ func TestEppClientRequestPhaseAndResponsePhase(t *testing.T) {
 		t.Fatalf("candidates %v, want %v (ordered, de-duplicated, malformed dropped, capped at %d)", dec.Candidates, want, epp.MaxCandidates)
 	}
 	if len(dec.HdrSet) != 1 || dec.HdrSet[0] != (epp.Header{"x-prefiller-host-port", "10.0.0.9:8000"}) {
-		t.Fatalf("header set %v: destination kept out, content-length dropped, prefill hint kept", dec.HdrSet)
+		t.Fatalf("header set %v: destination, content-length and pseudo headers kept out, prefill hint kept", dec.HdrSet)
 	}
 	if len(dec.HdrDel) != 1 || dec.HdrDel[0] != "x-drop" {
 		t.Fatalf("header del %v", dec.HdrDel)
