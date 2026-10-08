@@ -42,6 +42,7 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	tk "github.com/loxilb-io/loxilib"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -181,7 +182,14 @@ func (c *Client) conn(cfg RuleCfg) (*grpc.ClientConn, error) {
 		// DestinationRule skips verification the same way (decision D3).
 		creds = credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}) // #nosec G402
 	}
-	conn, err := grpc.NewClient(cfg.Endpoint, grpc.WithTransportCredentials(creds))
+	// Reconnect quickly after the EPP goes away and comes back (a restart
+	// gap): gRPC's default backoff climbs to 120 s, during which every
+	// stream fails fast and the rule stays on its failure mode.
+	conn, err := grpc.NewClient(cfg.Endpoint, grpc.WithTransportCredentials(creds),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff:           backoff.Config{BaseDelay: 100 * time.Millisecond, Multiplier: 1.6, Jitter: 0.2, MaxDelay: 2 * time.Second},
+			MinConnectTimeout: 2 * time.Second,
+		}))
 	if err != nil {
 		return nil, fmt.Errorf("epp: dial %s: %w", cfg.Endpoint, err)
 	}
