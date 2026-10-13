@@ -45,6 +45,8 @@ package loxinet
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/loxilb-io/loxilb/pkg/enginecontract"
 	log "github.com/sirupsen/logrus"
@@ -149,6 +151,9 @@ func kvResolveWireSchema(engine, contractID string) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("kv-wire: no contract profile for engine %q", engine)
 		}
+		if override := kvLegacyVllmWireOverride(engine, os.Getenv(kvLegacyVllmWireEnv)); override != "" {
+			legacyID = override
+		}
 		profID = legacyID
 	}
 	prof, ok := enginecontract.ProfileByID(profID)
@@ -159,6 +164,29 @@ func kvResolveWireSchema(engine, contractID string) (string, error) {
 		return "", fmt.Errorf("kv-wire: profile %q declares no event wire schema", profID)
 	}
 	return prof.WireSchema, nil
+}
+
+// kvLegacyVllmWireEnv lets a profile-less (legacy) vLLM rule opt in to the
+// native tagged-map wire family without a model profile. vLLM >= v0.24.0
+// serializes each KV event as a msgpack tagged MAP; on the legacy
+// tagged-array profile every such event is rejected as schema_mismatch and
+// the inventory never fills (observed live against vLLM v0.30.0: all three
+// subscribers connected, loxilb_pd_kv_blocks pinned at 0, every request
+// Guard-G no_worker). Values: "map" / "v2" select vllm-kv-map-v2; "array" /
+// "v1" / unset keep the shipped tagged-array profile. Only the vLLM engine
+// family ("" or "vllm") is affected; SGLang/TensorRT-LLM/llama.cpp ignore it.
+const kvLegacyVllmWireEnv = "LOXILB_KV_VLLM_WIRE"
+
+func kvLegacyVllmWireOverride(engine, value string) string {
+	if engine != "" && engine != "vllm" {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "map", "v2", "vllm-kv-map-v2":
+		return "vllm-kv-map-v2"
+	default:
+		return ""
+	}
 }
 
 // ---------- tagged-array binding (legacy family) ----------
